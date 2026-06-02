@@ -1,0 +1,11 @@
+[package]
+name = "typst2word"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+docx-rs = "0.4.20"
+typst = "0.14.2"
+typst-preview-core = { path = "../render_typst_gpui/crates/typst-preview-core" }
+typst-svg = "0.14.2"
+zip = "0.6.6"
