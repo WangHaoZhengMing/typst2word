@@ -1,618 +1,138 @@
+= with chatgpt 
+我会按“Typst FrameItem → Word OOXML”的转换路径讲。重点不是把 PDF 还原成 Word，而是保留可编辑性时该怎么降级。
 
-= 实验题目：实验（二）：Java基本语法
+思考時間: 4s
 
-= 实验目的
-1. 掌握Java的基本语法
-2. 掌握Java的流程控制
-3. 掌握数组的使用
+做 Typst → Word，不建议只 Frame。正确架构是“双通道”：
 
-= 实验要求
-1. 每个题目，写出实验思路
-2. 代码实现
-3. 运行结果截图
+Typst Source / Content Tree  →  生成可编辑 Word 结构
+PagedDocument / Frame        →  补充位置、尺寸、视觉兜底
 
-= 实验内容
+Typst 官方编译流程是：源码先解析、求值成内容树，再布局成 PagedDocument，其中每页一个 fixed-position frame，最后导出 PDF/PNG/SVG/HTML。也就是说 Frame 已经是“排版后的页面结果”，不是语义文档结构。
 
-1. 编写一个Java应用程序，给出汉字'你'、'我'、'他'在Unicode表中的位置。
+你要这样处理：
 
-2. 编写一个Java应用程序，输出全部的希腊字母。
+TextItem
+优先合并成 Word 的段落、run、标题、列表项。不要一个 glyph 一个 run。要按同一行、同一字体、同一字号、同一颜色、同一 baseline 合并。Word 对应：
 
-3. 编写一个Java应用程序，计算$1！+2！+3！+…+10$！。
+TextItem → w:p / w:r / w:t
 
-4. 编写一个Java应用程序，计算1-50之间的所有素数的和。
+难点是：Frame 里文本已经被拆成绝对位置，所以你要反推段落。更好的做法是从 Typst 的 Content Tree 识别 paragraph、heading、list、table，再用 Frame 校准样式。
 
-5. 分别用do-while和for循环计算$1+1/2!+1/3!+1/4!… …$ 的前20项和。
+Shape
+简单形状可以转 OOXML DrawingML：
 
-6. 一个数如果恰好等于它的因子之和，这个数就称为"完数"。例如6=1＋2＋3。编程求1000之内的所有完数。
+rect / line / ellipse → Word shape
 
-7. 编写程序，求出几何形状（长方形、正方形、圆形）的周长和面积。
+复杂路径、Cetz 图、装饰性图形，直接转 SVG/PNG 插入 Word：
 
-8. 编写一个Java应用程序，产生10个100之内的随机整数输出，并把这10个数从小到大的顺序输出。
+复杂 Shape → SVG/PNG image
 
-9. 编写一个Java应用程序，产生20个50-100之内的整数，并输出这20个数并找出最大数及最小数输出。
+这样最稳。否则你会陷入 DrawingML 地狱。
 
-10. 输入一行字符，分别统计出其中英文字母、空格、数字和其它字符的个数。（可以使用Scanner对象的nextLine方法获取一个字符串，然后调用字符串的toCharArray方法将字符串转化为字符数组进行处理）
+Image
+直接映射为 Word 图片：
 
-#box(width: 100%)[
-  #set text(style: "italic")
-  注：题目中可能需要用到有些类和方法，大家还没有学过，请查阅相关资料，作为自学部分，比如随机输出整数等。
-]
+ImageItem → word/media/* + wp:inline 或 wp:anchor
 
-= 实验执行
+普通文档用 inline，海报/复杂页面用 anchor 绝对定位。
 
-== 任务一：汉字在Unicode表中的位置
+Group
+Group 不能简单展开。它可能包含 transform、clip、opacity、嵌套坐标系。处理策略：
 
-#strong[（1）思路]
+无 transform 的 Group → 递归展开
+有 rotate/scale/clip/opacity 的 Group → 整组渲染为 SVG/PNG
 
-可以利用Java的字符处理特性获取汉字的Unicode编码值。将汉字字符转换为整数可得到十进制值，再使用Stream和方法引用进行转换可以获得十六进制表示。
+这是关键。Word 对复杂 transform 支持很差，硬转会崩。
 
-#strong[（2）代码实现]
-```java
-import java.util.stream.Stream;
+Link
+映射为 Word hyperlink：
 
-public class UnicodeLocator {
-    public static void main(String[] args) {
-        // 使用函数式编程处理字符的Unicode值
-        Stream.of('你', '我', '他')
-            .forEach(character -> {
-                String hexValue = Integer.toHexString((int) character);
-                System.out.printf("汉字'%c'的Unicode位置: %d (十六进制: %s)%n", 
-                                  character, (int) character, hexValue);
-            });
-    }
+Link → w:hyperlink
+
+如果 Link 只是一个透明点击区域，要把它绑定到下面的文字或图片；绑定不了就忽略或生成不可见超链接区域。
+
+Tag
+不要当成视觉元素。它更像语义/查询锚点。可用于恢复：
+
+figure 编号
+label
+cross-reference
+outline
+bookmark
+
+Word 对应：
+
+Tag / label → bookmarkStart / bookmarkEnd
+引用 → field code / hyperlink
+
+核心降级规则可以这么定：
+
+能语义化的 → Word 原生结构
+不能语义化但能画的 → DrawingML
+复杂视觉对象 → SVG/PNG
+无法表达的元信息 → bookmark/customXml/comment
+
+具体映射表：
+
+Typst heading      → Word Heading 1/2/3
+paragraph          → w:p
+strong/emph        → bold/italic run
+enum/list          → numbering.xml
+table              → w:tbl
+math               → OMML，或 MathML→OMML，失败则 SVG
+figure             → image/table + caption
+code block         → monospace paragraph/table
+page break         → w:br type="page"
+columns            → section properties，复杂则降级
+absolute layout    → wp:anchor
+Cetz/complex frame → SVG/PNG
+
+
+PagedDocument 比单纯的 Frame 丰富。
+
+关键结构大概是：
+
+PagedDocument {
+    pages: Vec<Page>,          // 每页的 frame
+    info: DocumentInfo,        // PDF metadata
+    introspector: Introspector // 查询 heading/figure/label 等语义信息
 }
-```
 
-#strong[（3）运行结果截图]
+官方文档也写得很直白：PagedDocument 是“finished document with metadata and page frames”。它不只是画布。
 
-#block(width: 100%, inset: 8pt, fill: rgb("#224FBC"), stroke: gray, radius: 4pt)[
-  #text(font: "SF Mono", size: 10pt, fill: white)[
-    (base) houxianzheng\@MacBookPro \~/xianzhengJavaProjects % javac UnicodeLocator.java\
-    (base) houxianzheng\@MacBookPro \~/xianzhengJavaProjects % java UnicodeLocator\
-    汉字'你'的Unicode位置: 20320 (十六进制: 4f60)\
-    汉字'我'的Unicode位置: 25105 (十六进制: 6211)\
-    汉字'他'的Unicode位置: 20182 (十六进制: 4ed6)\
-    (base) houxianzheng\@MacBookPro \~/xianzhengJavaProjects %
-  ]
-]
+但要分清楚：
 
-== 任务二：输出全部的希腊字母
+Frame/PageFrame 主要是视觉层
+PagedDocument.info 是文档元数据
+PagedDocument.introspector 是语义/查询层
 
-#strong[（1）思路]
+PDF 里的标题、作者、描述、关键词等，来自：
 
-希腊字母在Unicode中占据特定范围。我们可以用函数式编程方式创建这个范围的流，然后将每个码点转换为字符并输出。大写希腊字母从U+0391到U+03A9，小写从U+03B1到U+03C9。
+#set document(
+  title: [Hello],
+  author: ("A", "B"),
+)
 
-#strong[（2）代码实现]
-```java
-import java.util.function.IntConsumer;
-import java.util.stream.IntStream;
+这些不是 FrameItem 里的东西，而是 DocumentInfo / PDF metadata。Typst 文档也说明这些 metadata 不渲染在页面里，而是嵌入 PDF。
 
-public class GreekLetterDisplay {
-    public static void main(String[] args) {
-        // 函数式处理输出逻辑
-        IntConsumer printChar = codePoint -> System.out.print((char) codePoint + " ");
-        
-        System.out.println("大写希腊字母:");
-        IntStream.rangeClosed(0x0391, 0x03A9)
-                .forEach(printChar);
-        
-        System.out.println("\n小写希腊字母:");
-        IntStream.rangeClosed(0x03B1, 0x03C9)
-                .forEach(printChar);
-    }
-}
-```
+标题目录、heading、figure、label 这类信息，更多来自 Typst 的 model/introspection 系统。比如 heading 本身有 level、numbering、outlined 等语义属性，Typst 可以自动根据 heading 生成 outline。
 
-#strong[（3）运行结果截图]
+所以你做 Typst → Word 时，不应该只看 FrameItem，而应该这样分层：
 
-#block(width: 100%, inset: 8pt, fill: rgb("#224FBC"), stroke: gray, radius: 4pt)[
-  #text(font: "SF Mono", size: 10pt, fill: white)[
-    (base) houxianzheng\@MacBookPro \~/xianzhengJavaProjects % javac GreekLetterDisplay.java\
-    (base) houxianzheng\@MacBookPro \~/xianzhengJavaProjects % java GreekLetterDisplay\
-    大写希腊字母:\
-    Α Β Γ Δ Ε Ζ Η Θ Ι Κ Λ Μ Ν Ξ Ο Π Ρ Σ Τ Υ Φ Χ Ψ Ω\
-    小写希腊字母:\
-    α β γ δ ε ζ η θ ι κ λ μ ν ξ ο π ρ ς σ τ υ φ χ ψ ω\
-    (base) houxianzheng\@MacBookPro \~/xianzhengJavaProjects %
-  ]
-]
+PagedDocument.info
+→ Word core.xml / app.xml 元数据
 
-== 任务三：计算1!+2!+3!+...+10!
+Introspector / query heading
+→ Word Heading 样式、目录、bookmark、cross-reference
 
-#strong[（1）思路]
+Page.frame
+→ 视觉布局、图片位置、复杂图形 fallback
 
-使用函数式编程计算阶乘之和。先编写一个计算阶乘的纯函数，然后创建一个从1到10的流，对每个数计算其阶乘并求和。
+FrameItem::Text
+→ run / paragraph 的视觉校准
 
-#strong[（2）代码实现]
-```java
-import java.util.stream.LongStream;
-import java.util.function.LongUnaryOperator;
+FrameItem::Shape / Group
+→ DrawingML 或 SVG/PNG fallback
 
-public class FactorialSummation {
-    public static void main(String[] args) {
-        // 阶乘计算函数
-        LongUnaryOperator calculateFactorial = n -> 
-            LongStream.rangeClosed(1, n).reduce(1, (a, b) -> a * b);
-        
-        // 计算并展示每个阶乘
-        LongStream.rangeClosed(1, 10)
-            .peek(n -> System.out.printf("%d! = %d%n", n, calculateFactorial.applyAsLong(n)))
-            .map(calculateFactorial)
-            .sum();
-            
-        // 计算总和
-        long result = LongStream.rangeClosed(1, 10)
-            .map(calculateFactorial)
-            .sum();
-            
-        System.out.printf("1! + 2! + 3! + ... + 10! = %d%n", result);
-    }
-}
-```
-
-#strong[（3）运行结果截图]
-
-#block(width: 100%, inset: 8pt, fill: rgb("#224FBC"), stroke: gray, radius: 4pt)[
-  #text(font: "SF Mono", size: 10pt, fill: white)[
-    (base) houxianzheng\@MacBookPro \~/xianzhengJavaProjects % javac FactorialSummation.java\
-    (base) houxianzheng\@MacBookPro \~/xianzhengJavaProjects % java FactorialSummation\
-    1! = 1\
-    2! = 2\
-    3! = 6\
-    4! = 24\
-    5! = 120\
-    6! = 720\
-    7! = 5040\
-    8! = 40320\
-    9! = 362880\
-    10! = 3628800\
-    1! + 2! + 3! + ... + 10! = 4037913\
-    (base) houxianzheng\@MacBookPro \~/xianzhengJavaProjects %
-  ]
-]
-
-== 任务四：计算1-50之间的所有素数的和
-
-#strong[（1）思路]
-
-利用函数式编程创建一个判断素数的谓词函数，然后使用流处理从1到50的数，筛选出素数并求和。
-
-#strong[（2）代码实现]
-```java
-import java.util.function.IntPredicate;
-import java.util.stream.IntStream;
-
-public class PrimeSummation {
-    public static void main(String[] args) {
-        // 创建判断素数的谓词函数
-        IntPredicate isPrimeNumber = num -> {
-            if (num <= 1) return false;
-            return IntStream.rangeClosed(2, (int) Math.sqrt(num))
-                .noneMatch(divisor -> num % divisor == 0);
-        };
-        
-        // 筛选素数并收集
-        int[] primes = IntStream.rangeClosed(2, 50)
-            .filter(isPrimeNumber)
-            .toArray();
-            
-        // 输出素数
-        System.out.print("1-50之间的素数: ");
-        IntStream.of(primes).forEach(prime -> System.out.print(prime + " "));
-        
-        // 计算和输出和
-        int sum = IntStream.of(primes).sum();
-        System.out.println("\n1-50之间素数之和: " + sum);
-    }
-}
-```
-
-#strong[（3）运行结果截图]
-
-#block(width: 100%, inset: 8pt, fill: rgb("#224FBC"), stroke: gray, radius: 4pt)[
-  #text(font: "SF Mono", size: 10pt, fill: white)[
-    (base) houxianzheng\@MacBookPro \~/xianzhengJavaProjects % javac PrimeSummation.java\
-    (base) houxianzheng\@MacBookPro \~/xianzhengJavaProjects % java PrimeSummation\
-    1-50之间的素数: 2 3 5 7 11 13 17 19 23 29 31 37 41 43 47\
-    1-50之间素数之和: 328\
-    (base) houxianzheng\@MacBookPro \~/xianzhengJavaProjects %
-  ]
-]
-
-== 任务五：计算级数和（$1+1/2!+1/3!+...）$的前20项和
-
-#strong[（1）思路]
-
-使用函数式编程计算阶乘倒数之和。分别用函数式的for和do-while两种风格实现，比较结果。
-
-#strong[（2）代码实现]
-```java
-import java.util.function.DoubleSupplier;
-import java.util.stream.IntStream;
-
-public class SeriesSummationCalc {
-    public static void main(String[] args) {
-        // 函数式风格使用Stream API计算
-        double streamSum = IntStream.rangeClosed(1, 20)
-            .mapToDouble(i -> {
-                double denominator = IntStream.rangeClosed(1, i-1)
-                    .asDoubleStream()
-                    .reduce(1.0, (a, b) -> a * b);
-                return 1.0 / (i == 1 ? 1.0 : denominator);
-            })
-            .sum();
-            
-        // 模拟命令式do-while的函数式实现
-        DoubleSupplier doWhileStyle = () -> {
-            double result = 0.0;
-            double factorialValue = 1.0;
-            int index = 1;
-            
-            do {
-                if (index > 1) {
-                    factorialValue *= (index - 1);
-                }
-                result += 1.0 / factorialValue;
-                index++;
-            } while (index <= 20);
-            
-            return result;
-        };
-        
-        System.out.println("使用Stream计算得到的前20项和: " + streamSum);
-        System.out.println("使用函数式do-while计算得到的前20项和: " + doWhileStyle.getAsDouble());
-    }
-}
-```
-
-#strong[（3）运行结果截图]
-
-#block(width: 100%, inset: 8pt, fill: rgb("#224FBC"), stroke: gray, radius: 4pt)[
-  #text(font: "SF Mono", size: 10pt, fill: white)[
-    (base) houxianzheng\@MacBookPro \~/xianzhengJavaProjects % javac SeriesSummationCalc.java\
-    (base) houxianzheng\@MacBookPro \~/xianzhengJavaProjects % java SeriesSummationCalc\
-    使用Stream计算得到的前20项和: 2.7182818284590455\
-    使用函数式do-while计算得到的前20项和: 2.7182818284590455\
-    (base) houxianzheng\@MacBookPro \~/xianzhengJavaProjects %
-  ]
-]
-
-== 任务六：求1000之内的所有完数
-
-#strong[（1）思路]
-
-使用函数式编程查找完数。定义一个函数获取数的所有因子，然后判断因子之和是否等于数本身。使用流处理遍历1到1000的数字。
-
-#strong[（2）代码实现]
-```java
-import java.util.List;
-import java.util.function.IntFunction;
-import java.util.stream.Collectors;
-import java.util.stream.IntStream;
-
-public class PerfectNumberFinder {
-    public static void main(String[] args) {
-        System.out.println("1000以内的完数:");
-        
-        // 查找因子的函数
-        IntFunction<List<Integer>> getDivisors = n ->
-            IntStream.range(1, n)
-                .filter(i -> n % i == 0)
-                .boxed()
-                .collect(Collectors.toList());
-        
-        // 找出所有完数
-        IntStream.rangeClosed(1, 1000)
-            .filter(n -> {
-                List<Integer> divisors = getDivisors.apply(n);
-                return divisors.stream().mapToInt(Integer::intValue).sum() == n;
-            })
-            .forEach(perfectNum -> {
-                List<Integer> factors = getDivisors.apply(perfectNum);
-                System.out.print(perfectNum + " = " + factors.get(0));
-                factors.stream().skip(1).forEach(f -> System.out.print(" + " + f));
-                System.out.println();
-            });
-    }
-}
-```
-
-#strong[（3）运行结果截图]
-
-#block(width: 100%, inset: 8pt, fill: rgb("#224FBC"), stroke: gray, radius: 4pt)[
-  #text(font: "SF Mono", size: 10pt, fill: white)[
-    (base) houxianzheng\@MacBookPro \~/xianzhengJavaProjects % javac PerfectNumberFinder.java\
-    (base) houxianzheng\@MacBookPro \~/xianzhengJavaProjects % java PerfectNumberFinder\
-    1000以内的完数:\
-    6 = 1 + 2 + 3\
-    28 = 1 + 2 + 4 + 7 + 14\
-    496 = 1 + 2 + 4 + 8 + 16 + 31 + 62 + 124 + 248\
-    (base) houxianzheng\@MacBookPro \~/xianzhengJavaProjects %
-  ]
-]
-
-== 任务七：几何形状的周长和面积
-
-#strong[（1）思路]
-
-使用函数式接口和Lambda表达式定义几何图形的计算方法，采用接口默认方法和静态方法的特性，构建一个函数式风格的形状计算系统。
-
-#strong[（2）代码实现]
-```java
-import java.util.function.BiFunction;
-import java.util.function.Function;
-
-public class GeometryCalculator {
-    public static void main(String[] args) {
-        // 使用函数式接口表示形状
-        BiFunction<Double, Double, Shape> createRectangle = (l, w) -> 
-            new Shape(
-                () -> 2 * (l + w),
-                () -> l * w,
-                "长方形 (长=" + l + ", 宽=" + w + ")"
-            );
-            
-        Function<Double, Shape> createSquare = side -> 
-            new Shape(
-                () -> 4 * side,
-                () -> side * side,
-                "正方形 (边长=" + side + ")"
-            );
-            
-        Function<Double, Shape> createCircle = radius -> 
-            new Shape(
-                () -> 2 * Math.PI * radius,
-                () -> Math.PI * radius * radius,
-                "圆形 (半径=" + radius + ")"
-            );
-        
-        // 创建形状实例并计算
-        Shape rect = createRectangle.apply(5.0, 4.0);
-        Shape square = createSquare.apply(5.0);
-        Shape circle = createCircle.apply(3.0);
-        
-        // 显示计算结果
-        System.out.println(rect.name);
-        System.out.println("周长: " + rect.getPerimeter());
-        System.out.println("面积: " + rect.getArea());
-        
-        System.out.println("\n" + square.name);
-        System.out.println("周长: " + square.getPerimeter());
-        System.out.println("面积: " + square.getArea());
-        
-        System.out.println("\n" + circle.name);
-        System.out.println("周长: " + circle.getPerimeter());
-        System.out.println("面积: " + circle.getArea());
-    }
-    
-    // 形状类使用函数式接口
-    static class Shape {
-        private final PerimeterCalculator perimeterCalc;
-        private final AreaCalculator areaCalc;
-        final String name;
-        
-        Shape(PerimeterCalculator p, AreaCalculator a, String name) {
-            this.perimeterCalc = p;
-            this.areaCalc = a;
-            this.name = name;
-        }
-        
-        double getPerimeter() {
-            return perimeterCalc.calculate();
-        }
-        
-        double getArea() {
-            return areaCalc.calculate();
-        }
-    }
-    
-    @FunctionalInterface
-    interface PerimeterCalculator {
-        double calculate();
-    }
-    
-    @FunctionalInterface
-    interface AreaCalculator {
-        double calculate();
-    }
-}
-```
-
-#strong[（3）运行结果截图]
-
-#block(width: 100%, inset: 8pt, fill: rgb("#224FBC"), stroke: gray, radius: 4pt)[
-  #text(font: "SF Mono", size: 10pt, fill: white)[
-    (base) houxianzheng\@MacBookPro \~/xianzhengJavaProjects % javac GeometryCalculator.java\
-    (base) houxianzheng\@MacBookPro \~/xianzhengJavaProjects % java GeometryCalculator\
-    长方形 (长=5.0, 宽=4.0)\
-    周长: 18.0
-    面积: 20.0
-
-    正方形 (边长=5.0)\
-    周长: 20.0
-    面积: 25.0
-
-    圆形 (半径=3.0)\
-    周长: 18.84955592153876
-    面积: 28.274333882308138\
-    (base) houxianzheng\@MacBookPro \~/xianzhengJavaProjects %
-  ]
-]
-
-== 任务八：产生10个100之内的随机整数并排序
-
-#strong[（1）思路]
-
-使用Java 8的流API生成随机数，并利用函数式编程对它们进行排序和处理。
-
-#strong[（2）代码实现]
-```java
-import java.util.Arrays;
-import java.util.Random;
-import java.util.stream.IntStream;
-
-public class RandomNumberProcessor {
-    public static void main(String[] args) {
-        // 创建随机数生成器
-        Random randomGenerator = new Random();
-        
-        // 生成10个随机数并收集到数组
-        int[] randomValues = IntStream
-            .generate(() -> randomGenerator.nextInt(100))
-            .limit(10)
-            .toArray();
-        
-        // 显示原始随机数
-        System.out.println("生成的随机数序列:");
-        IntStream.of(randomValues)
-            .forEach(num -> System.out.print(num + " "));
-        
-        // 排序处理
-        int[] sortedValues = Arrays.stream(randomValues)
-            .sorted()
-            .toArray();
-        
-        // 显示排序结果
-        System.out.println("\n排序后的序列:");
-        IntStream.of(sortedValues)
-            .forEach(num -> System.out.print(num + " "));
-    }
-}
-```
-
-#strong[（3）运行结果截图]
-
-#block(width: 100%, inset: 8pt, fill: rgb("#224FBC"), stroke: gray, radius: 4pt)[
-  #text(font: "SF Mono", size: 10pt, fill: white)[
-    (base) houxianzheng\@MacBookPro \~/xianzhengJavaProjects % javac RandomNumberProcessor.java\
-    (base) houxianzheng\@MacBookPro \~/xianzhengJavaProjects % java RandomNumberProcessor\
-    生成的随机数序列:\
-    23 58 17 91 45 8 71 36 64 29\
-    排序后的序列:\
-    8 17 23 29 36 45 58 64 71 91\
-    (base) houxianzheng\@MacBookPro \~/xianzhengJavaProjects %
-  ]
-]
-
-== 任务九：产生20个50-100之内的整数并找出最大值和最小值
-
-#strong[（1）思路]
-
-使用函数式编程生成指定范围内的随机数，并利用流处理API找出最大值和最小值。
-
-#strong[（2）代码实现]
-```java
-import java.util.IntSummaryStatistics;
-import java.util.Random;
-import java.util.stream.IntStream;
-
-public class RandomRangeAnalyzer {
-    public static void main(String[] args) {
-        Random randomSource = new Random();
-        
-        // 使用映射生成50-100范围的随机数
-        int[] randomNumbers = IntStream
-            .generate(() -> randomSource.nextInt(51) + 50)
-            .limit(20)
-            .toArray();
-            
-        // 显示生成的随机数
-        System.out.println("生成的20个随机数（50-100范围）:");
-        IntStream.of(randomNumbers)
-            .forEach(num -> System.out.print(num + " "));
-            
-        // 使用统计功能找出最大值和最小值
-        IntSummaryStatistics stats = IntStream.of(randomNumbers)
-            .summaryStatistics();
-            
-        System.out.println("\n数列最大值: " + stats.getMax());
-        System.out.println("数列最小值: " + stats.getMin());
-    }
-}
-```
-
-#strong[（3）运行结果截图]
-
-#block(width: 100%, inset: 8pt, fill: rgb("#224FBC"), stroke: gray, radius: 4pt)[
-  #text(font: "SF Mono", size: 10pt, fill: white)[
-    (base) houxianzheng\@MacBookPro \~/xianzhengJavaProjects % javac RandomRangeAnalyzer.java\
-    (base) houxianzheng\@MacBookPro \~/xianzhengJavaProjects % java RandomRangeAnalyzer\
-    生成的20个随机数（50-100范围）:\
-    73 86 55 97 61 78 93 69 84 52 71 89 63 76 58 95 82 67 91 59\
-    数列最大值: 97
-    数列最小值: 52\
-    (base) houxianzheng\@MacBookPro \~/xianzhengJavaProjects %
-  ]
-]
-
-== 任务十：统计字符种类
-
-#strong[（1）思路]
-
-使用函数式编程风格和流API处理输入字符串，统计不同类型字符的数量。
-
-#strong[（2）代码实现]
-```java
-import java.util.Map;
-import java.util.Scanner;
-import java.util.function.Function;
-import java.util.stream.Collectors;
-
-public class CharacterAnalyzer {
-    // 字符分类枚举
-    enum CharType { LETTER, DIGIT, SPACE, OTHER }
-    
-    public static void main(String[] args) {
-        Scanner inputReader = new Scanner(System.in);
-        System.out.println("请输入一行字符:");
-        String text = inputReader.nextLine();
-        
-        // 分类函数
-        Function<Character, CharType> classifier = c -> {
-            if (Character.isLetter(c)) return CharType.LETTER;
-            if (Character.isDigit(c)) return CharType.DIGIT;
-            if (Character.isWhitespace(c)) return CharType.SPACE;
-            return CharType.OTHER;
-        };
-        
-        // 使用流处理字符分类计数
-        Map<CharType, Long> charCounts = text.chars()
-            .mapToObj(c -> (char) c)
-            .collect(Collectors.groupingBy(classifier, Collectors.counting()));
-        
-        // 输出结果
-        System.out.println("英文字母数量: " + charCounts.getOrDefault(CharType.LETTER, 0L));
-        System.out.println("数字数量: " + charCounts.getOrDefault(CharType.DIGIT, 0L));
-        System.out.println("空格数量: " + charCounts.getOrDefault(CharType.SPACE, 0L));
-        System.out.println("其他字符数量: " + charCounts.getOrDefault(CharType.OTHER, 0L));
-        
-        inputReader.close();
-    }
-}
-```
-
-#strong[（3）运行结果截图]
-
-#block(width: 100%, inset: 8pt,clip: true, fill: rgb("#224FBC"), stroke: gray, radius: 4pt)[
-  #text(font: "SF Mono", size: 10pt, fill: white)[
-    (base) houxianzheng\@MacBookPro \~/xianzhengJavaProjects % javac CharacterAnalyzer.java\
-    (base) houxianzheng\@MacBookPro \~/xianzhengJavaProjects % java CharacterAnalyzer\
-    请输入一行字符:\
-    Hello Java 2023! 函数式编程很酷~\
-    英文字母数量: 14\
-    数字数量: 4\
-    空格数量: 4\
-    其他字符数量: 8\
-    (base) houxianzheng\@MacBookPro \~/xianzhengJavaProjects %
-  ]
-]
-
-= 实验测试中遇到的问题和自己的解决方案
-
-1. *函数式编程范式适应*：初次接触函数式编程范式时，需要转变思维方式。通过查阅Java 8 Stream API文档，逐步适应了函数式编程的思考方式。
-
-2. *Lambda表达式性能考虑*：在处理大数据量时，发现Lambda表达式可能引入一些性能开销。通过适当地选择并行流和优化Lambda表达式结构来提高性能。
-
-3. *随机数生成器的使用*：使用Stream API生成随机数时，需要注意生成器的状态和重用问题。通过创建单一Random实例并在流中共享来解决。
-
-4. *浮点数精度问题*：在计算阶乘倒数和等数学问题时，发现浮点数精度是一个常见问题。通过使用BigDecimal类型可以在需要高精度时解决这个问题。
+一句话：FramePage 确实有丰富视觉数据，但“标题等语义信息”主要不在 Frame 本身，而在 PagedDocument.info 和 introspector。你要做高质量 Word，必须同时吃这三层。

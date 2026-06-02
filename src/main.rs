@@ -35,13 +35,13 @@ fn run() -> Result<(), Box<dyn Error>> {
     )?;
 
     eprintln!(
-        "wrote {} ({} Typst page(s), {} Word section(s), {} native text line(s), {} formula SVG image(s), {} SVG fallback page(s))",
+        "wrote {} ({} Typst page(s), {} Word section(s), {} native text line(s), {} formula SVG image(s), {} SVG fallback item(s))",
         output.display(),
         report.pages,
         report.word_sections,
         report.native_text_lines,
         report.formula_svg_images,
-        report.svg_fallback_pages
+        report.svg_fallback_items
     );
 
     for warning in report.warnings {
