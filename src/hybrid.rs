@@ -9,7 +9,7 @@ use docx_rs::{
     RelativeFromVType, Run, SectionProperty, SectionType,
 };
 use typst::syntax::{Source, SyntaxKind, SyntaxNode};
-use typst_preview_core::typst_scene::{SceneColor, SceneImageFormat, SceneItem, SceneRect, SceneTextHit};
+use typst_preview_core::typst_scene::{SceneColor, SceneItem, SceneRect, SceneTextHit};
 use typst_preview_core::{DocumentCompiler, DocumentInput, SceneDocument, SourceLocation};
 
 use crate::docx_pack;
@@ -17,8 +17,8 @@ use crate::docx_pack;
 mod frame_items;
 
 use frame_items::{
-    crop_svg, formula_crop, formula_regions, page_text_runs, text_lines_from_runs,
-    FormulaRun, NativeRun,
+    FormulaRun, NativeRun, collect_image_fallbacks, crop_svg, formula_crop, formula_regions,
+    page_text_runs, text_lines_from_runs,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -103,6 +103,15 @@ pub fn convert_to_docx(
         }
 
         if options.svg_fallback {
+            svg_fallback_items += collect_image_fallbacks(
+                &page.items,
+                page_index,
+                &source_index,
+                &math_ranges,
+                &mut svg_media,
+                &mut page_paragraphs,
+            );
+
             for (item_index, item) in page.items.iter().enumerate() {
                 match item {
                     SceneItem::Shape(shape) => {
@@ -113,38 +122,17 @@ pub fn convert_to_docx(
                             continue;
                         }
 
-                        let svg = page_svg
-                            .get_or_insert_with(|| typst_svg::svg(&compiled.document.pages[page_index]));
+                        let svg = page_svg.get_or_insert_with(|| {
+                            typst_svg::svg(&compiled.document.pages[page_index])
+                        });
                         let crop = formula_crop(shape.bounds, page.width, page.height);
-                        let media_id = format!("rIdTypstShapeP{}N{}", page_index + 1, item_index + 1);
+                        let media_id =
+                            format!("rIdTypstShapeP{}N{}", page_index + 1, item_index + 1);
                         svg_media.insert(media_id.clone(), crop_svg(svg, crop).into_bytes());
                         page_paragraphs.push(floating_svg_paragraph(media_id, crop));
                         svg_fallback_items += 1;
                     }
-                    SceneItem::Image(image) => {
-                        if source_index
-                            .location_math_id(image.source.as_ref(), &math_ranges)
-                            .is_some()
-                        {
-                            continue;
-                        }
-
-                        let media_id = format!("rIdTypstImageP{}N{}", page_index + 1, item_index + 1);
-                        match image.format {
-                            SceneImageFormat::Svg => {
-                                svg_media.insert(media_id.clone(), image.bytes.to_vec());
-                                page_paragraphs.push(floating_svg_paragraph(media_id, image.bounds));
-                                svg_fallback_items += 1;
-                            }
-                            _ => {
-                                let pic = Pic::new(image.bytes.as_ref())
-                                    .id(media_id)
-                                    .size(pt_to_emu(image.bounds.width), pt_to_emu(image.bounds.height));
-                                page_paragraphs.push(floating_pic_paragraph(pic));
-                            }
-                        }
-                    }
-                    SceneItem::Text(_) => {}
+                    SceneItem::Image(_) | SceneItem::Text(_) => {}
                 }
             }
         }
@@ -213,22 +201,32 @@ fn zero_page_margin() -> PageMargin {
     }
 }
 
-fn floating_svg_paragraph(media_id: String, bounds: SceneRect) -> Paragraph {
+pub(crate) fn floating_svg_paragraph(media_id: String, bounds: SceneRect) -> Paragraph {
     let placeholder = format!("svg-placeholder-{media_id}").into_bytes();
     let pic = Pic::new_with_dimensions(placeholder, 1, 1)
         .id(media_id)
-        .size(pt_to_emu(bounds.width), pt_to_emu(bounds.height))
+        .size(pt_to_emu(bounds.width), pt_to_emu(bounds.height));
+
+    floating_positioned_pic_paragraph(pic, bounds)
+}
+
+pub(crate) fn floating_raster_paragraph(pic: Pic, bounds: SceneRect) -> Paragraph {
+    let pic = pic.size(pt_to_emu(bounds.width), pt_to_emu(bounds.height));
+    floating_positioned_pic_paragraph(pic, bounds)
+}
+
+fn floating_positioned_pic_paragraph(pic: Pic, bounds: SceneRect) -> Paragraph {
+    let pic = pic
         .floating()
         .overlapping()
         .relative_from_h(RelativeFromHType::Page)
         .relative_from_v(RelativeFromVType::Page)
         .offset_x(pt_to_emu(bounds.x) as i32)
         .offset_y(pt_to_emu(bounds.y) as i32);
-
     floating_pic_paragraph(pic)
 }
 
-fn floating_pic_paragraph(pic: Pic) -> Paragraph {
+pub(crate) fn floating_pic_paragraph(pic: Pic) -> Paragraph {
     Paragraph::new()
         .line_spacing(
             LineSpacing::new()
@@ -350,6 +348,6 @@ fn pt_to_twips_i32(pt: f32) -> i32 {
     (pt.max(0.0) * 20.0).round() as i32
 }
 
-fn pt_to_emu(pt: f32) -> u32 {
+pub(crate) fn pt_to_emu(pt: f32) -> u32 {
     (pt.max(0.0) * 12_700.0).round() as u32
 }

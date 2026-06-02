@@ -1,8 +1,8 @@
 // MARK: Shape items
 use typst_preview_core::typst_scene::SceneItem;
 
-use super::formula::{add_formula_region, FormulaRegion};
 use super::super::{MathRange, SourceIndex};
+use super::formula::{FormulaRegion, add_formula_region};
 
 pub(crate) fn collect_formula_regions_from_shapes(
     items: &[SceneItem],

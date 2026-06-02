@@ -1,15 +1,13 @@
 // MARK: Text items
 use std::cmp::Ordering;
 
-use docx_rs::{
-    AlignmentType, LineSpacing, LineSpacingType, Paragraph, Pic, Run, RunFonts,
-};
+use docx_rs::{AlignmentType, LineSpacing, LineSpacingType, Paragraph, Pic, Run, RunFonts};
 use typst_preview_core::typst_scene::{SceneColor, SceneItem, SceneRect, SceneText};
 
-use super::formula::{add_formula_region, FormulaRegion};
 use super::super::{
-    color_hex, pt_to_emu, pt_to_twips, pt_to_twips_i32, rect_union, MathRange, SourceIndex,
+    MathRange, SourceIndex, color_hex, pt_to_emu, pt_to_twips, pt_to_twips_i32, rect_union,
 };
+use super::formula::{FormulaRegion, add_formula_region};
 
 // MARK: Run types
 #[derive(Clone, Debug)]
@@ -52,10 +50,7 @@ impl TextLine {
         self.runs.push(run);
     }
 
-    pub(crate) fn into_positioned_paragraph(
-        mut self,
-        previous_bottom: f32,
-    ) -> (Paragraph, f32) {
+    pub(crate) fn into_positioned_paragraph(mut self, previous_bottom: f32) -> (Paragraph, f32) {
         self.runs
             .sort_by(|a, b| a.x().partial_cmp(&b.x()).unwrap_or(Ordering::Equal));
 

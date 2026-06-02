@@ -3,8 +3,8 @@ use std::cmp::Ordering;
 
 use typst_preview_core::typst_scene::{SceneItem, SceneRect};
 
+use super::super::{MathRange, SourceIndex, rect_union};
 use super::{group, image, link, shape, tag, text};
-use super::super::{rect_union, MathRange, SourceIndex};
 
 #[derive(Clone, Debug)]
 pub(crate) struct FormulaRegion {
