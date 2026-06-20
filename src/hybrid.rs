@@ -8,17 +8,21 @@ use docx_rs::{
     Docx, LineSpacing, LineSpacingType, PageMargin, PageSize, Paragraph, Pic, RelativeFromHType,
     RelativeFromVType, Run, SectionProperty, SectionType,
 };
-use typst::syntax::{Source, SyntaxKind, SyntaxNode};
+use typst::syntax::{Source, SpanKind, SyntaxKind, SyntaxNode};
 use typst_preview_core::typst_scene::{SceneColor, SceneItem, SceneRect, SceneTextHit};
-use typst_preview_core::{DocumentCompiler, DocumentInput, SceneDocument, SourceLocation};
+use typst_preview_core::{
+    DocumentCompiler, DocumentInput, SceneDocument, SemanticParagraph, SourceLocation, SourceRange,
+};
+use typst_svg::SvgOptions;
 
 use crate::docx_pack;
 
 mod frame_items;
 
 use frame_items::{
-    FormulaRun, NativeRun, collect_image_fallbacks, crop_svg, formula_crop, formula_regions,
-    page_text_runs, text_lines_from_runs,
+    FormulaRun, NativeRun, collect_image_fallbacks, crop_svg, extract_mathml_formulas,
+    formula_crop, formula_regions, mathml_to_omml, page_text_runs, text_lines_from_runs,
+    text_paragraphs_from_lines,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -31,7 +35,9 @@ pub struct ConversionReport {
     pub pages: usize,
     pub word_sections: usize,
     pub native_text_lines: usize,
+    pub formula_omml_items: usize,
     pub formula_svg_images: usize,
+    pub formula_mathml_items: usize,
     pub svg_fallback_items: usize,
     pub warnings: Vec<String>,
 }
@@ -47,6 +53,29 @@ pub fn convert_to_docx(
     let math_ranges = source_index.math_ranges();
     let compiler = DocumentCompiler::new(input, source);
     let compiled = compiler.compile_current()?;
+    let mut warnings = compiled.warnings.clone();
+    let semantic_paragraphs = match compiler.compile_semantic_current() {
+        Ok(compiled_semantic) => {
+            source_index.semantic_paragraph_ranges(&compiled_semantic.paragraphs)
+        }
+        Err(error) => {
+            warnings.push(format!("Semantic paragraph extraction skipped: {error}"));
+            Vec::new()
+        }
+    };
+    let mathml_formulas = match compiler.compile_html_current() {
+        Ok(compiled_html) => {
+            let formulas = extract_mathml_formulas(&compiled_html.html);
+            let _mathml_bytes: usize = formulas.iter().map(|formula| formula.source().len()).sum();
+            let _display_formulas = formulas.iter().filter(|formula| formula.display()).count();
+            formulas
+        }
+        Err(error) => {
+            warnings.push(format!("MathML extraction skipped: {error}"));
+            Vec::new()
+        }
+    };
+    let formula_mathml_items = mathml_formulas.len();
     let scene = SceneDocument::from_paged_document(
         &compiled.document,
         compiled.warnings.clone(),
@@ -61,10 +90,13 @@ pub fn convert_to_docx(
     }
 
     let mut svg_media = HashMap::new();
+    let mut raw_xml_replacements = HashMap::new();
     let mut native_text_lines = 0;
+    let mut formula_omml_items = 0;
     let mut formula_svg_images = 0;
     let mut svg_fallback_items = 0;
-    let mut warnings = compiled.warnings.clone();
+    let svg_options = SvgOptions::default();
+    let mut mathml_formulas = mathml_formulas.into_iter();
 
     for (page_index, page) in scene.pages.iter().enumerate() {
         let mut page_svg = None;
@@ -73,6 +105,7 @@ pub fn convert_to_docx(
             &page.items,
             &source_index,
             &math_ranges,
+            &semantic_paragraphs,
             options.svg_fallback,
             &mut warnings,
         );
@@ -80,24 +113,62 @@ pub fn convert_to_docx(
         if options.svg_fallback {
             let formula_regions = formula_regions(&page.items, &source_index, &math_ranges);
             if !formula_regions.is_empty() {
-                let svg = page_svg
-                    .get_or_insert_with(|| typst_svg::svg(&compiled.document.pages[page_index]));
+                let svg = page_svg.get_or_insert_with(|| {
+                    typst_svg::svg(&compiled.document.pages()[page_index], &svg_options)
+                });
 
                 for (formula_index, region) in formula_regions.into_iter().enumerate() {
+                    let crop = formula_crop(region.bounds(), page.width, page.height);
+
+                    if let Some(formula) = mathml_formulas.next()
+                        && let Some(omml) = mathml_to_omml(formula.source())
+                    {
+                        formula_omml_items += 1;
+                        let placeholder =
+                            format!("TYPSTOMMLP{}N{}", page_index + 1, formula_index + 1);
+                        raw_xml_replacements.insert(placeholder.clone(), omml);
+                        let paragraph_id = math_ranges.get(region.math_id()).and_then(|range| {
+                            SourceIndex::paragraph_id_for_source_range(
+                                &range.bytes,
+                                &semantic_paragraphs,
+                            )
+                        });
+                        runs.push(NativeRun::Formula(
+                            FormulaRun::new_omml(
+                                crop.x,
+                                crop.width,
+                                crop.y,
+                                region.baseline_y(),
+                                crop.height,
+                                placeholder,
+                            )
+                            .with_paragraph_id(paragraph_id),
+                        ));
+                        continue;
+                    }
+
                     formula_svg_images += 1;
                     let media_id =
                         format!("rIdTypstFormulaP{}N{}", page_index + 1, formula_index + 1);
-                    let crop = formula_crop(region.bounds(), page.width, page.height);
                     let formula_svg = crop_svg(svg, crop);
                     svg_media.insert(media_id.clone(), formula_svg.into_bytes());
-                    runs.push(NativeRun::Formula(FormulaRun::new(
-                        crop.x,
-                        crop.width,
-                        crop.y,
-                        region.baseline_y(),
-                        crop.height,
-                        media_id,
-                    )));
+                    let paragraph_id = math_ranges.get(region.math_id()).and_then(|range| {
+                        SourceIndex::paragraph_id_for_source_range(
+                            &range.bytes,
+                            &semantic_paragraphs,
+                        )
+                    });
+                    runs.push(NativeRun::Formula(
+                        FormulaRun::new(
+                            crop.x,
+                            crop.width,
+                            crop.y,
+                            region.baseline_y(),
+                            crop.height,
+                            media_id,
+                        )
+                        .with_paragraph_id(paragraph_id),
+                    ));
                 }
             }
         }
@@ -123,7 +194,7 @@ pub fn convert_to_docx(
                         }
 
                         let svg = page_svg.get_or_insert_with(|| {
-                            typst_svg::svg(&compiled.document.pages[page_index])
+                            typst_svg::svg(&compiled.document.pages()[page_index], &svg_options)
                         });
                         let crop = formula_crop(shape.bounds, page.width, page.height);
                         let media_id =
@@ -139,10 +210,11 @@ pub fn convert_to_docx(
 
         let lines = text_lines_from_runs(runs);
         native_text_lines += lines.len();
+        let text_paragraphs = text_paragraphs_from_lines(lines);
 
         let mut previous_bottom = 0.0;
-        for line in lines {
-            let (paragraph, bottom) = line.into_positioned_paragraph(previous_bottom);
+        for text_paragraph in text_paragraphs {
+            let (paragraph, bottom) = text_paragraph.into_positioned_paragraph(previous_bottom);
             previous_bottom = bottom;
             page_paragraphs.push(paragraph);
         }
@@ -165,17 +237,20 @@ pub fn convert_to_docx(
     }
 
     let file = File::create(output)?;
-    docx_pack::pack_with_svg(docx.build(), file, &svg_media)?;
+    docx_pack::pack_with_svg(docx.build(), file, &svg_media, &raw_xml_replacements)?;
 
     Ok(ConversionReport {
         pages: scene.pages.len(),
         word_sections: scene.pages.len(),
         native_text_lines,
+        formula_omml_items,
         formula_svg_images,
+        formula_mathml_items,
         svg_fallback_items,
         warnings,
     })
 }
+
 // MARK: DOCX layout helpers
 fn page_section_property(
     width: f32,
@@ -251,6 +326,26 @@ impl MathRange {
     }
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct SemanticParagraphRange {
+    id: usize,
+    bytes: Range<usize>,
+}
+
+impl SemanticParagraphRange {
+    fn overlaps(&self, range: &Range<usize>) -> bool {
+        self.bytes.start < range.end && range.start < self.bytes.end
+    }
+
+    fn overlap_len(&self, range: &Range<usize>) -> usize {
+        if !self.overlaps(range) {
+            return 0;
+        }
+
+        self.bytes.end.min(range.end) - self.bytes.start.max(range.start)
+    }
+}
+
 #[derive(Debug)]
 struct SourceIndex {
     source: Source,
@@ -271,7 +366,7 @@ impl SourceIndex {
 
     fn collect_math_ranges(&self, node: &SyntaxNode, ranges: &mut Vec<MathRange>) {
         if node.kind() == SyntaxKind::Equation {
-            if let Some(bytes) = self.source.range(node.span()) {
+            if let Some(bytes) = self.span_range(node.span()) {
                 ranges.push(MathRange {
                     id: ranges.len(),
                     bytes,
@@ -296,6 +391,12 @@ impl SourceIndex {
         self.source.text().get(start.min(end)..end.max(start))
     }
 
+    fn glyph_source_range(&self, glyph: &SceneTextHit) -> Option<Range<usize>> {
+        let start = self.location_to_byte(glyph.leading.as_ref()?)?;
+        let end = self.location_to_byte(glyph.trailing.as_ref()?)?;
+        Some(start.min(end)..end.max(start))
+    }
+
     fn location_math_id(
         &self,
         location: Option<&SourceLocation>,
@@ -313,6 +414,61 @@ impl SourceIndex {
         self.source
             .lines()
             .line_column_to_byte(location.line, location.column)
+    }
+
+    fn semantic_paragraph_ranges(
+        &self,
+        paragraphs: &[SemanticParagraph],
+    ) -> Vec<SemanticParagraphRange> {
+        paragraphs
+            .iter()
+            .filter_map(|paragraph| {
+                let bytes = self.source_range_to_bytes(paragraph.range.as_ref()?)?;
+                if bytes.start >= bytes.end {
+                    return None;
+                }
+
+                Some(SemanticParagraphRange {
+                    id: paragraph.id,
+                    bytes,
+                })
+            })
+            .collect()
+    }
+
+    fn source_range_to_bytes(&self, range: &SourceRange) -> Option<Range<usize>> {
+        let start = self.location_to_byte(&range.start)?;
+        let end = self.location_to_byte(&range.end)?;
+        Some(start.min(end)..end.max(start))
+    }
+
+    fn paragraph_id_for_source_range(
+        range: &Range<usize>,
+        paragraphs: &[SemanticParagraphRange],
+    ) -> Option<usize> {
+        paragraphs
+            .iter()
+            .filter(|paragraph| paragraph.overlaps(range))
+            .max_by_key(|paragraph| paragraph.overlap_len(range))
+            .map(|paragraph| paragraph.id)
+    }
+
+    fn span_range(&self, span: typst::syntax::Span) -> Option<Range<usize>> {
+        match span.get() {
+            SpanKind::Detached => None,
+            SpanKind::Number { id, num } => {
+                if id != self.source.id() {
+                    return None;
+                }
+                self.source.range(num, None)
+            }
+            SpanKind::Range { id, range } => {
+                if id != self.source.id() {
+                    return None;
+                }
+                Some(range)
+            }
+        }
     }
 }
 // MARK: Geometry & unit helpers

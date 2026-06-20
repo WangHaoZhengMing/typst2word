@@ -8,6 +8,7 @@ pub fn pack_with_svg<W>(
     mut xml: XMLDocx,
     writer: W,
     svg_media: &HashMap<String, Vec<u8>>,
+    raw_xml_replacements: &HashMap<String, String>,
 ) -> zip::result::ZipResult<()>
 where
     W: Write + Seek,
@@ -15,6 +16,10 @@ where
     if !svg_media.is_empty() {
         xml.content_type = add_svg_content_type(xml.content_type);
         xml.document_rels = rewrite_svg_relationships(xml.document_rels, svg_media);
+    }
+
+    if !raw_xml_replacements.is_empty() {
+        xml.document = rewrite_raw_xml_placeholders(xml.document, raw_xml_replacements);
     }
 
     let mut zip = zip::ZipWriter::new(writer);
@@ -214,4 +219,91 @@ fn rewrite_svg_relationships(bytes: Vec<u8>, svg_media: &HashMap<String, Vec<u8>
     }
 
     xml.into_bytes()
+}
+
+fn rewrite_raw_xml_placeholders(bytes: Vec<u8>, replacements: &HashMap<String, String>) -> Vec<u8> {
+    let mut xml = match String::from_utf8(bytes) {
+        Ok(xml) => xml,
+        Err(error) => return error.into_bytes(),
+    };
+
+    xml = ensure_math_namespace(xml);
+
+    for (placeholder, replacement) in replacements {
+        xml = replace_placeholder_run(xml, placeholder, replacement);
+    }
+
+    xml.into_bytes()
+}
+
+fn ensure_math_namespace(mut xml: String) -> String {
+    if xml.contains("xmlns:m=") {
+        return xml;
+    }
+
+    if let Some(index) = xml.find("<w:document") {
+        if let Some(end) = xml[index..].find('>') {
+            xml.insert_str(
+                index + end,
+                r#" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math""#,
+            );
+        }
+    }
+
+    xml
+}
+
+fn replace_placeholder_run(mut xml: String, placeholder: &str, replacement: &str) -> String {
+    while let Some(text_index) = xml.find(placeholder) {
+        let Some(run_start) = find_run_start(&xml, text_index) else {
+            xml.replace_range(text_index..text_index + placeholder.len(), replacement);
+            continue;
+        };
+        let Some(relative_run_end) = xml[text_index..].find("</w:r>") else {
+            xml.replace_range(text_index..text_index + placeholder.len(), replacement);
+            continue;
+        };
+        let run_end = text_index + relative_run_end + "</w:r>".len();
+        xml.replace_range(run_start..run_end, replacement);
+    }
+
+    xml
+}
+
+fn find_run_start(xml: &str, before: usize) -> Option<usize> {
+    let mut search_end = before;
+    while let Some(relative_start) = xml[..search_end].rfind("<w:r") {
+        let name_end = relative_start + "<w:r".len();
+        if xml[name_end..]
+            .chars()
+            .next()
+            .is_some_and(|value| value == '>' || value.is_whitespace())
+        {
+            return Some(relative_start);
+        }
+
+        search_end = relative_start;
+    }
+
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::replace_placeholder_run;
+
+    #[test]
+    fn replaces_whole_run_without_matching_run_properties() {
+        let xml = r#"<w:p><w:r><w:rPr /><w:t>TYPSTOMML1</w:t></w:r><w:r><w:t>,</w:t></w:r></w:p>"#;
+        let replaced = replace_placeholder_run(
+            xml.to_string(),
+            "TYPSTOMML1",
+            "<m:oMath><m:r><m:t>x</m:t></m:r></m:oMath>",
+        );
+
+        assert_eq!(
+            replaced,
+            r#"<w:p><m:oMath><m:r><m:t>x</m:t></m:r></m:oMath><w:r><w:t>,</w:t></w:r></w:p>"#
+        );
+    }
 }

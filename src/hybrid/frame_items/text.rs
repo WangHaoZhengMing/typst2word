@@ -1,11 +1,15 @@
 // MARK: Text items
 use std::cmp::Ordering;
+use std::ops::Range;
 
-use docx_rs::{AlignmentType, LineSpacing, LineSpacingType, Paragraph, Pic, Run, RunFonts};
+use docx_rs::{
+    AlignmentType, BreakType, LineSpacing, LineSpacingType, Paragraph, Pic, Run, RunFonts,
+};
 use typst_preview_core::typst_scene::{SceneColor, SceneItem, SceneRect, SceneText};
 
 use super::super::{
-    MathRange, SourceIndex, color_hex, pt_to_emu, pt_to_twips, pt_to_twips_i32, rect_union,
+    MathRange, SemanticParagraphRange, SourceIndex, color_hex, pt_to_emu, pt_to_twips,
+    pt_to_twips_i32, rect_union,
 };
 use super::formula::{FormulaRegion, add_formula_region};
 
@@ -50,31 +54,17 @@ impl TextLine {
         self.runs.push(run);
     }
 
-    pub(crate) fn into_positioned_paragraph(mut self, previous_bottom: f32) -> (Paragraph, f32) {
-        self.runs
-            .sort_by(|a, b| a.x().partial_cmp(&b.x()).unwrap_or(Ordering::Equal));
-
-        let before = (self.top_y - previous_bottom).max(0.0);
-        let line_height = (self.bottom_y - self.top_y)
-            .max(
-                self.runs
-                    .iter()
-                    .map(NativeRun::font_size)
-                    .fold(1.0, f32::max),
-            )
-            .max(1.0);
-
-        let mut paragraph = Paragraph::new()
-            .align(AlignmentType::Left)
-            .indent(Some(pt_to_twips_i32(self.left_x)), None, None, None)
-            .line_spacing(
-                LineSpacing::new()
-                    .before(pt_to_twips(before))
-                    .after(0)
-                    .line(pt_to_twips_i32(line_height))
-                    .line_rule(LineSpacingType::Exact),
-            );
+    fn append_runs_to_paragraph(self, mut paragraph: Paragraph, line_left_x: f32) -> Paragraph {
         let mut previous_right = None;
+
+        if line_left_x > 0.0 {
+            let spaces = ((self.left_x - line_left_x).max(0.0) / self.average_font_size() * 1.8)
+                .round()
+                .clamp(0.0, 80.0) as usize;
+            if spaces > 0 {
+                paragraph = paragraph.add_run(Run::new().add_text(" ".repeat(spaces)));
+            }
+        }
 
         for run in self.runs {
             if let Some(right) = previous_right {
@@ -86,6 +76,112 @@ impl TextLine {
 
             previous_right = Some(run.x() + run.width());
             paragraph = paragraph.add_run(run.into_docx_run());
+        }
+
+        paragraph
+    }
+
+    fn line_height(&self) -> f32 {
+        (self.bottom_y - self.top_y)
+            .max(
+                self.runs
+                    .iter()
+                    .map(NativeRun::font_size)
+                    .fold(1.0, f32::max),
+            )
+            .max(1.0)
+    }
+
+    fn average_font_size(&self) -> f32 {
+        if self.runs.is_empty() {
+            return 8.0;
+        }
+
+        self.runs.iter().map(NativeRun::font_size).sum::<f32>() / self.runs.len() as f32
+    }
+
+    fn paragraph_id(&self) -> Option<usize> {
+        let mut counts: Vec<(usize, usize)> = Vec::new();
+        for id in self.runs.iter().filter_map(NativeRun::paragraph_id) {
+            if let Some((_, count)) = counts.iter_mut().find(|(candidate, _)| *candidate == id) {
+                *count += 1;
+            } else {
+                counts.push((id, 1));
+            }
+        }
+
+        counts
+            .into_iter()
+            .max_by_key(|(_, count)| *count)
+            .map(|(id, _)| id)
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct TextParagraph {
+    paragraph_id: Option<usize>,
+    top_y: f32,
+    left_x: f32,
+    bottom_y: f32,
+    lines: Vec<TextLine>,
+}
+
+impl TextParagraph {
+    fn new(line: TextLine) -> Self {
+        Self {
+            paragraph_id: line.paragraph_id(),
+            top_y: line.top_y,
+            left_x: line.left_x,
+            bottom_y: line.bottom_y,
+            lines: vec![line],
+        }
+    }
+
+    fn can_accept(&self, line: &TextLine) -> bool {
+        self.paragraph_id.is_some() && self.paragraph_id == line.paragraph_id()
+    }
+
+    fn push(&mut self, line: TextLine) {
+        self.top_y = self.top_y.min(line.top_y);
+        self.left_x = self.left_x.min(line.left_x);
+        self.bottom_y = self.bottom_y.max(line.bottom_y);
+        self.lines.push(line);
+    }
+
+    pub(crate) fn into_positioned_paragraph(mut self, previous_bottom: f32) -> (Paragraph, f32) {
+        self.lines.sort_by(|a, b| {
+            a.baseline_y
+                .partial_cmp(&b.baseline_y)
+                .unwrap_or(Ordering::Equal)
+        });
+
+        let before = (self.top_y - previous_bottom).max(0.0);
+        let line_height = self
+            .lines
+            .iter()
+            .map(TextLine::line_height)
+            .fold(1.0, f32::max);
+
+        let mut paragraph = Paragraph::new()
+            .align(AlignmentType::Left)
+            .indent(Some(pt_to_twips_i32(self.left_x)), None, None, None)
+            .line_spacing(
+                LineSpacing::new()
+                    .before(pt_to_twips(before))
+                    .after(0)
+                    .line(pt_to_twips_i32(line_height))
+                    .line_rule(LineSpacingType::Exact),
+            );
+
+        let mut first = true;
+        for line in self.lines {
+            if first {
+                first = false;
+            } else {
+                paragraph = paragraph.add_run(Run::new().add_break(BreakType::TextWrapping));
+            }
+
+            paragraph = line.append_runs_to_paragraph(paragraph, self.left_x);
         }
 
         (paragraph, self.bottom_y)
@@ -145,6 +241,13 @@ impl NativeRun {
         }
     }
 
+    fn paragraph_id(&self) -> Option<usize> {
+        match self {
+            Self::Text(run) => run.paragraph_id,
+            Self::Formula(run) => run.paragraph_id,
+        }
+    }
+
     fn into_docx_run(self) -> Run {
         match self {
             Self::Text(run) => run.into_docx_run(),
@@ -166,6 +269,7 @@ pub(crate) struct TextRun {
     font_weight: f32,
     italic: bool,
     fill: SceneColor,
+    paragraph_id: Option<usize>,
 }
 
 impl TextRun {
@@ -202,7 +306,14 @@ pub(crate) struct FormulaRun {
     top_y: f32,
     baseline_y: f32,
     height: f32,
-    media_id: String,
+    paragraph_id: Option<usize>,
+    payload: FormulaRunPayload,
+}
+
+#[derive(Clone, Debug)]
+enum FormulaRunPayload {
+    Svg { media_id: String },
+    Omml { placeholder: String },
 }
 
 impl FormulaRun {
@@ -220,19 +331,49 @@ impl FormulaRun {
             top_y,
             baseline_y,
             height,
-            media_id,
+            paragraph_id: None,
+            payload: FormulaRunPayload::Svg { media_id },
         }
     }
 
+    pub(crate) fn new_omml(
+        x: f32,
+        width: f32,
+        top_y: f32,
+        baseline_y: f32,
+        height: f32,
+        placeholder: String,
+    ) -> Self {
+        Self {
+            x,
+            width,
+            top_y,
+            baseline_y,
+            height,
+            paragraph_id: None,
+            payload: FormulaRunPayload::Omml { placeholder },
+        }
+    }
+
+    pub(crate) fn with_paragraph_id(mut self, paragraph_id: Option<usize>) -> Self {
+        self.paragraph_id = paragraph_id;
+        self
+    }
+
     fn into_docx_run(self) -> Run {
-        let placeholder = format!("svg-placeholder-{}", self.media_id).into_bytes();
-        let pic = Pic::new_with_dimensions(placeholder, 1, 1)
-            .id(self.media_id)
-            .size(
-                pt_to_emu(self.width.max(1.0)),
-                pt_to_emu(self.height.max(1.0)),
-            );
-        Run::new().add_image(pic)
+        match self.payload {
+            FormulaRunPayload::Svg { media_id } => {
+                let placeholder = format!("svg-placeholder-{media_id}").into_bytes();
+                let pic = Pic::new_with_dimensions(placeholder, 1, 1)
+                    .id(media_id)
+                    .size(
+                        pt_to_emu(self.width.max(1.0)),
+                        pt_to_emu(self.height.max(1.0)),
+                    );
+                Run::new().add_image(pic)
+            }
+            FormulaRunPayload::Omml { placeholder } => Run::new().add_text(placeholder),
+        }
     }
 }
 
@@ -241,6 +382,7 @@ pub(crate) fn page_text_runs(
     items: &[SceneItem],
     source_index: &SourceIndex,
     math_ranges: &[MathRange],
+    paragraphs: &[SemanticParagraphRange],
     svg_fallback: bool,
     warnings: &mut Vec<String>,
 ) -> Vec<NativeRun> {
@@ -265,14 +407,25 @@ pub(crate) fn page_text_runs(
                     if !warnings.iter().any(|warning| warning == MIXED_WARNING) {
                         warnings.push(MIXED_WARNING.to_string());
                     }
-                    runs.extend(split_non_math_text_runs(text, source_index, math_ranges));
+                    runs.extend(split_non_math_text_runs(
+                        text,
+                        source_index,
+                        math_ranges,
+                        paragraphs,
+                    ));
                     continue;
                 }
                 TextMathState::NoMath => {}
             }
         }
 
-        runs.push(text_run_from_bounds(text, text.bounds, text.text.clone()));
+        runs.push(text_run_from_bounds(
+            text,
+            text.bounds,
+            text.text.clone(),
+            text_source_range(text, source_index),
+            paragraphs,
+        ));
     }
 
     runs
@@ -301,19 +454,35 @@ fn split_non_math_text_runs(
     text: &SceneText,
     source_index: &SourceIndex,
     math_ranges: &[MathRange],
+    paragraphs: &[SemanticParagraphRange],
 ) -> Vec<NativeRun> {
     let mut runs = Vec::new();
     let mut current_text = String::new();
     let mut current_bounds = None;
+    let mut current_source_range = None;
 
     for glyph in &text.glyphs {
         if source_index.glyph_math_id(glyph, math_ranges).is_some() {
-            push_pending_text_run(text, &mut runs, &mut current_text, &mut current_bounds);
+            push_pending_text_run(
+                text,
+                &mut runs,
+                &mut current_text,
+                &mut current_bounds,
+                &mut current_source_range,
+                paragraphs,
+            );
             continue;
         }
 
         let Some(piece) = source_index.glyph_source_text(glyph) else {
-            push_pending_text_run(text, &mut runs, &mut current_text, &mut current_bounds);
+            push_pending_text_run(
+                text,
+                &mut runs,
+                &mut current_text,
+                &mut current_bounds,
+                &mut current_source_range,
+                paragraphs,
+            );
             continue;
         };
 
@@ -326,9 +495,19 @@ fn split_non_math_text_runs(
             Some(bounds) => rect_union(bounds, glyph.bounds),
             None => glyph.bounds,
         });
+        if let Some(range) = source_index.glyph_source_range(glyph) {
+            current_source_range = Some(merge_ranges(current_source_range.take(), range));
+        }
     }
 
-    push_pending_text_run(text, &mut runs, &mut current_text, &mut current_bounds);
+    push_pending_text_run(
+        text,
+        &mut runs,
+        &mut current_text,
+        &mut current_bounds,
+        &mut current_source_range,
+        paragraphs,
+    );
     runs
 }
 
@@ -337,9 +516,12 @@ fn push_pending_text_run(
     runs: &mut Vec<NativeRun>,
     current_text: &mut String,
     current_bounds: &mut Option<SceneRect>,
+    current_source_range: &mut Option<Range<usize>>,
+    paragraphs: &[SemanticParagraphRange],
 ) {
     if current_text.is_empty() {
         *current_bounds = None;
+        *current_source_range = None;
         return;
     }
 
@@ -348,13 +530,26 @@ fn push_pending_text_run(
             text,
             bounds,
             std::mem::take(current_text),
+            current_source_range.take(),
+            paragraphs,
         ));
     } else {
         current_text.clear();
+        *current_source_range = None;
     }
 }
 
-fn text_run_from_bounds(text: &SceneText, bounds: SceneRect, value: String) -> NativeRun {
+fn text_run_from_bounds(
+    text: &SceneText,
+    bounds: SceneRect,
+    value: String,
+    source_range: Option<Range<usize>>,
+    paragraphs: &[SemanticParagraphRange],
+) -> NativeRun {
+    let paragraph_id = source_range
+        .as_ref()
+        .and_then(|range| SourceIndex::paragraph_id_for_source_range(range, paragraphs));
+
     NativeRun::Text(TextRun {
         x: bounds.x,
         width: bounds.width,
@@ -367,7 +562,22 @@ fn text_run_from_bounds(text: &SceneText, bounds: SceneRect, value: String) -> N
         font_weight: text.font_weight,
         italic: text.italic,
         fill: text.fill,
+        paragraph_id,
     })
+}
+
+fn text_source_range(text: &SceneText, source_index: &SourceIndex) -> Option<Range<usize>> {
+    text.glyphs
+        .iter()
+        .filter_map(|glyph| source_index.glyph_source_range(glyph))
+        .fold(None, |current, range| Some(merge_ranges(current, range)))
+}
+
+fn merge_ranges(current: Option<Range<usize>>, range: Range<usize>) -> Range<usize> {
+    match current {
+        Some(current) => current.start.min(range.start)..current.end.max(range.end),
+        None => range,
+    }
 }
 
 // MARK: Text line layout
@@ -394,6 +604,23 @@ pub(crate) fn text_lines_from_runs(mut runs: Vec<NativeRun>) -> Vec<TextLine> {
             .unwrap_or(Ordering::Equal)
     });
     lines
+}
+
+pub(crate) fn text_paragraphs_from_lines(lines: Vec<TextLine>) -> Vec<TextParagraph> {
+    let mut paragraphs: Vec<TextParagraph> = Vec::new();
+
+    for line in lines {
+        if let Some(paragraph) = paragraphs.last_mut()
+            && paragraph.can_accept(&line)
+        {
+            paragraph.push(line);
+            continue;
+        }
+
+        paragraphs.push(TextParagraph::new(line));
+    }
+
+    paragraphs
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

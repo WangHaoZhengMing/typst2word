@@ -5,7 +5,9 @@ edition = "2024"
 
 [dependencies]
 docx-rs = "0.4.20"
-typst = "0.14.2"
+roxmltree = "0.21.1"
+typst = { git = "https://github.com/typst/typst.git", branch = "main" }
+typst-html = { git = "https://github.com/typst/typst.git", branch = "main" }
 typst-preview-core = { path = "../render_typst_gpui/crates/typst-preview-core" }
-typst-svg = "0.14.2"
+typst-svg = { git = "https://github.com/typst/typst.git", branch = "main" }
 zip = "0.6.6"
