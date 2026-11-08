@@ -183,8 +183,8 @@ pub(crate) fn build_cetz_path_wsp(drawable: &CetzPathDrawableIr) -> String {
 pub(crate) fn build_cetz_label_wsp(label: &CetzLabelDrawableIr) -> String {
     let sp_id = next_drawing_id();
     // Give the label textbox generous width/height so Word never wraps single-line labels
-    let w_pt = (label.width_pt + 16.0).max(36.0);
-    let h_pt = (label.height_pt + 8.0).max(18.0);
+    let w_pt = (label.width_pt * 2.0 + 48.0).max(72.0);
+    let h_pt = (label.height_pt + 14.0).max(28.0);
     let off_x = pt_to_emu((label.x_pt - 2.0).max(0.0));
     let off_y = pt_to_emu((label.y_pt - 2.0).max(0.0));
     let cx = pt_to_emu(w_pt);
@@ -196,7 +196,19 @@ pub(crate) fn build_cetz_label_wsp(label: &CetzLabelDrawableIr) -> String {
         xfrm_attrs.push_str(&format!(r#" rot="{rot}""#));
     }
 
-    let para_xml = render_inline_nodes_as_txbx_para(&label.content, HAlignIr::Left);
+    let nobreak_content: Vec< crate::ir::InlineNode> = label
+        .content
+        .iter()
+        .map(|node| match node {
+            crate::ir::InlineNode::Text(run) => {
+                let mut r = run.clone();
+                r.text = r.text.replace(' ', "\u{00A0}");
+                crate::ir::InlineNode::Text(r)
+            }
+            other => other.clone(),
+        })
+        .collect();
+    let para_xml = render_inline_nodes_as_txbx_para(&nobreak_content, HAlignIr::Left);
 
     format!(
         concat!(

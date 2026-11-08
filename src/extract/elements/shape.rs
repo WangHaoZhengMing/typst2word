@@ -586,8 +586,8 @@ impl<'a> ExtractorContext<'a> {
                 Self::geometry_to_curve_segments(
                     &shape.geometry,
                     Point::zero(),
-                    bbox.min.x.to_pt().min(0.0),
-                    bbox.min.y.to_pt().min(0.0),
+                    bbox.min.x.to_pt(),
+                    bbox.min.y.to_pt(),
                     &mut segments,
                 );
                 ShapeKindIr::CustomPath { segments }

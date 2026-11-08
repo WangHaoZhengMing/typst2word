@@ -211,6 +211,10 @@ impl<'a> ExtractorContext<'a> {
                         }
                     }
 
+                    if shape.fill.is_none() && shape.stroke.is_none() {
+                        continue;
+                    }
+
                     let bbox = shape.geometry.bbox(None);
                     let min_x = bbox.min.x.to_pt().min(0.0);
                     let min_y = bbox.min.y.to_pt().min(0.0);
@@ -258,7 +262,10 @@ impl<'a> ExtractorContext<'a> {
                             } else {
                                 self.extract_inlines_flat(children)
                             };
-                            if !inlines.is_empty() {
+                            let has_horiz_jump = inlines
+                                .iter()
+                                .any(|n| matches!(n, InlineNode::HorizontalSpace { .. }));
+                            if !inlines.is_empty() && !has_horiz_jump {
                                 let (bx, by, bw, bh) = Self::estimate_nodes_bbox(children);
                                 let lx = offset.x.to_pt() + bx;
                                 let ly = offset.y.to_pt() + by;
@@ -270,8 +277,8 @@ impl<'a> ExtractorContext<'a> {
                                     rotation_deg: next_rot,
                                     content: inlines,
                                 });
+                                continue;
                             }
-                            continue;
                         }
                     }
 
@@ -289,7 +296,10 @@ impl<'a> ExtractorContext<'a> {
                     // Check if this group is a placed label group (contains text/equations and NO CeTZ curves).
                     if !Self::contains_cetz_shapes_recursive(children) {
                         let inlines = self.extract_inlines_flat(children);
-                        if !inlines.is_empty() {
+                        let has_horiz_jump = inlines
+                            .iter()
+                            .any(|n| matches!(n, InlineNode::HorizontalSpace { .. }));
+                        if !inlines.is_empty() && !has_horiz_jump {
                             let gsize = group.frame.size();
                             labels.push(CetzLabelDrawableIr {
                                 x_pt: abs_pos.x.to_pt(),
@@ -314,13 +324,14 @@ impl<'a> ExtractorContext<'a> {
                 }
                 TreeNode::Text { text, pos } => {
                     let abs_pos = offset + *pos;
-                    let run = Self::text_item_to_run(text, &ActiveInlineState::default());
-                    if !run.text.trim().is_empty() {
+                    let mut run = Self::text_item_to_run(text, &ActiveInlineState::default());
+                    run.text = run.text.trim().to_string();
+                    if !run.text.is_empty() {
                         labels.push(CetzLabelDrawableIr {
                             x_pt: abs_pos.x.to_pt(),
-                            y_pt: (abs_pos.y - text.size).to_pt().max(0.0),
-                            width_pt: text.width().to_pt().max(16.0),
-                            height_pt: (text.size.to_pt() * 1.3).max(12.0),
+                            y_pt: (abs_pos.y - text.size * 0.75).to_pt().max(0.0),
+                            width_pt: text.width().to_pt().max(18.0),
+                            height_pt: (text.size.to_pt() * 1.3).max(14.0),
                             rotation_deg,
                             content: vec![InlineNode::Text(run)],
                         });

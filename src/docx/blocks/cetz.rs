@@ -9,7 +9,7 @@ impl<'a> DocxBuilder<'a> {
         let run_xml = cetz_canvas_to_drawingml_run(canvas);
         out.push_str("<w:p><w:pPr>");
         Self::render_jc(canvas.align, out);
-        out.push_str("<w:spacing w:before=\"120\" w:after=\"120\"/></w:pPr>");
+        out.push_str("<w:spacing w:before=\"120\" w:after=\"40\"/></w:pPr>");
         out.push_str(&run_xml);
         out.push_str("</w:p>");
     }
