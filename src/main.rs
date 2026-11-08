@@ -1,124 +1,112 @@
-mod docx_pack;
-mod hybrid;
-
 use std::env;
-use std::error::Error;
-use std::ffi::OsString;
 use std::path::PathBuf;
+use std::process::ExitCode;
 
-use typst_preview_core::DocumentInput;
-
-use crate::hybrid::ConvertOptions;
-
-fn main() {
-    if let Err(error) = run() {
-        eprintln!("error: {error}");
-        std::process::exit(1);
-    }
-}
-
-fn run() -> Result<(), Box<dyn Error>> {
-    let args = Args::parse(env::args_os().skip(1).collect())?;
-    if args.help {
-        print_usage();
-        return Ok(());
-    }
-
-    let input = DocumentInput::from_env();
-    let output = args.output.unwrap_or_else(|| default_output_path(&input));
-    let report = hybrid::convert_to_docx(
-        &input,
-        &output,
-        ConvertOptions {
-            svg_fallback: args.svg_fallback,
-        },
-    )?;
-
-    eprintln!(
-        "wrote {} ({} Typst page(s), {} Word section(s), {} native text line(s), {} native OMML formula(s), {} formula SVG image(s), {} MathML formula item(s), {} SVG fallback item(s))",
-        output.display(),
-        report.pages,
-        report.word_sections,
-        report.native_text_lines,
-        report.formula_omml_items,
-        report.formula_svg_images,
-        report.formula_mathml_items,
-        report.svg_fallback_items
-    );
-
-    for warning in report.warnings {
-        eprintln!("warning: {warning}");
-    }
-
-    Ok(())
-}
-
-#[derive(Debug)]
-struct Args {
-    output: Option<PathBuf>,
-    svg_fallback: bool,
-    help: bool,
-}
-
-impl Args {
-    fn parse(raw: Vec<OsString>) -> Result<Self, Box<dyn Error>> {
-        if raw.iter().any(|arg| arg == "--help" || arg == "-h") {
-            return Ok(Self {
-                output: None,
-                svg_fallback: true,
-                help: true,
-            });
-        }
-
-        if raw.is_empty() {
-            return Err("missing input .typ path; run with --help for usage".into());
-        }
-
-        if raw[0].to_string_lossy().starts_with('-') {
-            return Err("the input .typ path must be the first argument".into());
-        }
-
-        let mut output = None;
-        let mut svg_fallback = true;
-        let mut index = 1;
-
-        while index < raw.len() {
-            match raw[index].to_string_lossy().as_ref() {
-                "-o" | "--output" => {
-                    index += 1;
-                    let Some(path) = raw.get(index) else {
-                        return Err("missing path after -o/--output".into());
-                    };
-                    output = Some(PathBuf::from(path));
-                }
-                "--no-svg-fallback" => svg_fallback = false,
-                other => return Err(format!("unrecognized argument: {other}").into()),
-            }
-
-            index += 1;
-        }
-
-        Ok(Self {
-            output,
-            svg_fallback,
-            help: false,
-        })
-    }
-}
-
-fn default_output_path(input: &DocumentInput) -> PathBuf {
-    let main_path = input.editor_main_path();
-    if main_path.file_name().and_then(|name| name.to_str()) == Some("__preview__.typ") {
-        return PathBuf::from("typst-output.docx");
-    }
-
-    main_path.with_extension("docx")
-}
+use typst2word::convert_typst_file_to_docx;
 
 fn print_usage() {
     eprintln!(
-        "usage: typst2word <input.typ> [-o output.docx] [--no-svg-fallback]\n\
+        "Usage: typst2word <input.typ> [output.docx] [--dump-ir <ir.json>]\n\
          \n\
-         Converts Typst into a hybrid DOCX: native editable text plus SVG formulas and page fallbacks for other non-text content."
+         Converts a Typst document (.typ) into Microsoft Word (.docx) while\n\
+         preserving both visual layout and semantic structure (headings, lists,\n\
+         tables, native DrawingML shapes, OMML formulas, CeTZ vector graphics,\n\
+         and explicit placeholders for unsupported elements)."
     );
+}
+
+fn main() -> ExitCode {
+    let args: Vec<String> = env::args().skip(1).collect();
+    if args.is_empty() || args.iter().any(|a| a == "-h" || a == "--help") {
+        print_usage();
+        return ExitCode::SUCCESS;
+    }
+
+    let mut input_path: Option<PathBuf> = None;
+    let mut output_path: Option<PathBuf> = None;
+    let mut dump_ir_path: Option<PathBuf> = None;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--dump-ir" => {
+                if i + 1 < args.len() {
+                    dump_ir_path = Some(PathBuf::from(&args[i + 1]));
+                    i += 2;
+                } else {
+                    eprintln!("Error: --dump-ir requires a file path");
+                    return ExitCode::FAILURE;
+                }
+            }
+            arg if arg.starts_with('-') => {
+                eprintln!("Unknown option: {arg}");
+                print_usage();
+                return ExitCode::FAILURE;
+            }
+            arg => {
+                if input_path.is_none() {
+                    input_path = Some(PathBuf::from(arg));
+                } else if output_path.is_none() {
+                    output_path = Some(PathBuf::from(arg));
+                } else {
+                    eprintln!("Unexpected positional argument: {arg}");
+                    print_usage();
+                    return ExitCode::FAILURE;
+                }
+                i += 1;
+            }
+        }
+    }
+
+    let Some(input) = input_path else {
+        print_usage();
+        return ExitCode::FAILURE;
+    };
+
+    let output = output_path.unwrap_or_else(|| input.with_extension("docx"));
+
+    match convert_typst_file_to_docx(&input, &output) {
+        Ok(ir) => {
+            if let Some(ir_path) = dump_ir_path {
+                match serde_json::to_string_pretty(&ir) {
+                    Ok(json) => {
+                        if let Err(e) = std::fs::write(&ir_path, json) {
+                            eprintln!("Warning: failed to write IR JSON to {}: {e}", ir_path.display());
+                        }
+                    }
+                    Err(e) => eprintln!("Warning: failed to serialize IR JSON: {e}"),
+                }
+            }
+
+            let r = &ir.report;
+            println!(
+                "Converted {} -> {}\n  Pages: {}, Headings: {}, Paragraphs: {}, Lists: {}, Tables: {}\n  Equations (OMML): {}, Shapes (DrawingML): {}, CeTZ Canvases: {}, Images: {}\n  Quotes: {}, Code Blocks: {}, Figures: {}, Footnotes: {}, Links: {}, Unsupported: {}",
+                input.display(),
+                output.display(),
+                r.pages_count,
+                r.headings_count,
+                r.paragraphs_count,
+                r.lists_count,
+                r.tables_count,
+                r.equations_count,
+                r.shapes_count,
+                r.cetz_canvases_count,
+                r.images_count,
+                r.quotes_count,
+                r.code_blocks_count,
+                r.figures_count,
+                r.footnotes_count,
+                r.links_count,
+                r.unsupported_elements.len()
+            );
+            for unsup in &r.unsupported_elements {
+                println!("  ! {}", unsup.display_badge());
+            }
+            ExitCode::SUCCESS
+        }
+        Err(err) => {
+            eprintln!("Conversion failed: {err}");
+            ExitCode::FAILURE
+        }
+    }
 }
