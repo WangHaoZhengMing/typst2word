@@ -16,7 +16,20 @@ impl<'a> DocxBuilder<'a> {
         out: &mut String,
     ) {
         out.push_str("<w:p><w:pPr>");
-        Self::render_jc(style.align, out);
+        let has_right_tab = Self::has_large_horizontal_space(content);
+        let eff_align = if has_right_tab && style.align == crate::ir::HAlignIr::Justify {
+            crate::ir::HAlignIr::Left
+        } else {
+            style.align
+        };
+        Self::render_jc(eff_align, out);
+        if has_right_tab {
+            let _ = write!(
+                out,
+                r#"<w:tabs><w:tab w:val="right" w:pos="{}"/></w:tabs>"#,
+                self.content_width_dxa()
+            );
+        }
         let before_dxa = pt_to_dxa(style.space_before_pt).max(0);
         let after_dxa = pt_to_dxa(style.space_after_pt).max(0);
         let base_font_pt = content

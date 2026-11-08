@@ -71,9 +71,13 @@ impl<'a> DocxBuilder<'a> {
                 out.push_str("<w:r><w:tab/></w:r>");
             }
             InlineNode::HorizontalSpace { width_pt } => {
-                let spaces = ((width_pt / 3.5).round() as usize).clamp(1, 8);
-                let s = " ".repeat(spaces);
-                let _ = write!(out, r#"<w:r><w:t xml:space="preserve">{s}</w:t></w:r>"#);
+                if *width_pt >= 36.0 {
+                    out.push_str("<w:r><w:tab/></w:r>");
+                } else {
+                    let spaces = ((width_pt / 3.5).round() as usize).clamp(1, 8);
+                    let s = " ".repeat(spaces);
+                    let _ = write!(out, r#"<w:r><w:t xml:space="preserve">{s}</w:t></w:r>"#);
+                }
             }
             InlineNode::UnsupportedInline(unsup) => {
                 self.render_unsupported_inline(unsup, out);

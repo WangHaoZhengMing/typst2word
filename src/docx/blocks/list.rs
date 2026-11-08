@@ -31,7 +31,7 @@ impl<'a> DocxBuilder<'a> {
         }
     }
 
-    /// `BlockNode::Enum` -> decimal-numbered paragraphs (`numId` 2).
+    /// `BlockNode::Enum` -> decimal-numbered paragraphs (`numId` allocated per list).
     pub(crate) fn render_enum(
         &mut self,
         items: &[EnumItemIr],
@@ -40,6 +40,8 @@ impl<'a> DocxBuilder<'a> {
         out: &mut String,
     ) {
         let ilvl = (level).min(8);
+        let start_val = items.first().and_then(|it| it.number).unwrap_or(1);
+        let num_id = self.alloc_enum_num_id(ilvl, start_val);
         let num_items = items.len();
         for (idx, item) in items.iter().enumerate() {
             let is_last_top = level == 0 && idx + 1 == num_items;
@@ -50,7 +52,7 @@ impl<'a> DocxBuilder<'a> {
             };
             self.render_list_or_enum_item_blocks(
                 &item.blocks,
-                2, // numId 2 = decimal ordered list
+                num_id,
                 ilvl,
                 custom_prefix,
                 tight,
@@ -144,11 +146,19 @@ impl<'a> DocxBuilder<'a> {
                 BlockNode::Paragraph {
                     content, bookmark, ..
                 } if idx == 0 => {
+                    let right_tab_xml = if Self::has_large_horizontal_space(content) {
+                        format!(
+                            r#"<w:tabs><w:tab w:val="right" w:pos="{}"/></w:tabs>"#,
+                            self.content_width_dxa()
+                        )
+                    } else {
+                        String::new()
+                    };
                     out.push_str("<w:p><w:pPr>");
                     if let Some(prefix) = custom_prefix {
                         let _ = write!(
                             out,
-                            r#"<w:spacing w:before="0" w:after="{after_dxa}" w:line="242" w:lineRule="auto"/><w:ind w:left="{indent_left}" w:hanging="260"/></w:pPr>"#
+                            r#"<w:spacing w:before="0" w:after="{after_dxa}" w:line="242" w:lineRule="auto"/><w:ind w:left="{indent_left}" w:hanging="260"/>{right_tab_xml}</w:pPr>"#
                         );
                         let bm_id = bookmark
                             .as_ref()
@@ -166,7 +176,7 @@ impl<'a> DocxBuilder<'a> {
                     } else {
                         let _ = write!(
                             out,
-                            r#"<w:numPr><w:ilvl w:val="{ilvl}"/><w:numId w:val="{num_id}"/></w:numPr><w:spacing w:before="0" w:after="{after_dxa}" w:line="242" w:lineRule="auto"/></w:pPr>"#
+                            r#"<w:numPr><w:ilvl w:val="{ilvl}"/><w:numId w:val="{num_id}"/></w:numPr><w:spacing w:before="0" w:after="{after_dxa}" w:line="242" w:lineRule="auto"/>{right_tab_xml}</w:pPr>"#
                         );
                         let bm_id = bookmark
                             .as_ref()

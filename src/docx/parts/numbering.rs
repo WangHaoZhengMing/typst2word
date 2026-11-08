@@ -22,7 +22,7 @@ impl<'a> DocxBuilder<'a> {
         }
         out.push_str("</w:abstractNum><w:abstractNum w:abstractNumId=\"1\">");
         for lvl in 0..9 {
-            let left = (lvl + 1) * 300;
+            let left = (lvl + 1) * 380;
             let fmt = match lvl % 3 {
                 0 => "decimal",
                 1 => "lowerLetter",
@@ -31,15 +31,24 @@ impl<'a> DocxBuilder<'a> {
             let lvl_txt = format!("%{}.", lvl + 1);
             let _ = write!(
                 out,
-                r#"<w:lvl w:ilvl="{lvl}"><w:start w:val="1"/><w:numFmt w:val="{fmt}"/><w:lvlText w:val="{lvl_txt}"/><w:lvlJc w:val="left"/><w:pPr><w:ind w:left="{left}" w:hanging="300"/></w:pPr></w:lvl>"#
+                r#"<w:lvl w:ilvl="{lvl}"><w:start w:val="1"/><w:numFmt w:val="{fmt}"/><w:lvlText w:val="{lvl_txt}"/><w:lvlJc w:val="left"/><w:pPr><w:ind w:left="{left}" w:hanging="380"/></w:pPr></w:lvl>"#
             );
         }
         out.push_str(
             r#"</w:abstractNum>
-  <w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>
-  <w:num w:numId="2"><w:abstractNumId w:val="1"/></w:num>
-</w:numbering>"#,
+  <w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>"#,
         );
+        if self.enum_instances.is_empty() {
+            out.push_str(r#"<w:num w:numId="2"><w:abstractNumId w:val="1"/></w:num>"#);
+        } else {
+            for &(num_id, ilvl, start_val) in &self.enum_instances {
+                let _ = write!(
+                    out,
+                    r#"<w:num w:numId="{num_id}"><w:abstractNumId w:val="1"/><w:lvlOverride w:ilvl="{ilvl}"><w:startOverride w:val="{start_val}"/></w:lvlOverride></w:num>"#
+                );
+            }
+        }
+        out.push_str("</w:numbering>");
         out
     }
 }

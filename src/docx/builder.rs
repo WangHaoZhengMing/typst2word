@@ -3,7 +3,8 @@
 
 use std::fmt::Write as _;
 
-use crate::ir::{BlockNode, DocumentIr, HAlignIr, ImageFormatIr, ImageIr};
+use crate::ir::{BlockNode, DocumentIr, HAlignIr, ImageFormatIr, ImageIr, InlineNode};
+use crate::units::pt_to_dxa;
 
 pub(crate) struct MediaAsset {
     pub(crate) rel_id: String,
@@ -31,6 +32,8 @@ pub(crate) struct DocxBuilder<'a> {
     pub(crate) media_assets: Vec<MediaAsset>,
     pub(crate) hyperlinks: Vec<HyperlinkRel>,
     pub(crate) footnotes: Vec<FootnoteRecord>,
+    pub(crate) enum_instances: Vec<(usize, usize, u64)>,
+    pub(crate) next_enum_num_id: usize,
     pub(crate) header_rel_id: Option<String>,
     pub(crate) footer_rel_id: Option<String>,
 }
@@ -46,9 +49,30 @@ impl<'a> DocxBuilder<'a> {
             media_assets: Vec::new(),
             hyperlinks: Vec::new(),
             footnotes: Vec::new(),
+            enum_instances: Vec::new(),
+            next_enum_num_id: 2,
             header_rel_id: None,
             footer_rel_id: None,
         }
+    }
+
+    pub(crate) fn alloc_enum_num_id(&mut self, ilvl: usize, start_val: u64) -> usize {
+        let num_id = self.next_enum_num_id;
+        self.next_enum_num_id += 1;
+        self.enum_instances.push((num_id, ilvl, start_val));
+        num_id
+    }
+
+    pub(crate) fn content_width_dxa(&self) -> i64 {
+        let ps = &self.ir.page_setup;
+        let w_pt = (ps.width_pt - ps.margin_left_pt - ps.margin_right_pt).max(200.0);
+        pt_to_dxa(w_pt)
+    }
+
+    pub(crate) fn has_large_horizontal_space(inlines: &[InlineNode]) -> bool {
+        inlines.iter().any(
+            |inl| matches!(inl, InlineNode::HorizontalSpace { width_pt } if *width_pt >= 36.0),
+        )
     }
 
     pub(crate) fn alloc_rel_id(&mut self) -> String {
