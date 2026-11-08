@@ -8,21 +8,38 @@ use crate::ir::{StrokeIr, TextRunIr};
 impl<'a> DocxBuilder<'a> {
     pub(crate) fn render_code_block(
         &self,
-        _lang: Option<&str>,
+        lang: Option<&str>,
         lines: &[Vec<TextRunIr>],
         fill: Option<&str>,
         stroke: Option<&StrokeIr>,
         out: &mut String,
     ) {
+        self.render_code_block_indented(lang, lines, fill, stroke, 0, out);
+    }
+
+    pub(crate) fn render_code_block_indented(
+        &self,
+        _lang: Option<&str>,
+        lines: &[Vec<TextRunIr>],
+        fill: Option<&str>,
+        stroke: Option<&StrokeIr>,
+        left_indent_dxa: usize,
+        out: &mut String,
+    ) {
         if fill.is_none() && stroke.is_none() {
             // Standard unboxed Typst `raw(block: true)`: render lines directly with exact syntax colors.
             let num_lines = lines.len();
+            let ind_xml = if left_indent_dxa > 0 {
+                format!(r#"<w:ind w:left="{left_indent_dxa}"/>"#)
+            } else {
+                String::new()
+            };
             for (idx, line_runs) in lines.iter().enumerate() {
-                let before = if idx == 0 { 120 } else { 0 };
-                let after = if idx + 1 == num_lines { 180 } else { 20 };
+                let before = if idx == 0 { 40 } else { 0 };
+                let after = if idx + 1 == num_lines { 60 } else { 0 };
                 let _ = write!(
                     out,
-                    r#"<w:p><w:pPr><w:spacing w:before="{before}" w:after="{after}" w:line="240" w:lineRule="auto"/></w:pPr>"#,
+                    r#"<w:p><w:pPr><w:spacing w:before="{before}" w:after="{after}" w:line="220" w:lineRule="auto"/>{ind_xml}</w:pPr>"#,
                 );
                 for run in line_runs {
                     let mut code_run = run.clone();

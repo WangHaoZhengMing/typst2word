@@ -443,6 +443,28 @@ impl<'a> ExtractorContext<'a> {
         }
 
         let size = group.frame.size();
+        let corner_radius_pt = bg_shapes.iter().find_map(|(_, s, _)| {
+            if let Geometry::Curve(curve) = &s.geometry
+                && let Some(CurveItem::Move(p)) = curve.0.first()
+            {
+                let rx = p.x.to_pt();
+                let ry = p.y.to_pt();
+                if rx > 0.5 && ry.abs() < 0.5 && rx <= size.x.to_pt() * 0.5 {
+                    return Some(rx);
+                } else if ry > 0.5 && rx.abs() < 0.5 && ry <= size.y.to_pt() * 0.5 {
+                    return Some(ry);
+                }
+            }
+            None
+        });
+        let mut line_starts = Vec::new();
+        Self::collect_line_left_edges(&content_nodes, Point::zero(), &mut line_starts);
+        let inferred_pad = line_starts
+            .first()
+            .map(|(_, lx)| lx.clamp(4.0, 24.0))
+            .unwrap_or(8.0);
+        let v_pad = (inferred_pad * 0.65).clamp(4.0, 12.0);
+
         self.report.shapes_count += 1;
         Some(BlockNode::ShapeBlock(ShapeIr {
             kind: ShapeKindIr::Rect,
@@ -452,12 +474,12 @@ impl<'a> ExtractorContext<'a> {
             fill_rule_even_odd: false,
             stroke: stroke.clone(),
             borders: BordersIr::splat(stroke),
-            corner_radius_pt: None,
+            corner_radius_pt,
             inset: SidesPtIr {
-                top: 6.0,
-                bottom: 6.0,
-                left: 8.0,
-                right: 8.0,
+                top: v_pad,
+                bottom: v_pad,
+                left: inferred_pad,
+                right: inferred_pad,
             },
             rotation_deg: 0.0,
             scale_x: 1.0,

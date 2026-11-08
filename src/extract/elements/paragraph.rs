@@ -58,26 +58,28 @@ impl<'a> ExtractorContext<'a> {
             .unwrap_or(default_font_pt)
             .max(6.0);
 
-        let leading_pt = Self::resolve_length_pt(par.leading.get(chain), base_font_pt);
-        let spacing_pt = Self::resolve_length_pt(par.spacing.get(chain), base_font_pt);
-        // Word's single line box already includes ~0.55em of internal vertical leading,
-        // so subtract 0.55em from Typst's 1em-box-to-1em-box `par.spacing` to match visually.
-        let space_after_pt = (spacing_pt - 0.55 * base_font_pt).max(2.0);
+        let leading_pt = Self::resolve_length_pt(par.leading.get(chain), default_font_pt);
+        let spacing_pt = Self::resolve_length_pt(par.spacing.get(chain), default_font_pt);
+        // Word's line spacing (`w:line`) already includes `par.leading` on every line of the
+        // paragraph, so the additional paragraph-after gap needed to match Typst's inter-paragraph
+        // distance (`1em + par.spacing`) is `par.spacing - par.leading`.
+        let space_after_pt = (spacing_pt - leading_pt).max(1.5);
 
         let mut first_line_indent_pt =
             Self::resolve_length_pt(par.first_line_indent.get(chain).amount(), base_font_pt);
         let mut hanging_indent_pt =
             Self::resolve_length_pt(par.hanging_indent.get(chain), base_font_pt);
 
-        let align = if par.justify.get(chain) {
+        let inferred = self.infer_node_halign(children).unwrap_or(inherited_align);
+        let base_align = if inferred == HAlignIr::Left && inherited_align != HAlignIr::Left {
+            inherited_align
+        } else {
+            inferred
+        };
+        let align = if base_align == HAlignIr::Left && par.justify.get(chain) {
             HAlignIr::Justify
         } else {
-            let inferred = self.infer_node_halign(children).unwrap_or(inherited_align);
-            if inferred == HAlignIr::Left && inherited_align != HAlignIr::Left {
-                inherited_align
-            } else {
-                inferred
-            }
+            base_align
         };
 
         if matches!(align, HAlignIr::Left | HAlignIr::Justify)

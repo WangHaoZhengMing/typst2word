@@ -14,8 +14,10 @@ impl<'a> ExtractorContext<'a> {
     pub(crate) fn text_item_to_run(item: &TextItem, state: &ActiveInlineState) -> TextRunIr {
         let info = item.font.info();
         let family_lower = info.family.to_lowercase();
-        let bold =
-            state.bold || info.variant.weight >= FontWeight::BOLD || family_lower.contains("bold");
+        let bold = state.bold
+            || info.variant.weight >= FontWeight::BOLD
+            || family_lower.contains("bold")
+            || item.stroke.is_some();
         let italic = state.italic
             || matches!(
                 info.variant.style,

@@ -102,6 +102,12 @@ impl<'a> ExtractorContext<'a> {
         blocks: &mut Vec<BlockNode>,
         align: HAlignIr,
     ) {
+        let inferred_align = self.infer_node_halign(stray).unwrap_or(align);
+        let eff_align = if inferred_align == HAlignIr::Left && align != HAlignIr::Left {
+            align
+        } else {
+            inferred_align
+        };
         let mut inlines = Vec::new();
         let mut state = ActiveInlineState::default();
         let mut last_y: Option<f64> = None;
@@ -119,7 +125,8 @@ impl<'a> ExtractorContext<'a> {
             blocks.push(BlockNode::Paragraph {
                 content: inlines,
                 style: ParagraphStyleIr {
-                    align,
+                    align: eff_align,
+                    space_after_pt: 2.0,
                     ..Default::default()
                 },
                 bookmark: None,
@@ -465,7 +472,17 @@ impl<'a> ExtractorContext<'a> {
             return;
         }
 
-        // 20. Generic container fallback (recurse into children).
+        // 20. Explicit `AlignElem` container: propagate its horizontal alignment to children.
+        if let Some(al) = elem.to_packed::<typst::layout::AlignElem>() {
+            let (ha, _) = Self::alignment_to_ir(typst::foundations::Smart::Custom(
+                al.alignment.get(StyleChain::default()),
+            ));
+            let child_blocks = self.extract_blocks_from_nodes(children, list_level, ha);
+            blocks.extend(child_blocks);
+            return;
+        }
+
+        // 21. Generic container fallback (recurse into children).
         let child_blocks = self.extract_blocks_from_nodes(children, list_level, inherited_align);
         blocks.extend(child_blocks);
     }

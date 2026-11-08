@@ -125,18 +125,26 @@ impl<'a> DocxBuilder<'a> {
             .iter()
             .skip(1)
             .any(|b| matches!(b, BlockNode::List { .. } | BlockNode::Enum { .. }));
-        let after_dxa = if is_last_top && !has_nested_list {
-            110
+        let followed_by_grid_table = matches!(
+            blocks.get(1),
+            Some(BlockNode::Table(t)) if !t.is_semantic_table
+        );
+        let after_dxa = if followed_by_grid_table {
+            0
+        } else if blocks.len() > 1 {
+            15
+        } else if is_last_top && !has_nested_list {
+            80
         } else if tight {
             10
         } else {
-            100
+            40
         };
-        let indent_left = 260 * (ilvl + 1);
+        let indent_left = 380 * (ilvl + 1);
         if blocks.is_empty() {
             let _ = write!(
                 out,
-                r#"<w:p><w:pPr><w:numPr><w:ilvl w:val="{ilvl}"/><w:numId w:val="{num_id}"/></w:numPr><w:spacing w:before="0" w:after="{after_dxa}" w:line="242" w:lineRule="auto"/></w:pPr></w:p>"#
+                r#"<w:p><w:pPr><w:numPr><w:ilvl w:val="{ilvl}"/><w:numId w:val="{num_id}"/></w:numPr><w:spacing w:before="0" w:after="{after_dxa}" w:line="240" w:lineRule="auto"/></w:pPr></w:p>"#
             );
             return;
         }
@@ -158,7 +166,7 @@ impl<'a> DocxBuilder<'a> {
                     if let Some(prefix) = custom_prefix {
                         let _ = write!(
                             out,
-                            r#"<w:spacing w:before="0" w:after="{after_dxa}" w:line="242" w:lineRule="auto"/><w:ind w:left="{indent_left}" w:hanging="260"/>{right_tab_xml}</w:pPr>"#
+                            r#"<w:spacing w:before="0" w:after="{after_dxa}" w:line="240" w:lineRule="auto"/><w:ind w:left="{indent_left}" w:hanging="380"/>{right_tab_xml}</w:pPr>"#
                         );
                         let bm_id = bookmark
                             .as_ref()
@@ -176,7 +184,7 @@ impl<'a> DocxBuilder<'a> {
                     } else {
                         let _ = write!(
                             out,
-                            r#"<w:numPr><w:ilvl w:val="{ilvl}"/><w:numId w:val="{num_id}"/></w:numPr><w:spacing w:before="0" w:after="{after_dxa}" w:line="242" w:lineRule="auto"/>{right_tab_xml}</w:pPr>"#
+                            r#"<w:numPr><w:ilvl w:val="{ilvl}"/><w:numId w:val="{num_id}"/></w:numPr><w:spacing w:before="0" w:after="{after_dxa}" w:line="240" w:lineRule="auto"/>{right_tab_xml}</w:pPr>"#
                         );
                         let bm_id = bookmark
                             .as_ref()
@@ -187,6 +195,35 @@ impl<'a> DocxBuilder<'a> {
                         }
                         out.push_str("</w:p>");
                     }
+                }
+                BlockNode::Paragraph {
+                    content,
+                    style,
+                    bookmark,
+                } => {
+                    let mut cont_style = style.clone();
+                    if cont_style.left_indent_pt < 1.0 {
+                        cont_style.left_indent_pt = 19.0 * (ilvl + 1) as f64;
+                    }
+                    self.render_paragraph(content, &cont_style, bookmark.as_deref(), out);
+                }
+                BlockNode::CodeBlock {
+                    lang,
+                    lines,
+                    fill,
+                    stroke,
+                } => {
+                    self.render_code_block_indented(
+                        lang.as_deref(),
+                        lines,
+                        fill.as_deref(),
+                        stroke.as_ref(),
+                        indent_left,
+                        out,
+                    );
+                }
+                BlockNode::ShapeBlock(shape) => {
+                    self.render_shape_block_indented(shape, indent_left, out);
                 }
                 other => {
                     self.render_block(other, out);

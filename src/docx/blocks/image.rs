@@ -8,7 +8,7 @@ impl<'a> DocxBuilder<'a> {
     pub(crate) fn render_image_block(&mut self, img: &ImageIr, out: &mut String) {
         out.push_str("<w:p><w:pPr>");
         Self::render_jc(img.align, out);
-        out.push_str("<w:spacing w:before=\"120\" w:after=\"120\"/></w:pPr>");
+        out.push_str("<w:spacing w:before=\"40\" w:after=\"20\"/></w:pPr>");
         self.render_image_run(img, out);
         out.push_str("</w:p>");
     }

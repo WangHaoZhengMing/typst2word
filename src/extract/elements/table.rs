@@ -471,8 +471,8 @@ impl<'a> ExtractorContext<'a> {
             let inset_cfg = gc.inset.get(StyleChain::default());
             let inset = if matches!(inset_cfg, Smart::Auto) {
                 SidesPtIr {
-                    top: 1.0,
-                    bottom: 1.0,
+                    top: 0.0,
+                    bottom: 0.0,
                     left: 0.0,
                     right: 2.0,
                 }
@@ -486,8 +486,8 @@ impl<'a> ExtractorContext<'a> {
                     SidesPtIr::default()
                 } else {
                     SidesPtIr {
-                        top: 1.0,
-                        bottom: 1.0,
+                        top: 0.0,
+                        bottom: 0.0,
                         left: 0.0,
                         right: 2.0,
                     }

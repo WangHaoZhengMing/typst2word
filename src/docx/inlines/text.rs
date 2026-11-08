@@ -18,8 +18,17 @@ impl<'a> DocxBuilder<'a> {
                 out.push_str(
                     r#"<w:rFonts w:ascii="Menlo" w:hAnsi="Menlo" w:eastAsia="Heiti SC" w:cs="Consolas"/>"#,
                 );
+            } else if fam == "New Computer Modern" {
+                out.push_str(
+                    r#"<w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="Songti SC" w:cs="Times New Roman"/>"#,
+                );
+            } else if fam == "Songti SC" || fam == "Kaiti SC" || fam == "Heiti SC" {
+                let _ = write!(
+                    out,
+                    r#"<w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="{esc}" w:cs="Times New Roman"/>"#
+                );
             } else {
-                let ea_esc = if fam == "Libertinus Serif" || fam == "New Computer Modern" {
+                let ea_esc = if fam == "Libertinus Serif" {
                     "Heiti SC".to_string()
                 } else {
                     esc.clone()

@@ -31,8 +31,27 @@ impl<'a> DocxBuilder<'a> {
         out: &mut String,
     ) {
         let style_id = format!("Heading{}", (level).clamp(1, 6));
+        let default_sz = match level {
+            1 => 15.4,
+            2 => 13.2,
+            _ => 11.0,
+        };
+        let sz_pt = content
+            .iter()
+            .find_map(|inl| {
+                if let InlineNode::Text(r) = inl {
+                    r.font_size_pt
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(default_sz);
+
         out.push_str("<w:p><w:pPr>");
         let _ = write!(out, r#"<w:pStyle w:val="{style_id}"/>"#);
+        if level >= 2 && sz_pt <= 12.5 {
+            out.push_str(r#"<w:spacing w:before="60" w:after="40" w:line="240" w:lineRule="auto"/>"#);
+        }
         if align != HAlignIr::Left {
             Self::render_jc(align, out);
         }
@@ -40,21 +59,6 @@ impl<'a> DocxBuilder<'a> {
 
         let bm_id = bookmark.map(|bm| self.emit_bookmark_start(bm, out));
         if let Some(num_prefix) = numbering {
-            let default_sz = match level {
-                1 => 15.4,
-                2 => 13.2,
-                _ => 11.0,
-            };
-            let sz_pt = content
-                .iter()
-                .find_map(|inl| {
-                    if let InlineNode::Text(r) = inl {
-                        r.font_size_pt
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or(default_sz);
             let prefix_run = TextRunIr {
                 text: format!("{num_prefix} "),
                 font_family: Some("Libertinus Serif".to_string()),

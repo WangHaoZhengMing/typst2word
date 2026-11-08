@@ -33,7 +33,7 @@ impl<'a> DocxBuilder<'a> {
         out: &mut String,
     ) {
         out.push_str(
-            r#"<w:p><w:pPr><w:pStyle w:val="Caption"/><w:jc w:val="center"/><w:spacing w:before="60" w:after="140"/></w:pPr>"#,
+            r#"<w:p><w:pPr><w:pStyle w:val="Caption"/><w:jc w:val="center"/><w:spacing w:before="20" w:after="60"/></w:pPr>"#,
         );
         let bm_id = bookmark.map(|bm| self.emit_bookmark_start(bm, out));
         self.render_inlines(caption, out);
