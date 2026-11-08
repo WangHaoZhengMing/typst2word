@@ -175,6 +175,17 @@ def main() -> int:
         action="store_true",
         help="Do not dump the intermediate representation JSON when converting",
     )
+    parser.add_argument(
+        "--coords-only",
+        action="store_true",
+        help="Only generate PDFs and exact coordinate diff (layout_diff.txt), skipping overlay PNG rendering",
+    )
+    parser.add_argument(
+        "--max-pages",
+        type=int,
+        default=0,
+        help="Limit coordinate diff report to the first N pages (0 = all pages)",
+    )
     args = parser.parse_args()
 
     script_dir = Path(__file__).resolve().parent
@@ -186,13 +197,14 @@ def main() -> int:
     docx_path = args.docx.resolve() if args.docx else (out_dir / f"{input_typ.stem}.docx")
     word_pdf_path = out_dir / f"{input_typ.stem}.word.pdf"
     orig_pdf_path = out_dir / f"{input_typ.stem}.orig.pdf"
+    layout_diff_path = out_dir / "layout_diff.txt"
     ir_path = None if args.no_ir else (args.ir.resolve() if args.ir else out_dir / f"{input_typ.stem}.ir.json")
 
     env = os.environ.copy()
     env["RAYON_NUM_THREADS"] = "2"
 
     if not args.skip_build and args.docx is None:
-        print(f"[1/4] Converting {input_typ.name} -> {docx_path.name} (CPU threads = 2)...")
+        print(f"[1/5] Converting {input_typ.name} -> {docx_path.name} (CPU threads = 2)...")
         convert_cmd = [
             "cargo",
             "run",
@@ -216,58 +228,79 @@ def main() -> int:
         if sibling_docx.exists() and sibling_docx.resolve() != docx_path.resolve():
             shutil.copy2(docx_path, sibling_docx)
 
-    print(f"[2/4] Exporting {docx_path.name} -> {word_pdf_path.name} via Microsoft Word AppleScript...")
+    print(f"[2/5] Exporting {docx_path.name} -> {word_pdf_path.name} via Microsoft Word AppleScript...")
     export_docx_to_pdf_via_word(docx_path, word_pdf_path)
 
-    print(f"[3/4] Rendering Word PDF pages to paper-matched PNGs (opacity={args.opacity})...")
-    bg_files = render_pdf_pages_to_images(
-        script_dir=script_dir,
-        pdf_path=word_pdf_path,
-        out_dir=out_dir,
-        prefix="word_page",
-        scale=args.scale,
-        opacity=args.opacity,
-        tint=not args.no_tint,
-    )
-
-    print("[4/4] Building & compiling overlay_compare.typ with Word pages as 100% page backgrounds...")
-    overlay_typ_path = build_overlay_typ(input_typ, out_dir, bg_files)
-    overlay_pdf_path = out_dir / "overlay_compare.pdf"
-    overlay_png_pattern = out_dir / "overlay_page_{p}.png"
-
     typst_bin = shutil.which("typst") or str(Path.home() / ".cargo/bin/typst")
-    ppi = int(round(72.0 * args.scale))
     subprocess.run(
         [typst_bin, "compile", "--jobs", "2", str(input_typ), str(orig_pdf_path)],
         check=True,
     )
-    subprocess.run(
-        [typst_bin, "compile", "--jobs", "2", str(overlay_typ_path), str(overlay_pdf_path)],
-        check=True,
-    )
+
+    print(f"[3/5] Computing exact glyph-ink coordinate diff -> {layout_diff_path.name}...")
+    diff_script = script_dir / "pdf_layout_diff.swift"
     subprocess.run(
         [
-            typst_bin,
-            "compile",
-            "--jobs",
-            "2",
-            "--ppi",
-            str(ppi),
-            str(overlay_typ_path),
-            str(overlay_png_pattern),
+            "swift",
+            str(diff_script),
+            str(orig_pdf_path),
+            str(word_pdf_path),
+            str(layout_diff_path),
+            str(args.max_pages),
         ],
         check=True,
     )
 
-    print(f"\nDone! Visual comparison files generated in {out_dir}:")
+    bg_files: list[str] = []
+    overlay_typ_path = out_dir / "overlay_compare.typ"
+    overlay_pdf_path = out_dir / "overlay_compare.pdf"
+
+    if not args.coords_only:
+        print(f"[4/5] Rendering Word PDF pages to paper-matched PNGs (opacity={args.opacity})...")
+        bg_files = render_pdf_pages_to_images(
+            script_dir=script_dir,
+            pdf_path=word_pdf_path,
+            out_dir=out_dir,
+            prefix="word_page",
+            scale=args.scale,
+            opacity=args.opacity,
+            tint=not args.no_tint,
+        )
+
+        print("[5/5] Building & compiling overlay_compare.typ with Word pages as 100% page backgrounds...")
+        overlay_typ_path = build_overlay_typ(input_typ, out_dir, bg_files)
+        overlay_png_pattern = out_dir / "overlay_page_{p}.png"
+
+        ppi = int(round(72.0 * args.scale))
+        subprocess.run(
+            [typst_bin, "compile", "--jobs", "2", str(overlay_typ_path), str(overlay_pdf_path)],
+            check=True,
+        )
+        subprocess.run(
+            [
+                typst_bin,
+                "compile",
+                "--jobs",
+                "2",
+                "--ppi",
+                str(ppi),
+                str(overlay_typ_path),
+                str(overlay_png_pattern),
+            ],
+            check=True,
+        )
+
+    print(f"\nDone! Visual & coordinate comparison files generated in {out_dir}:")
     if ir_path is not None and ir_path.exists():
         print(f"  - Intermediate IR JSON: {ir_path}")
     print(f"  - Original Typst PDF:   {orig_pdf_path}")
     print(f"  - Word Exported PDF:    {word_pdf_path}")
-    print(f"  - Overlay Typst source: {overlay_typ_path}")
-    print(f"  - Overlay PDF:          {overlay_pdf_path}")
-    for p in range(1, len(bg_files) + 1):
-        print(f"  - Overlay Page {p} PNG:   {out_dir / f'overlay_page_{p}.png'}")
+    print(f"  - Coordinate Diff TXT:  {layout_diff_path}")
+    if not args.coords_only:
+        print(f"  - Overlay Typst source: {overlay_typ_path}")
+        print(f"  - Overlay PDF:          {overlay_pdf_path}")
+        for p in range(1, len(bg_files) + 1):
+            print(f"  - Overlay Page {p} PNG:   {out_dir / f'overlay_page_{p}.png'}")
     return 0
 
 
