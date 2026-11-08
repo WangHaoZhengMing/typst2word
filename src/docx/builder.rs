@@ -1,0 +1,105 @@
+//! `DocxBuilder`: shared rendering state (relationship ids, media, hyperlinks,
+//! footnotes, bookmarks) plus small helpers used by every renderer.
+
+use std::fmt::Write as _;
+
+use crate::ir::{BlockNode, DocumentIr, HAlignIr, ImageFormatIr, ImageIr};
+
+pub(crate) struct MediaAsset {
+    pub(crate) rel_id: String,
+    pub(crate) filename: String,
+    #[allow(dead_code)]
+    pub(crate) format: ImageFormatIr,
+    pub(crate) data: Vec<u8>,
+}
+
+pub(crate) struct HyperlinkRel {
+    pub(crate) rel_id: String,
+    pub(crate) url: String,
+}
+
+pub(crate) struct FootnoteRecord {
+    pub(crate) id: usize,
+    pub(crate) blocks: Vec<BlockNode>,
+}
+
+pub(crate) struct DocxBuilder<'a> {
+    pub(crate) ir: &'a DocumentIr,
+    pub(crate) next_rel_id: usize,
+    pub(crate) next_drawing_id: u32,
+    pub(crate) next_bookmark_id: u32,
+    pub(crate) media_assets: Vec<MediaAsset>,
+    pub(crate) hyperlinks: Vec<HyperlinkRel>,
+    pub(crate) footnotes: Vec<FootnoteRecord>,
+    pub(crate) header_rel_id: Option<String>,
+    pub(crate) footer_rel_id: Option<String>,
+}
+
+impl<'a> DocxBuilder<'a> {
+    pub(crate) fn new(ir: &'a DocumentIr) -> Self {
+        Self {
+            ir,
+            // Reserve rId1..rId4 for styles, numbering, settings, footnotes
+            next_rel_id: 5,
+            next_drawing_id: 1,
+            next_bookmark_id: 1,
+            media_assets: Vec::new(),
+            hyperlinks: Vec::new(),
+            footnotes: Vec::new(),
+            header_rel_id: None,
+            footer_rel_id: None,
+        }
+    }
+
+    pub(crate) fn alloc_rel_id(&mut self) -> String {
+        let id = self.next_rel_id;
+        self.next_rel_id += 1;
+        format!("rId{id}")
+    }
+
+    pub(crate) fn register_hyperlink(&mut self, url: &str) -> String {
+        if let Some(existing) = self.hyperlinks.iter().find(|h| h.url == url) {
+            return existing.rel_id.clone();
+        }
+        let rel_id = self.alloc_rel_id();
+        self.hyperlinks.push(HyperlinkRel {
+            rel_id: rel_id.clone(),
+            url: url.to_string(),
+        });
+        rel_id
+    }
+
+    pub(crate) fn register_image(&mut self, img: &ImageIr) -> (String, u32) {
+        let rel_id = self.alloc_rel_id();
+        let idx = self.media_assets.len() + 1;
+        let filename = format!("image{}.{}", idx, img.format.extension());
+        self.media_assets.push(MediaAsset {
+            rel_id: rel_id.clone(),
+            filename,
+            format: img.format,
+            data: img.data.clone(),
+        });
+        let drawing_id = self.next_drawing_id;
+        self.next_drawing_id += 1;
+        (rel_id, drawing_id)
+    }
+
+    pub(crate) fn render_jc(align: HAlignIr, out: &mut String) {
+        let val = match align {
+            HAlignIr::Left => "left",
+            HAlignIr::Center => "center",
+            HAlignIr::Right => "right",
+            HAlignIr::Justify => "both",
+        };
+        let _ = write!(out, r#"<w:jc w:val="{val}"/>"#);
+    }
+
+    pub(crate) fn render_table_jc(align: HAlignIr, out: &mut String) {
+        let val = match align {
+            HAlignIr::Left | HAlignIr::Justify => "left",
+            HAlignIr::Center => "center",
+            HAlignIr::Right => "right",
+        };
+        let _ = write!(out, r#"<w:jc w:val="{val}"/>"#);
+    }
+}

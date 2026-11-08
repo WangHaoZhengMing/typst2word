@@ -15,19 +15,20 @@
 //! 4. [`math_omml`]: Converts Typst Math `Content` AST into native Word Office Math (`<m:oMath>`).
 //! 5. [`shape_dml`]: Converts Typst shapes and CeTZ canvases into native Word DrawingML
 //!    (`<wps:wsp>` and `<wpg:wgp>`).
-//! 6. [`docx_writer`]: Packages `DocumentIr` into a standards-compliant `.docx` archive.
+//! 6. [`docx`]: Packages `DocumentIr` into a standards-compliant `.docx` archive.
 
 pub mod compiler;
-pub mod docx_writer;
+pub mod docx;
 pub mod extractor;
 pub mod ir;
 pub mod math_omml;
 pub mod shape_dml;
+pub mod xml;
 
 use std::path::Path;
 
 use compiler::{TypstWorld, compile_world};
-use docx_writer::{write_docx_to_bytes, write_docx_to_path};
+use docx::{write_docx_to_bytes, write_docx_to_path};
 use extractor::extract_document_ir;
 use ir::DocumentIr;
 
