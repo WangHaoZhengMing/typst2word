@@ -46,13 +46,14 @@ impl<'a> ExtractorContext<'a> {
             )
         };
 
+        let span_width = (right_bound - left_bound).max(100.0);
         let max_x = min_x + width;
         let left_gap = (min_x - left_bound).max(0.0);
         let right_gap = (right_bound - max_x).max(0.0);
 
-        if left_gap <= 8.0 {
+        if left_gap <= 8.0 || width >= span_width * 0.85 {
             Some(HAlignIr::Left)
-        } else if left_gap > 15.0 && right_gap <= 8.0 {
+        } else if left_gap > 45.0 && right_gap <= 8.0 {
             Some(HAlignIr::Right)
         } else if left_gap > 12.0 && right_gap > 12.0 && (left_gap - right_gap).abs() <= 18.0 {
             Some(HAlignIr::Center)

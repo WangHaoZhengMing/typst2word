@@ -177,8 +177,8 @@ impl<'a> DocxBuilder<'a> {
                 } else {
                     cell_style.space_after_pt = cell_style.space_after_pt.min(2.0);
                 }
-                // Compact line spacing inside table cells (~0.5em leading in Typst).
-                cell_style.line_spacing_pt = Some(5.0);
+                // Compact line spacing inside table/grid cells (~0.35em leading in Typst).
+                cell_style.line_spacing_pt = Some(2.0);
                 let mut para_xml = String::new();
                 self.render_paragraph(content, &cell_style, bookmark.as_deref(), &mut para_xml);
                 if keep_next {

@@ -41,11 +41,11 @@ impl<'a> DocxBuilder<'a> {
             .unwrap_or(11.0)
             .max(6.0);
         if let Some(ls_pt) = style.line_spacing_pt {
-            let ratio = (ls_pt / base_font_pt).clamp(0.3, 2.0);
+            let ratio = (ls_pt / base_font_pt).clamp(0.1, 2.0);
             let line_dxa = if ratio <= 1.05 {
-                (232.0 + ratio * 10.0).round() as i64
+                (212.0 + ratio * 24.0).round() as i64
             } else {
-                ((242.0 * (1.0 + ratio) / 2.0).round() as i64).clamp(180, 720)
+                ((236.0 * (1.0 + ratio) / 2.0).round() as i64).clamp(180, 720)
             };
             let _ = write!(
                 out,

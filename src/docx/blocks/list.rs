@@ -132,19 +132,19 @@ impl<'a> DocxBuilder<'a> {
         let after_dxa = if followed_by_grid_table {
             0
         } else if blocks.len() > 1 {
-            15
-        } else if is_last_top && !has_nested_list {
-            80
-        } else if tight {
             10
-        } else {
+        } else if is_last_top && !has_nested_list {
             40
+        } else if tight {
+            0
+        } else {
+            15
         };
         let indent_left = 380 * (ilvl + 1);
         if blocks.is_empty() {
             let _ = write!(
                 out,
-                r#"<w:p><w:pPr><w:numPr><w:ilvl w:val="{ilvl}"/><w:numId w:val="{num_id}"/></w:numPr><w:spacing w:before="0" w:after="{after_dxa}" w:line="240" w:lineRule="auto"/></w:pPr></w:p>"#
+                r#"<w:p><w:pPr><w:numPr><w:ilvl w:val="{ilvl}"/><w:numId w:val="{num_id}"/></w:numPr><w:spacing w:before="0" w:after="{after_dxa}" w:line="230" w:lineRule="auto"/></w:pPr></w:p>"#
             );
             return;
         }
@@ -166,7 +166,7 @@ impl<'a> DocxBuilder<'a> {
                     if let Some(prefix) = custom_prefix {
                         let _ = write!(
                             out,
-                            r#"<w:spacing w:before="0" w:after="{after_dxa}" w:line="240" w:lineRule="auto"/><w:ind w:left="{indent_left}" w:hanging="380"/>{right_tab_xml}</w:pPr>"#
+                            r#"<w:spacing w:before="0" w:after="{after_dxa}" w:line="230" w:lineRule="auto"/><w:ind w:left="{indent_left}" w:hanging="380"/>{right_tab_xml}</w:pPr>"#
                         );
                         let bm_id = bookmark
                             .as_ref()
@@ -184,7 +184,7 @@ impl<'a> DocxBuilder<'a> {
                     } else {
                         let _ = write!(
                             out,
-                            r#"<w:numPr><w:ilvl w:val="{ilvl}"/><w:numId w:val="{num_id}"/></w:numPr><w:spacing w:before="0" w:after="{after_dxa}" w:line="240" w:lineRule="auto"/>{right_tab_xml}</w:pPr>"#
+                            r#"<w:numPr><w:ilvl w:val="{ilvl}"/><w:numId w:val="{num_id}"/></w:numPr><w:spacing w:before="0" w:after="{after_dxa}" w:line="230" w:lineRule="auto"/>{right_tab_xml}</w:pPr>"#
                         );
                         let bm_id = bookmark
                             .as_ref()
