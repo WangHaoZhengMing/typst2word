@@ -13,11 +13,10 @@ use typst::introspection::TagElem;
 use typst::layout::{AlignElem, BoxElem, HElem, HideElem, PadElem, Spacing};
 use typst::math::{
     AccentElem, AlignPointElem, AttachElem, BinomElem, CancelElem, CasesElem, ClassElem,
-    EquationElem, FracElem, FracStyle, LimitsElem, LrElem, MatElem, MidElem, OpElem,
-    OverbraceElem, OverbracketElem, OverlineElem as MathOverlineElem, OverparenElem,
-    OvershellElem, PrimesElem, RootElem, ScriptsElem, StretchElem, UnderbraceElem,
-    UnderbracketElem, UnderlineElem as MathUnderlineElem, UnderparenElem, UndershellElem,
-    VecElem,
+    EquationElem, FracElem, FracStyle, LimitsElem, LrElem, MatElem, MidElem, OpElem, OverbraceElem,
+    OverbracketElem, OverlineElem as MathOverlineElem, OverparenElem, OvershellElem, PrimesElem,
+    RootElem, ScriptsElem, StretchElem, UnderbraceElem, UnderbracketElem,
+    UnderlineElem as MathUnderlineElem, UnderparenElem, UndershellElem, VecElem,
 };
 use typst::model::{EmphElem, LinkMarker, RefElem, StrongElem};
 use typst::text::{
@@ -651,10 +650,7 @@ fn convert_math_node(
                     .to_string(),
             )
         } else {
-            (
-                delim.open().unwrap_or('{').to_string(),
-                String::new(),
-            )
+            (delim.open().unwrap_or('{').to_string(), String::new())
         };
         xml.push_str(&format!(
             r#"<m:d><m:dPr><m:begChr m:val="{}"/><m:endChr m:val="{}"/></m:dPr><m:e><m:m>"#,
@@ -721,35 +717,107 @@ fn convert_math_node(
 
     // 13. Under/Over Braces, Brackets, Parens, Shells
     if let Some(el) = content.to_packed::<UnderbraceElem>() {
-        emit_group_chr(&el.body, el.annotation.get_ref(styles), '⏟', true, styles, ctx, xml, plain);
+        emit_group_chr(
+            &el.body,
+            el.annotation.get_ref(styles),
+            '⏟',
+            true,
+            styles,
+            ctx,
+            xml,
+            plain,
+        );
         return;
     }
     if let Some(el) = content.to_packed::<OverbraceElem>() {
-        emit_group_chr(&el.body, el.annotation.get_ref(styles), '⏞', false, styles, ctx, xml, plain);
+        emit_group_chr(
+            &el.body,
+            el.annotation.get_ref(styles),
+            '⏞',
+            false,
+            styles,
+            ctx,
+            xml,
+            plain,
+        );
         return;
     }
     if let Some(el) = content.to_packed::<UnderbracketElem>() {
-        emit_group_chr(&el.body, el.annotation.get_ref(styles), '⎵', true, styles, ctx, xml, plain);
+        emit_group_chr(
+            &el.body,
+            el.annotation.get_ref(styles),
+            '⎵',
+            true,
+            styles,
+            ctx,
+            xml,
+            plain,
+        );
         return;
     }
     if let Some(el) = content.to_packed::<OverbracketElem>() {
-        emit_group_chr(&el.body, el.annotation.get_ref(styles), '⎴', false, styles, ctx, xml, plain);
+        emit_group_chr(
+            &el.body,
+            el.annotation.get_ref(styles),
+            '⎴',
+            false,
+            styles,
+            ctx,
+            xml,
+            plain,
+        );
         return;
     }
     if let Some(el) = content.to_packed::<UnderparenElem>() {
-        emit_group_chr(&el.body, el.annotation.get_ref(styles), '⏝', true, styles, ctx, xml, plain);
+        emit_group_chr(
+            &el.body,
+            el.annotation.get_ref(styles),
+            '⏝',
+            true,
+            styles,
+            ctx,
+            xml,
+            plain,
+        );
         return;
     }
     if let Some(el) = content.to_packed::<OverparenElem>() {
-        emit_group_chr(&el.body, el.annotation.get_ref(styles), '⏜', false, styles, ctx, xml, plain);
+        emit_group_chr(
+            &el.body,
+            el.annotation.get_ref(styles),
+            '⏜',
+            false,
+            styles,
+            ctx,
+            xml,
+            plain,
+        );
         return;
     }
     if let Some(el) = content.to_packed::<UndershellElem>() {
-        emit_group_chr(&el.body, el.annotation.get_ref(styles), '⏡', true, styles, ctx, xml, plain);
+        emit_group_chr(
+            &el.body,
+            el.annotation.get_ref(styles),
+            '⏡',
+            true,
+            styles,
+            ctx,
+            xml,
+            plain,
+        );
         return;
     }
     if let Some(el) = content.to_packed::<OvershellElem>() {
-        emit_group_chr(&el.body, el.annotation.get_ref(styles), '⏠', false, styles, ctx, xml, plain);
+        emit_group_chr(
+            &el.body,
+            el.annotation.get_ref(styles),
+            '⏠',
+            false,
+            styles,
+            ctx,
+            xml,
+            plain,
+        );
         return;
     }
 
@@ -909,14 +977,10 @@ fn convert_attach(
     let merged = attach.merge_base().unwrap_or_else(|| attach.clone());
     let base_limits = should_attach_as_limits(&merged.base, styles, ctx);
 
-    let sub = combine_optional_attachments(
-        merged.b.get_cloned(styles),
-        merged.br.get_cloned(styles),
-    );
-    let sup = combine_optional_attachments(
-        merged.t.get_cloned(styles),
-        merged.tr.get_cloned(styles),
-    );
+    let sub =
+        combine_optional_attachments(merged.b.get_cloned(styles), merged.br.get_cloned(styles));
+    let sup =
+        combine_optional_attachments(merged.t.get_cloned(styles), merged.tr.get_cloned(styles));
     let tl = merged.tl.get_cloned(styles);
     let bl = merged.bl.get_cloned(styles);
 
@@ -1084,11 +1148,20 @@ fn convert_lr(
     }
 
     xml.push_str("<m:d><m:dPr>");
-    xml.push_str(&format!(r#"<m:begChr m:val="{}"/>"#, escape_xml_attr(&beg_chr)));
+    xml.push_str(&format!(
+        r#"<m:begChr m:val="{}"/>"#,
+        escape_xml_attr(&beg_chr)
+    ));
     if !sep_chr.is_empty() {
-        xml.push_str(&format!(r#"<m:sepChr m:val="{}"/>"#, escape_xml_attr(&sep_chr)));
+        xml.push_str(&format!(
+            r#"<m:sepChr m:val="{}"/>"#,
+            escape_xml_attr(&sep_chr)
+        ));
     }
-    xml.push_str(&format!(r#"<m:endChr m:val="{}"/>"#, escape_xml_attr(&end_chr)));
+    xml.push_str(&format!(
+        r#"<m:endChr m:val="{}"/>"#,
+        escape_xml_attr(&end_chr)
+    ));
     xml.push_str("</m:dPr>");
 
     plain.push_str(&beg_chr);

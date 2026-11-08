@@ -33,7 +33,7 @@ use typst::visualize::{
 };
 use typst_html::{FrameElem, HtmlElem};
 
-use crate::backend::world::TypstWorld;
+use crate::compiler::world::TypstWorld;
 
 /// Custom compiler routines that enrich `Target::Paged` realization with semantic tags
 /// for shapes, transforms, and unsupported elements (`html.elem`, `html.frame`).
@@ -129,7 +129,9 @@ fn annotate_content_for_realization(
             }
         }
         if changed {
-            let mut packed = SequenceElem::new(new_children).pack().spanned(content.span());
+            let mut packed = SequenceElem::new(new_children)
+                .pack()
+                .spanned(content.span());
             if let Some(lbl) = content.label() {
                 packed.set_label(lbl);
             }
@@ -327,10 +329,7 @@ impl CompiledTypstDocument {
 
     /// Look up pre-layout `Content` elements associated with a `Span`.
     pub fn lookup_span(&self, span: Span) -> &[Content] {
-        self.span_index
-            .get(&span)
-            .map(Vec::as_slice)
-            .unwrap_or(&[])
+        self.span_index.get(&span).map(Vec::as_slice).unwrap_or(&[])
     }
 
     /// Extract the source snippet for a `Span` if available.
@@ -346,10 +345,7 @@ fn build_span_index(root: &Content) -> HashMap<Span, Vec<Content>> {
     let mut index: HashMap<Span, Vec<Content>> = HashMap::new();
     let _ = root.traverse(&mut |elem: Content| -> ControlFlow<()> {
         let span = elem.span();
-        if !span.is_detached()
-            && !elem.is::<SequenceElem>()
-            && !elem.is::<StyledElem>()
-        {
+        if !span.is_detached() && !elem.is::<SequenceElem>() && !elem.is::<StyledElem>() {
             index.entry(span).or_default().push(elem);
         }
         ControlFlow::Continue(())
@@ -375,7 +371,10 @@ fn format_diagnostics(world: &TypstWorld, diags: &[SourceDiagnostic]) -> String 
                 Some(format!("{path}:{}:{}", line + 1, col + 1))
             })
             .unwrap_or_else(|| "<detached>".to_string());
-        out.push_str(&format!("{:?} at {}: {}", diag.severity, loc_info, diag.message));
+        out.push_str(&format!(
+            "{:?} at {}: {}",
+            diag.severity, loc_info, diag.message
+        ));
         for hint in &diag.hints {
             out.push_str(&format!("\n  hint: {hint}"));
         }

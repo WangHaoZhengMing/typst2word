@@ -9,8 +9,8 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::ir::{
     BlockNode, CetzCanvasIr, CetzLabelDrawableIr, CetzPathDrawableIr, CurveSegmentIr,
-    DashPatternIr, HAlignIr, InlineNode, LineCapIr, LineJoinIr, ScriptKindIr, ShapeIr,
-    ShapeKindIr, StrokeIr, TextRunIr,
+    DashPatternIr, HAlignIr, InlineNode, LineCapIr, LineJoinIr, ScriptKindIr, ShapeIr, ShapeKindIr,
+    StrokeIr, TextRunIr,
 };
 
 static NEXT_DOC_PR_ID: AtomicU32 = AtomicU32::new(1000);
@@ -259,9 +259,7 @@ fn build_wsp_xml(
                 r#"<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>"#.to_string()
             }
         }
-        ShapeKindIr::Ellipse => {
-            r#"<a:prstGeom prst="ellipse"><a:avLst/></a:prstGeom>"#.to_string()
-        }
+        ShapeKindIr::Ellipse => r#"<a:prstGeom prst="ellipse"><a:avLst/></a:prstGeom>"#.to_string(),
         ShapeKindIr::Line { .. } => {
             // For horizontal or vertical lines, ensure extent along the zero axis is at least 0
             r#"<a:prstGeom prst="line"><a:avLst/></a:prstGeom>"#.to_string()
@@ -381,8 +379,12 @@ fn build_cetz_path_wsp(drawable: &CetzPathDrawableIr) -> String {
 
     let eff_x_pt = drawable.x_pt + local_origin_x_pt;
     let eff_y_pt = drawable.y_pt + local_origin_y_pt;
-    let eff_w_pt = (max_x_pt - local_origin_x_pt).max(drawable.width_pt).max(0.5);
-    let eff_h_pt = (max_y_pt - local_origin_y_pt).max(drawable.height_pt).max(0.5);
+    let eff_w_pt = (max_x_pt - local_origin_x_pt)
+        .max(drawable.width_pt)
+        .max(0.5);
+    let eff_h_pt = (max_y_pt - local_origin_y_pt)
+        .max(drawable.height_pt)
+        .max(0.5);
 
     let off_x = pt_to_emu(eff_x_pt).max(0);
     let off_y = pt_to_emu(eff_y_pt).max(0);

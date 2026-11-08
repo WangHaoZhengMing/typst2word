@@ -22,7 +22,9 @@ use typst::model::{
     OutlineElem, OutlineEntry, ParElem, QuoteElem, RefElem, StrongElem, TableCell, TableElem,
     TermsElem, TitleElem,
 };
-use typst::pdf::{ArtifactElem, ArtifactKind, AttachElem, PdfMarkerTag, PdfMarkerTagKind, TableCellKind};
+use typst::pdf::{
+    ArtifactElem, ArtifactKind, AttachElem, PdfMarkerTag, PdfMarkerTagKind, TableCellKind,
+};
 use typst::syntax::Span;
 use typst::text::{
     FontWeight, HighlightElem, LinebreakElem, OverlineElem, RawElem, RawLine, SmallcapsElem,
@@ -35,8 +37,8 @@ use typst::visualize::{
 };
 use typst_html::{FrameElem, HtmlElem};
 
-use crate::backend::compile::{is_cetz_span, CompiledTypstDocument};
-use crate::backend::world::TypstWorld;
+use crate::compiler::compile::{CompiledTypstDocument, is_cetz_span};
+use crate::compiler::world::TypstWorld;
 use crate::ir::*;
 use crate::math_omml::{convert_equation_to_omml, paint_to_hex};
 
@@ -191,7 +193,8 @@ impl<'a> ExtractorContext<'a> {
         }
 
         // 4. Build frame trees once per page so `logical_child_groups` are attached cleanly.
-        let mut page_trees: Vec<Vec<TreeNode>> = Vec::with_capacity(self.compiled.document.pages.len());
+        let mut page_trees: Vec<Vec<TreeNode>> =
+            Vec::with_capacity(self.compiled.document.pages.len());
         for page in &self.compiled.document.pages {
             page_trees.push(self.build_frame_tree(&page.frame, Point::zero()));
         }
@@ -385,7 +388,12 @@ impl<'a> ExtractorContext<'a> {
     fn find_first_content_origin(nodes: &[TreeNode]) -> Option<(f64, f64)> {
         for node in nodes {
             match node {
-                TreeNode::Element { elem, pos, children, .. } => {
+                TreeNode::Element {
+                    elem,
+                    pos,
+                    children,
+                    ..
+                } => {
                     if elem.is::<ArtifactElem>() || elem.is::<FootnoteEntry>() {
                         continue;
                     }
@@ -547,11 +555,7 @@ impl<'a> ExtractorContext<'a> {
         root_nodes
     }
 
-    fn flatten_soft_groups(
-        frame: &Frame,
-        offset: Point,
-        out: &mut Vec<(Point, FrameItem)>,
-    ) {
+    fn flatten_soft_groups(frame: &Frame, offset: Point, out: &mut Vec<(Point, FrameItem)>) {
         for (pos, item) in frame.items() {
             let abs_pos = offset + *pos;
             if let FrameItem::Group(group) = item {
@@ -585,7 +589,9 @@ impl<'a> ExtractorContext<'a> {
                     // the footnote superscript number inside the footnote text!
                     let filtered: Vec<TreeNode> = children
                         .iter()
-                        .filter(|c| !Self::is_pdf_marker(c, |k| matches!(k, PdfMarkerTagKind::Label)))
+                        .filter(|c| {
+                            !Self::is_pdf_marker(c, |k| matches!(k, PdfMarkerTagKind::Label))
+                        })
                         .cloned()
                         .collect();
                     return self.extract_blocks_from_nodes(&filtered, 0, HAlignIr::Left);
@@ -733,9 +739,13 @@ impl<'a> ExtractorContext<'a> {
 
                 // Check if this hard group is a styled `block(...)` or `box(...)` with its own
                 // background fill or border stroke (e.g. `#block(fill: luma(240), inset: 8pt)[...]`)!
-                if let Some(styled_box) =
-                    self.try_extract_styled_container_group(group, *pos, children, list_level, inherited_align)
-                {
+                if let Some(styled_box) = self.try_extract_styled_container_group(
+                    group,
+                    *pos,
+                    children,
+                    list_level,
+                    inherited_align,
+                ) {
                     blocks.push(styled_box);
                     return;
                 }
@@ -787,7 +797,15 @@ impl<'a> ExtractorContext<'a> {
                 pos,
                 children,
             } => {
-                self.extract_element_block(elem, *loc, *pos, children, blocks, list_level, inherited_align);
+                self.extract_element_block(
+                    elem,
+                    *loc,
+                    *pos,
+                    children,
+                    blocks,
+                    list_level,
+                    inherited_align,
+                );
             }
             TreeNode::Text { .. } | TreeNode::Link { .. } => {}
         }
@@ -966,7 +984,10 @@ impl<'a> ExtractorContext<'a> {
             if let Some(table_ir) = self.extract_table_or_grid(
                 table.grid.as_deref(),
                 true,
-                table.summary.get_cloned(StyleChain::default()).map(|s| s.to_string()),
+                table
+                    .summary
+                    .get_cloned(StyleChain::default())
+                    .map(|s| s.to_string()),
                 children,
                 inherited_align,
             ) {
@@ -994,7 +1015,8 @@ impl<'a> ExtractorContext<'a> {
             let is_block = quote.block.get(StyleChain::default());
             if is_block {
                 let has_attr = quote.attribution.get_ref(StyleChain::default()).is_some();
-                let mut body = self.extract_blocks_from_nodes(children, list_level, inherited_align);
+                let mut body =
+                    self.extract_blocks_from_nodes(children, list_level, inherited_align);
                 let attribution = if has_attr && body.len() >= 2 {
                     match body.pop() {
                         Some(BlockNode::Paragraph { content, .. }) => Some(content),
@@ -1051,9 +1073,15 @@ impl<'a> ExtractorContext<'a> {
             }
         }
         if Self::is_native_shape_elem(elem) {
-            if let Some(shape_ir) =
-                self.extract_native_shape_elem(elem, pos, children, list_level, inherited_align, 0.0, (1.0, 1.0))
-            {
+            if let Some(shape_ir) = self.extract_native_shape_elem(
+                elem,
+                pos,
+                children,
+                list_level,
+                inherited_align,
+                0.0,
+                (1.0, 1.0),
+            ) {
                 if let ShapeKindIr::Line {
                     x1_pt,
                     y1_pt,
@@ -1078,7 +1106,7 @@ impl<'a> ExtractorContext<'a> {
         }
 
         // 16. Image (`ImageElem`).
-        if let Some(img_elem) = elem.to_packed::< typst::visualize::ImageElem>() {
+        if let Some(img_elem) = elem.to_packed::<typst::visualize::ImageElem>() {
             if let Some(img_ir) = self.extract_image_elem(img_elem, children, inherited_align) {
                 self.report.images_count += 1;
                 blocks.push(BlockNode::ImageBlock(img_ir));
@@ -1119,7 +1147,11 @@ impl<'a> ExtractorContext<'a> {
     // Unsupported Element Detection
     // =========================================================================
 
-    fn check_unsupported_element(&mut self, elem: &Content, loc: Location) -> Option<UnsupportedIr> {
+    fn check_unsupported_element(
+        &mut self,
+        elem: &Content,
+        loc: Location,
+    ) -> Option<UnsupportedIr> {
         let source_loc = self.compiled.source_snippet(self.world, elem.span());
 
         if let Some(attach) = elem.to_packed::<AttachElem>() {
@@ -1303,11 +1335,7 @@ impl<'a> ExtractorContext<'a> {
             }
         }
 
-        if prefix_done {
-            Some(out)
-        } else {
-            None
-        }
+        if prefix_done { Some(out) } else { None }
     }
 
     fn extract_list_items(&mut self, children: &[TreeNode], list_level: usize) -> Vec<ListItemIr> {
@@ -1320,14 +1348,19 @@ impl<'a> ExtractorContext<'a> {
         for (kind, marker_children) in flat_markers {
             match kind {
                 PdfMarkerTagKind::ListItemLabel => {
-                    let txt = Self::nodes_to_plain_text(&marker_children).trim().to_string();
+                    let txt = Self::nodes_to_plain_text(&marker_children)
+                        .trim()
+                        .to_string();
                     if !txt.is_empty() {
                         current_marker = txt;
                     }
                 }
                 PdfMarkerTagKind::ListItemBody => {
-                    let blocks =
-                        self.extract_blocks_from_nodes(&marker_children, list_level + 1, HAlignIr::Left);
+                    let blocks = self.extract_blocks_from_nodes(
+                        &marker_children,
+                        list_level + 1,
+                        HAlignIr::Left,
+                    );
                     items.push(ListItemIr {
                         marker: current_marker.clone(),
                         blocks,
@@ -1357,14 +1390,19 @@ impl<'a> ExtractorContext<'a> {
         for (kind, marker_children) in flat_markers {
             match kind {
                 PdfMarkerTagKind::ListItemLabel => {
-                    let txt = Self::nodes_to_plain_text(&marker_children).trim().to_string();
+                    let txt = Self::nodes_to_plain_text(&marker_children)
+                        .trim()
+                        .to_string();
                     if !txt.is_empty() {
                         current_marker = txt;
                     }
                 }
                 PdfMarkerTagKind::ListItemBody => {
-                    let blocks =
-                        self.extract_blocks_from_nodes(&marker_children, list_level + 1, HAlignIr::Left);
+                    let blocks = self.extract_blocks_from_nodes(
+                        &marker_children,
+                        list_level + 1,
+                        HAlignIr::Left,
+                    );
                     let parsed_num = current_marker
                         .trim_matches(|c: char| !c.is_ascii_digit())
                         .parse::<u64>()
@@ -1394,8 +1432,9 @@ impl<'a> ExtractorContext<'a> {
                 let mut term_inlines = Vec::new();
                 let mut desc_nodes = Vec::new();
                 for child in body_children {
-                    if Self::is_pdf_marker(&child, |k| matches!(k, PdfMarkerTagKind::TermsItemLabel))
-                    {
+                    if Self::is_pdf_marker(&child, |k| {
+                        matches!(k, PdfMarkerTagKind::TermsItemLabel)
+                    }) {
                         if let TreeNode::Element {
                             children: lbl_children,
                             ..
@@ -1436,9 +1475,7 @@ impl<'a> ExtractorContext<'a> {
                     } else {
                         // Do not recurse into nested ListElem/EnumElem/TermsElem when collecting
                         // top-level list items!
-                        if elem.is::<ListElem>()
-                            || elem.is::<EnumElem>()
-                            || elem.is::<TermsElem>()
+                        if elem.is::<ListElem>() || elem.is::<EnumElem>() || elem.is::<TermsElem>()
                         {
                             continue;
                         }
@@ -1559,14 +1596,18 @@ impl<'a> ExtractorContext<'a> {
                         };
 
                         if let Some(Paint::Tiling(_)) = &resolved_cell.fill {
-                            self.record_unsupported_paint("table.cell.fill", resolved_cell.body.span());
+                            self.record_unsupported_paint(
+                                "table.cell.fill",
+                                resolved_cell.body.span(),
+                            );
                         }
                         let fill = resolved_cell.fill.as_ref().and_then(paint_to_hex);
                         let borders = Self::extract_cell_borders(resolved_cell, is_semantic_table);
 
                         let (inset, halign, valign, is_header_cell, cell_blocks) =
                             if let Some((cell_elem, cnodes, _)) = cell_nodes_map.get(&(x, y)) {
-                                let (ins, ha, va, ih) = Self::extract_cell_props(cell_elem, is_header);
+                                let (ins, ha, va, ih) =
+                                    Self::extract_cell_props(cell_elem, is_header);
                                 let blks = self.extract_blocks_from_nodes(cnodes, 0, ha);
                                 (ins, ha, va, ih, blks)
                             } else {
@@ -1715,10 +1756,17 @@ impl<'a> ExtractorContext<'a> {
                     }
                     Self::collect_table_cell_nodes(children, factor, out);
                 }
-                TreeNode::Group { group, children, .. } => {
+                TreeNode::Group {
+                    group, children, ..
+                } => {
                     // If the group directly wraps a single cell element, pass its size down.
                     if children.len() == 1 {
-                        if let TreeNode::Element { elem, children: cchildren, .. } = &children[0] {
+                        if let TreeNode::Element {
+                            elem,
+                            children: cchildren,
+                            ..
+                        } = &children[0]
+                        {
                             if elem.is::<TableCell>() || elem.is::<GridCell>() {
                                 let mut temp = HashMap::new();
                                 Self::collect_table_cell_nodes(children, factor, &mut temp);
@@ -1776,10 +1824,7 @@ impl<'a> ExtractorContext<'a> {
             left: cell.stroke.left.as_deref().map(Self::abs_stroke_to_ir),
             right: cell.stroke.right.as_deref().map(Self::abs_stroke_to_ir),
         };
-        if is_semantic_table
-            && !borders.has_any()
-            && !cell.stroke_overridden.iter().any(|&b| b)
-        {
+        if is_semantic_table && !borders.has_any() && !cell.stroke_overridden.iter().any(|&b| b) {
             // Default 0.5pt black table border if not explicitly overridden to `none`.
             // Note: if `cell.stroke` has `None` on all sides because user set `stroke: none`,
             // `cell.stroke` is already `None`, so we respect `cell.stroke` directly!
@@ -1922,7 +1967,8 @@ impl<'a> ExtractorContext<'a> {
             &mut saw_body,
         );
 
-        let caption_inlines = caption_nodes_opt.map(|cap_nodes| self.extract_inlines_flat(&cap_nodes));
+        let caption_inlines =
+            caption_nodes_opt.map(|cap_nodes| self.extract_inlines_flat(&cap_nodes));
         let body = self.extract_blocks_from_nodes(&body_nodes, list_level, HAlignIr::Center);
         let kind = format!("{:?}", fig.kind.get_ref(StyleChain::default()));
         let bookmark = self.bookmarks.get(&loc).cloned();
@@ -2517,21 +2563,38 @@ impl<'a> ExtractorContext<'a> {
 
         // Classify shape kind from the Typst element type.
         let (kind, corner_radius_pt, inset) = if let Some(rect) = elem.to_packed::<RectElem>() {
-            let rad = Self::corners_radius_to_pt(&rect.radius.get(StyleChain::default()), width_pt.min(height_pt));
-            let ins = Self::sides_rel_length_to_pt(&Smart::Custom(rect.inset.get(StyleChain::default())));
+            let rad = Self::corners_radius_to_pt(
+                &rect.radius.get(StyleChain::default()),
+                width_pt.min(height_pt),
+            );
+            let ins =
+                Self::sides_rel_length_to_pt(&Smart::Custom(rect.inset.get(StyleChain::default())));
             (ShapeKindIr::Rect, rad, ins)
         } else if let Some(sq) = elem.to_packed::<SquareElem>() {
-            let rad = Self::corners_radius_to_pt(&sq.radius.get(StyleChain::default()), width_pt.min(height_pt));
-            let ins = Self::sides_rel_length_to_pt(&Smart::Custom(sq.inset.get(StyleChain::default())));
+            let rad = Self::corners_radius_to_pt(
+                &sq.radius.get(StyleChain::default()),
+                width_pt.min(height_pt),
+            );
+            let ins =
+                Self::sides_rel_length_to_pt(&Smart::Custom(sq.inset.get(StyleChain::default())));
             (ShapeKindIr::Rect, rad, ins)
         } else if let Some(cir) = elem.to_packed::<CircleElem>() {
-            let ins = Self::sides_rel_length_to_pt(&Smart::Custom(cir.inset.get(StyleChain::default())));
+            let ins =
+                Self::sides_rel_length_to_pt(&Smart::Custom(cir.inset.get(StyleChain::default())));
             (ShapeKindIr::Ellipse, None, ins)
         } else if let Some(ell) = elem.to_packed::<EllipseElem>() {
-            let ins = Self::sides_rel_length_to_pt(&Smart::Custom(ell.inset.get(StyleChain::default())));
+            let ins =
+                Self::sides_rel_length_to_pt(&Smart::Custom(ell.inset.get(StyleChain::default())));
             (ShapeKindIr::Ellipse, None, ins)
         } else if elem.is::<LineElem>() {
-            if let Some((lpos, Shape { geometry: Geometry::Line(end), .. }, _)) = shape_items.first()
+            if let Some((
+                lpos,
+                Shape {
+                    geometry: Geometry::Line(end),
+                    ..
+                },
+                _,
+            )) = shape_items.first()
             {
                 let x1 = lpos.x.to_pt() - bbox_x;
                 let y1 = lpos.y.to_pt() - bbox_y;
@@ -2561,8 +2624,14 @@ impl<'a> ExtractorContext<'a> {
             }
         } else if elem.is::<PolygonElem>() {
             let mut pts = Vec::new();
-            if let Some((spos, Shape { geometry: Geometry::Curve(curve), .. }, _)) =
-                shape_items.first()
+            if let Some((
+                spos,
+                Shape {
+                    geometry: Geometry::Curve(curve),
+                    ..
+                },
+                _,
+            )) = shape_items.first()
             {
                 for item in &curve.0 {
                     match item {
@@ -2626,7 +2695,12 @@ impl<'a> ExtractorContext<'a> {
                 TreeNode::Shape { shape, span, pos } => {
                     shape_items.push((offset + *pos, shape.clone(), *span));
                 }
-                TreeNode::Element { elem, children, pos, .. } => {
+                TreeNode::Element {
+                    elem,
+                    children,
+                    pos,
+                    ..
+                } => {
                     // `fill_and_stroke` wraps shape borders/backgrounds in `ArtifactElem(Other)`.
                     if elem.is::<ArtifactElem>() {
                         Self::partition_shape_and_body_nodes(
@@ -2729,7 +2803,8 @@ impl<'a> ExtractorContext<'a> {
             return None;
         }
 
-        let body_blocks = self.extract_blocks_from_nodes(&content_nodes, list_level, inherited_align);
+        let body_blocks =
+            self.extract_blocks_from_nodes(&content_nodes, list_level, inherited_align);
         if body_blocks.is_empty() {
             return None;
         }
@@ -3059,11 +3134,7 @@ impl<'a> ExtractorContext<'a> {
                         });
                     }
                 }
-                TreeNode::Element {
-                    elem,
-                    children,
-                    ..
-                } => {
+                TreeNode::Element { elem, children, .. } => {
                     let mut next_rot = rotation_deg;
                     if let Some(rot) = elem.to_packed::<RotateElem>() {
                         next_rot += rot.angle.get(StyleChain::default()).to_deg();
@@ -3100,13 +3171,7 @@ impl<'a> ExtractorContext<'a> {
                     }
 
                     self.collect_cetz_drawables(
-                        children,
-                        offset,
-                        next_rot,
-                        box_size,
-                        background,
-                        paths,
-                        labels,
+                        children, offset, next_rot, box_size, background, paths, labels,
                     );
                 }
                 TreeNode::Group {
@@ -3114,7 +3179,8 @@ impl<'a> ExtractorContext<'a> {
                     pos,
                     children,
                 } => {
-                    let abs_pos = offset + *pos + Point::new(group.transform.tx, group.transform.ty);
+                    let abs_pos =
+                        offset + *pos + Point::new(group.transform.tx, group.transform.ty);
                     // Check if this group is a placed label group (contains text/equations and NO CeTZ curves).
                     if !Self::contains_cetz_shapes_recursive(children) {
                         let inlines = self.extract_inlines_flat(children);
@@ -3424,10 +3490,7 @@ impl<'a> ExtractorContext<'a> {
         }
         if let Some(ul) = elem.to_packed::<UnderlineElem>() {
             let prev = state.underline.clone();
-            let stroke = ul
-                .stroke
-                .resolve(StyleChain::default())
-                .unwrap_or_default();
+            let stroke = ul.stroke.resolve(StyleChain::default()).unwrap_or_default();
             state.underline = Some(Self::abs_stroke_to_ir(&stroke));
             // Filter out the decorative line shape inside `children` so it isn't emitted as a shape!
             let text_only: Vec<TreeNode> = children
@@ -3441,10 +3504,7 @@ impl<'a> ExtractorContext<'a> {
         }
         if let Some(st) = elem.to_packed::<StrikeElem>() {
             let prev = state.strike.clone();
-            let stroke = st
-                .stroke
-                .resolve(StyleChain::default())
-                .unwrap_or_default();
+            let stroke = st.stroke.resolve(StyleChain::default()).unwrap_or_default();
             state.strike = Some(Self::abs_stroke_to_ir(&stroke));
             let text_only: Vec<TreeNode> = children
                 .iter()
@@ -3457,10 +3517,7 @@ impl<'a> ExtractorContext<'a> {
         }
         if let Some(ol) = elem.to_packed::<OverlineElem>() {
             let prev = state.overline.clone();
-            let stroke = ol
-                .stroke
-                .resolve(StyleChain::default())
-                .unwrap_or_default();
+            let stroke = ol.stroke.resolve(StyleChain::default()).unwrap_or_default();
             state.overline = Some(Self::abs_stroke_to_ir(&stroke));
             let text_only: Vec<TreeNode> = children
                 .iter()
@@ -3586,13 +3643,7 @@ impl<'a> ExtractorContext<'a> {
                 .map(|c| c.key.resolve().as_str().to_string())
                 .collect();
             let mut cite_inlines = Vec::new();
-            self.extract_inlines_from_nodes(
-                children,
-                &mut cite_inlines,
-                state,
-                last_y,
-                last_x_end,
-            );
+            self.extract_inlines_from_nodes(children, &mut cite_inlines, state, last_y, last_x_end);
             let clean_inlines = Self::unwrap_link_inlines(cite_inlines);
             out.push(InlineNode::Citation {
                 keys,
@@ -3617,13 +3668,7 @@ impl<'a> ExtractorContext<'a> {
                 None => (None, None),
             };
             let mut link_inlines = Vec::new();
-            self.extract_inlines_from_nodes(
-                children,
-                &mut link_inlines,
-                state,
-                last_y,
-                last_x_end,
-            );
+            self.extract_inlines_from_nodes(children, &mut link_inlines, state, last_y, last_x_end);
             let had_inner_link = link_inlines
                 .iter()
                 .any(|inl| matches!(inl, InlineNode::Link { .. }));
@@ -3708,9 +3753,8 @@ impl<'a> ExtractorContext<'a> {
     fn text_item_to_run(item: &TextItem, state: &ActiveInlineState) -> TextRunIr {
         let info = item.font.info();
         let family_lower = info.family.to_lowercase();
-        let bold = state.bold
-            || info.variant.weight >= FontWeight::BOLD
-            || family_lower.contains("bold");
+        let bold =
+            state.bold || info.variant.weight >= FontWeight::BOLD || family_lower.contains("bold");
         let italic = state.italic
             || matches!(
                 info.variant.style,
@@ -3948,7 +3992,12 @@ impl<'a> ExtractorContext<'a> {
         if !min_x.is_finite() || !max_x.is_finite() {
             return (0.0, 0.0, 45.0, 30.0);
         }
-        (min_x, min_y, (max_x - min_x).max(1.0), (max_y - min_y).max(1.0))
+        (
+            min_x,
+            min_y,
+            (max_x - min_x).max(1.0),
+            (max_y - min_y).max(1.0),
+        )
     }
 
     fn corners_radius_to_pt(
@@ -3965,11 +4014,7 @@ impl<'a> ExtractorContext<'a> {
             .max(resolve_one(&corners.top_right))
             .max(resolve_one(&corners.bottom_left))
             .max(resolve_one(&corners.bottom_right));
-        if r > 0.1 {
-            Some(r)
-        } else {
-            None
-        }
+        if r > 0.1 { Some(r) } else { None }
     }
 
     fn sides_rel_length_to_pt(sides: &Smart<Sides<Option<Rel<Length>>>>) -> SidesPtIr {
@@ -4017,7 +4062,10 @@ impl<'a> ExtractorContext<'a> {
         let (left_bound, right_bound) = if min_x >= self.content_left_pt - 8.0 {
             (self.content_left_pt, self.content_right_pt)
         } else {
-            (0.0, (self.content_right_pt - self.content_left_pt).max(100.0))
+            (
+                0.0,
+                (self.content_right_pt - self.content_left_pt).max(100.0),
+            )
         };
 
         let max_x = min_x + width;
@@ -4079,7 +4127,12 @@ impl<'a> ExtractorContext<'a> {
         if !min_x.is_finite() || !max_x.is_finite() {
             return (0.0, 0.0, 0.0, 0.0);
         }
-        (min_x, min_y, (max_x - min_x).max(0.0), (max_y - min_y).max(0.0))
+        (
+            min_x,
+            min_y,
+            (max_x - min_x).max(0.0),
+            (max_y - min_y).max(0.0),
+        )
     }
 
     fn accumulate_nodes_bbox(
@@ -4125,14 +4178,7 @@ impl<'a> ExtractorContext<'a> {
                     }
                 }
                 TreeNode::Element { children, .. } => {
-                    Self::accumulate_nodes_bbox(
-                        children,
-                        offset,
-                        min_x,
-                        min_y,
-                        max_x,
-                        max_y,
-                    );
+                    Self::accumulate_nodes_bbox(children, offset, min_x, min_y, max_x, max_y);
                 }
                 TreeNode::Image { size, pos, .. } => {
                     let x = (offset.x + pos.x).to_pt();

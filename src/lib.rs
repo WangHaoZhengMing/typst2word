@@ -1,7 +1,7 @@
 //! `typst2word` — Semantic + Visual Typst (`.typ`) to Microsoft Word (`.docx`) converter.
 //!
 //! Architecture:
-//! 1. [`backend`]: Self-contained Typst 0.14.2 compiler & query engine (`TypstWorld`,
+//! 1. [`compiler`]: Self-contained Typst 0.14.2 compiler & query engine (`TypstWorld`,
 //!    `CUSTOM_ROUTINES`, `CompiledTypstDocument`) that preserves pre-layout `Content`
 //!    semantics, introspection `Introspector` queries, and laid-out `PagedDocument`
 //!    `Frame` tags (`Tag::Start` / `Tag::End`) including custom realization locations
@@ -17,7 +17,7 @@
 //!    (`<wps:wsp>` and `<wpg:wgp>`).
 //! 6. [`docx_writer`]: Packages `DocumentIr` into a standards-compliant `.docx` archive.
 
-pub mod backend;
+pub mod compiler;
 pub mod docx_writer;
 pub mod extractor;
 pub mod ir;
@@ -26,7 +26,7 @@ pub mod shape_dml;
 
 use std::path::Path;
 
-use backend::{compile_world, TypstWorld};
+use compiler::{TypstWorld, compile_world};
 use docx_writer::{write_docx_to_bytes, write_docx_to_path};
 use extractor::extract_document_ir;
 use ir::DocumentIr;

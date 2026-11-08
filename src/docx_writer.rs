@@ -164,7 +164,12 @@ impl<'a> DocxBuilder<'a> {
         Self::zip_write_str(&mut zip, "docProps/core.xml", &core_props_xml, options)?;
         Self::zip_write_str(&mut zip, "docProps/app.xml", &app_props_xml, options)?;
         Self::zip_write_str(&mut zip, "word/document.xml", &document_xml, options)?;
-        Self::zip_write_str(&mut zip, "word/_rels/document.xml.rels", &doc_rels_xml, options)?;
+        Self::zip_write_str(
+            &mut zip,
+            "word/_rels/document.xml.rels",
+            &doc_rels_xml,
+            options,
+        )?;
         Self::zip_write_str(&mut zip, "word/styles.xml", &styles_xml, options)?;
         Self::zip_write_str(&mut zip, "word/numbering.xml", &numbering_xml, options)?;
         Self::zip_write_str(&mut zip, "word/settings.xml", &settings_xml, options)?;
@@ -237,10 +242,7 @@ impl<'a> DocxBuilder<'a> {
         let _ = write!(out, "<w:document {}>", Self::xml_namespaces());
 
         if let Some(bg_hex) = &self.ir.page_setup.fill {
-            let _ = write!(
-                out,
-                r#"<w:background w:color="{bg_hex}"/><w:body>"#
-            );
+            let _ = write!(out, r#"<w:background w:color="{bg_hex}"/><w:body>"#);
         } else {
             out.push_str("<w:body>");
         }
@@ -325,7 +327,9 @@ impl<'a> DocxBuilder<'a> {
                 }
                 out.push_str("</w:pPr>");
 
-                let bm_id = bookmark.as_ref().map(|bm| self.emit_bookmark_start(bm, out));
+                let bm_id = bookmark
+                    .as_ref()
+                    .map(|bm| self.emit_bookmark_start(bm, out));
                 if let Some(num_prefix) = numbering {
                     let default_sz = match *level {
                         1 => 15.4,
@@ -393,7 +397,9 @@ impl<'a> DocxBuilder<'a> {
                     out.push_str(&ind);
                 }
                 out.push_str("</w:pPr>");
-                let bm_id = bookmark.as_ref().map(|bm| self.emit_bookmark_start(bm, out));
+                let bm_id = bookmark
+                    .as_ref()
+                    .map(|bm| self.emit_bookmark_start(bm, out));
                 self.render_inlines(content, out);
                 if let Some(id) = bm_id {
                     Self::emit_bookmark_end(id, out);
@@ -489,7 +495,13 @@ impl<'a> DocxBuilder<'a> {
                 fill,
                 stroke,
             } => {
-                self.render_code_block(lang.as_deref(), lines, fill.as_deref(), stroke.as_ref(), out);
+                self.render_code_block(
+                    lang.as_deref(),
+                    lines,
+                    fill.as_deref(),
+                    stroke.as_ref(),
+                    out,
+                );
             }
             BlockNode::Figure {
                 body,
@@ -587,7 +599,9 @@ impl<'a> DocxBuilder<'a> {
                             out,
                             r#"<w:spacing w:after="{after_dxa}"/><w:ind w:left="{indent_left}" w:hanging="280"/></w:pPr>"#
                         );
-                        let bm_id = bookmark.as_ref().map(|bm| self.emit_bookmark_start(bm, out));
+                        let bm_id = bookmark
+                            .as_ref()
+                            .map(|bm| self.emit_bookmark_start(bm, out));
                         let _ = write!(
                             out,
                             r#"<w:r><w:t xml:space="preserve">{} </w:t></w:r>"#,
@@ -603,7 +617,9 @@ impl<'a> DocxBuilder<'a> {
                             out,
                             r#"<w:numPr><w:ilvl w:val="{ilvl}"/><w:numId w:val="{num_id}"/></w:numPr><w:spacing w:after="{after_dxa}"/></w:pPr>"#
                         );
-                        let bm_id = bookmark.as_ref().map(|bm| self.emit_bookmark_start(bm, out));
+                        let bm_id = bookmark
+                            .as_ref()
+                            .map(|bm| self.emit_bookmark_start(bm, out));
                         self.render_inlines(content, out);
                         if let Some(id) = bm_id {
                             Self::emit_bookmark_end(id, out);
@@ -978,7 +994,11 @@ impl<'a> DocxBuilder<'a> {
                 ..Default::default()
             };
             if let Some(bm) = &entry.target_bookmark {
-                let _ = write!(out, r#"<w:hyperlink w:anchor="{}" w:history="1">"#, escape_xml(bm));
+                let _ = write!(
+                    out,
+                    r#"<w:hyperlink w:anchor="{}" w:history="1">"#,
+                    escape_xml(bm)
+                );
                 self.render_inlines(&entry.title, out);
                 out.push_str(r#"<w:r><w:tab/></w:r>"#);
                 self.render_text_run(&page_run, out);
@@ -1200,7 +1220,10 @@ impl<'a> DocxBuilder<'a> {
         }
         if let Some(sz_pt) = run.font_size_pt {
             let half_pts = ((sz_pt * 2.0).round() as u32).clamp(4, 288);
-            let _ = write!(out, r#"<w:sz w:val="{half_pts}"/><w:szCs w:val="{half_pts}"/>"#);
+            let _ = write!(
+                out,
+                r#"<w:sz w:val="{half_pts}"/><w:szCs w:val="{half_pts}"/>"#
+            );
         }
         match run.script {
             ScriptKindIr::Sub => out.push_str(r#"<w:vertAlign w:val="subscript"/>"#),
