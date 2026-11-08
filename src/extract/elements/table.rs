@@ -8,12 +8,12 @@ use typst::model::{EnumElem, ListElem, TableCell, TableElem};
 use typst::pdf::TableCellKind;
 use typst::visualize::Paint;
 
+use crate::color::paint_to_hex;
 use crate::extract::ExtractorContext;
 use crate::extract::frame_tree::TreeNode;
 use crate::ir::{
     BordersIr, HAlignIr, SidesPtIr, TableCellIr, TableIr, TableRowIr, VAlignIr, VMergeState,
 };
-use crate::math_omml::paint_to_hex;
 
 impl<'a> ExtractorContext<'a> {
     // =========================================================================

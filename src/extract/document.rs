@@ -6,10 +6,10 @@ use typst::layout::{ColumnsElem, PageElem, PagebreakElem};
 use typst::model::FootnoteEntry;
 use typst::pdf::{ArtifactElem, ArtifactKind};
 
+use crate::color::paint_to_hex;
 use crate::extract::ExtractorContext;
 use crate::extract::frame_tree::TreeNode;
 use crate::ir::{BlockNode, HAlignIr, MetadataIr, PageSetupIr};
-use crate::math_omml::paint_to_hex;
 
 impl<'a> ExtractorContext<'a> {
     pub(crate) fn extract_metadata(&self) -> MetadataIr {

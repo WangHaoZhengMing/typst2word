@@ -19,11 +19,11 @@ use typst::text::{
 };
 use typst::visualize::Paint;
 
+use crate::color::paint_to_hex;
 use crate::compiler::compile::is_cetz_span;
 use crate::extract::ExtractorContext;
 use crate::extract::frame_tree::TreeNode;
 use crate::ir::{ColorHex, HAlignIr, InlineNode, ScriptKindIr, StrokeIr, TextRunIr};
-use crate::math_omml::paint_to_hex;
 
 /// Active inline formatting context accumulated while walking inside a paragraph.
 #[derive(Debug, Clone, Default)]

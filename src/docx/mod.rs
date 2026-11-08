@@ -15,9 +15,11 @@
 //! - `parts`: fixed XML parts (`styles.xml`, `numbering.xml`, ...)
 //! - `blocks`: one file per block-level Typst object
 //! - `inlines`: one file per inline-level Typst object
+//! - `drawingml`: shapes and CeTZ canvases as native DrawingML
 
 mod blocks;
 mod builder;
+mod drawingml;
 mod inlines;
 mod package;
 mod parts;

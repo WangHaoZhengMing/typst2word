@@ -14,12 +14,12 @@ use typst::visualize::{
     PolygonElem, RectElem, Shape, SquareElem,
 };
 
+use crate::color::paint_to_hex;
 use crate::extract::ExtractorContext;
 use crate::extract::frame_tree::TreeNode;
 use crate::ir::{
     BlockNode, BordersIr, DashPatternIr, HAlignIr, ShapeIr, ShapeKindIr, SidesPtIr, StrokeIr,
 };
-use crate::math_omml::paint_to_hex;
 
 impl<'a> ExtractorContext<'a> {
     // =========================================================================

@@ -8,7 +8,7 @@ use typst::model::ParElem;
 use crate::extract::ExtractorContext;
 use crate::extract::frame_tree::TreeNode;
 use crate::ir::EquationIr;
-use crate::math_omml::convert_equation_to_omml;
+use crate::math::convert_equation_to_omml;
 
 impl<'a> ExtractorContext<'a> {
     pub(crate) fn extract_equation(

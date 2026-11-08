@@ -7,6 +7,7 @@ use typst::math::EquationElem;
 use typst::model::{HeadingElem, ParElem};
 use typst::visualize::{CurveElem, FillRule, Geometry};
 
+use crate::color::paint_to_hex;
 use crate::compiler::compile::is_cetz_span;
 use crate::extract::ExtractorContext;
 use crate::extract::frame_tree::TreeNode;
@@ -14,7 +15,6 @@ use crate::extract::inline::ActiveInlineState;
 use crate::ir::{
     CetzCanvasIr, CetzLabelDrawableIr, CetzPathDrawableIr, ColorHex, HAlignIr, InlineNode,
 };
-use crate::math_omml::paint_to_hex;
 
 impl<'a> ExtractorContext<'a> {
     // =========================================================================

@@ -12,17 +12,22 @@
 //!    enums, terms, tables/grids, quotes, syntax-highlighted code blocks, figures,
 //!    outlines, bibliographies, footnotes, hyperlinks, cross-references, native shapes,
 //!    OMML math equations, CeTZ vector drawings, and unsupported element placeholders.
-//! 4. [`math_omml`]: Converts Typst Math `Content` AST into native Word Office Math (`<m:oMath>`).
-//! 5. [`shape_dml`]: Converts Typst shapes and CeTZ canvases into native Word DrawingML
-//!    (`<wps:wsp>` and `<wpg:wgp>`).
-//! 6. [`docx`]: Packages `DocumentIr` into a standards-compliant `.docx` archive.
+//! 4. [`math`]: Converts Typst Math `Content` AST into native Word Office Math (`<m:oMath>`).
+//! 5. [`docx`]: Packages `DocumentIr` into a standards-compliant `.docx` archive, including
+//!    native DrawingML shapes and CeTZ canvases (`<wps:wsp>` and `<wpg:wgp>`).
+//!
+//! Each Typst object family has a mirrored file on both sides of the IR, e.g.
+//! `extract/elements/table.rs` -> `ir/table.rs` -> `docx/blocks/table.rs`.
+//!
+//! Shared helpers: [`xml`] (escaping), [`units`] (pt -> dxa / EMU), [`color`] (paint -> hex).
 
+pub mod color;
 pub mod compiler;
 pub mod docx;
 pub mod extract;
 pub mod ir;
-pub mod math_omml;
-pub mod shape_dml;
+pub mod math;
+pub mod units;
 pub mod xml;
 
 use std::path::Path;

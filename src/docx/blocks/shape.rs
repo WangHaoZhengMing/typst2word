@@ -1,8 +1,8 @@
 //! Native shapes -> paragraph wrapping a DrawingML `<wps:wsp>` run.
 
 use crate::docx::builder::DocxBuilder;
+use crate::docx::drawingml::shape_to_drawingml_run;
 use crate::ir::ShapeIr;
-use crate::shape_dml::shape_to_drawingml_run;
 
 impl<'a> DocxBuilder<'a> {
     pub(crate) fn render_shape_block(&mut self, shape: &ShapeIr, out: &mut String) {

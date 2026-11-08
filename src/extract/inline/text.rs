@@ -2,10 +2,10 @@
 
 use typst::text::{FontWeight, TextItem};
 
+use crate::color::paint_to_hex;
 use crate::extract::ExtractorContext;
 use crate::extract::inline::ActiveInlineState;
 use crate::ir::{InlineNode, TextRunIr};
-use crate::math_omml::paint_to_hex;
 
 impl<'a> ExtractorContext<'a> {
     // =========================================================================

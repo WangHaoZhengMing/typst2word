@@ -12,8 +12,8 @@ mod unsupported;
 use std::fmt::Write as _;
 
 use crate::docx::builder::DocxBuilder;
+use crate::docx::drawingml::{cetz_canvas_to_drawingml_run, shape_to_drawingml_run};
 use crate::ir::InlineNode;
-use crate::shape_dml::{cetz_canvas_to_drawingml_run, shape_to_drawingml_run};
 
 impl<'a> DocxBuilder<'a> {
     // =========================================================================

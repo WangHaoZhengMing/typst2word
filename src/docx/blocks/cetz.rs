@@ -1,8 +1,8 @@
 //! CeTZ canvas -> paragraph wrapping a DrawingML `<wpg:wgp>` group.
 
 use crate::docx::builder::DocxBuilder;
+use crate::docx::drawingml::cetz_canvas_to_drawingml_run;
 use crate::ir::CetzCanvasIr;
-use crate::shape_dml::cetz_canvas_to_drawingml_run;
 
 impl<'a> DocxBuilder<'a> {
     pub(crate) fn render_cetz_block(&mut self, canvas: &CetzCanvasIr, out: &mut String) {

@@ -3,9 +3,9 @@
 use typst::layout::Abs;
 use typst::visualize::{FixedStroke, LineCap, LineJoin, Stroke};
 
+use crate::color::paint_to_hex;
 use crate::extract::ExtractorContext;
 use crate::ir::{DashPatternIr, LineCapIr, LineJoinIr, StrokeIr};
-use crate::math_omml::paint_to_hex;
 
 impl<'a> ExtractorContext<'a> {
     pub(crate) fn fixed_stroke_to_ir(stroke: &FixedStroke) -> StrokeIr {
