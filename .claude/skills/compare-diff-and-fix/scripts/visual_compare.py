@@ -4,7 +4,8 @@ Visual pixel-level comparison script between Typst and Microsoft Word (.docx).
 
 Workflow:
 1. Convert `<input.typ>` -> `<output.docx>` via `typst2word` (limited to 2 CPU threads),
-   or use an existing `--docx` file.
+   dumping the intermediate representation to `<stem>.ir.json` by default (`--dump-ir`;
+   disable with `--no-ir`), or use an existing `--docx` file.
 2. Use macOS AppleScript (`osascript`) to instruct Microsoft Word to export `<output.docx>`
    to PDF (`<stem>.word.pdf`), preserving exact page geometry.
 3. Render each page of `<stem>.word.pdf` to PNG (`word_page_raw_<N>.png`) and a lightness-adjusted
@@ -163,6 +164,17 @@ def main() -> int:
         action="store_true",
         help="Skip running cargo run to regenerate .docx if already up to date",
     )
+    parser.add_argument(
+        "--ir",
+        type=Path,
+        default=None,
+        help="Where to dump the intermediate representation JSON (default: <out-dir>/<stem>.ir.json)",
+    )
+    parser.add_argument(
+        "--no-ir",
+        action="store_true",
+        help="Do not dump the intermediate representation JSON when converting",
+    )
     args = parser.parse_args()
 
     script_dir = Path(__file__).resolve().parent
@@ -174,22 +186,27 @@ def main() -> int:
     docx_path = args.docx.resolve() if args.docx else (out_dir / f"{input_typ.stem}.docx")
     word_pdf_path = out_dir / f"{input_typ.stem}.word.pdf"
     orig_pdf_path = out_dir / f"{input_typ.stem}.orig.pdf"
+    ir_path = None if args.no_ir else (args.ir.resolve() if args.ir else out_dir / f"{input_typ.stem}.ir.json")
 
     env = os.environ.copy()
     env["RAYON_NUM_THREADS"] = "2"
 
     if not args.skip_build and args.docx is None:
         print(f"[1/4] Converting {input_typ.name} -> {docx_path.name} (CPU threads = 2)...")
+        convert_cmd = [
+            "cargo",
+            "run",
+            "-j",
+            "2",
+            "--",
+            str(input_typ),
+            str(docx_path),
+        ]
+        if ir_path is not None:
+            ir_path.parent.mkdir(parents=True, exist_ok=True)
+            convert_cmd += ["--dump-ir", str(ir_path)]
         subprocess.run(
-            [
-                "cargo",
-                "run",
-                "-j",
-                "2",
-                "--",
-                str(input_typ),
-                str(docx_path),
-            ],
+            convert_cmd,
             cwd=repo_root,
             env=env,
             check=True,
@@ -243,6 +260,8 @@ def main() -> int:
     )
 
     print(f"\nDone! Visual comparison files generated in {out_dir}:")
+    if ir_path is not None and ir_path.exists():
+        print(f"  - Intermediate IR JSON: {ir_path}")
     print(f"  - Original Typst PDF:   {orig_pdf_path}")
     print(f"  - Word Exported PDF:    {word_pdf_path}")
     print(f"  - Overlay Typst source: {overlay_typ_path}")
