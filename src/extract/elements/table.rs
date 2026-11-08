@@ -25,6 +25,7 @@ impl<'a> ExtractorContext<'a> {
         is_semantic_table: bool,
         summary: Option<String>,
         children: &[TreeNode],
+        list_level: usize,
         inherited_align: HAlignIr,
     ) -> Option<TableIr> {
         let grid = cell_grid?;
@@ -38,26 +39,128 @@ impl<'a> ExtractorContext<'a> {
         let factor = if grid.has_gutter { 2 } else { 1 };
         let mut cell_nodes_map: HashMap<(usize, usize), (Content, Vec<TreeNode>, Size)> =
             HashMap::new();
-        Self::collect_table_cell_nodes(children, factor, &mut cell_nodes_map);
+        Self::collect_table_cell_nodes(children, &mut cell_nodes_map);
+
+        let left_indent_pt = if list_level > 0 && inherited_align == HAlignIr::Left {
+            15.0 * list_level as f64
+        } else {
+            0.0
+        };
+        let content_avail_w =
+            (self.content_right_pt - self.content_left_pt - left_indent_pt).max(180.0);
+        let outer_group_w = Self::find_group_size(children).x.to_pt();
+        let avail_w_pt = if outer_group_w > 40.0 {
+            outer_group_w
+        } else {
+            content_avail_w
+        };
 
         // Estimate column widths and row heights from explicit grid sizings and laid-out cell frames.
         let mut col_widths_pt = vec![0.0_f64; num_cols];
+        let mut natural_col_w = vec![0.0_f64; num_cols];
+        let mut col_fr = vec![0.0_f64; num_cols];
         let mut row_heights_pt = vec![0.0_f64; num_rows];
         let mut row_has_explicit_height = vec![false; num_rows];
 
+        for (&(cx, cy), (cell_elem, cnodes, csize)) in &cell_nodes_map {
+            let colspan = Self::get_cell_colspan(cell_elem);
+            let rowspan = Self::get_cell_rowspan(cell_elem);
+            let pad_w = if is_semantic_table { 12.0 } else { 8.0 };
+            let w_pt = csize
+                .x
+                .to_pt()
+                .max(Self::estimate_nodes_bbox(cnodes).2 + pad_w);
+            let h_pt = csize
+                .y
+                .to_pt()
+                .max(Self::estimate_nodes_bbox(cnodes).3 + 8.0);
+            if colspan == 1 && cx < num_cols {
+                natural_col_w[cx] = natural_col_w[cx].max(w_pt);
+            }
+            if rowspan == 1 && cy < num_rows && !row_has_explicit_height[cy] {
+                row_heights_pt[cy] = row_heights_pt[cy].max(h_pt);
+            }
+        }
+
         for x in 0..num_cols {
             let raw_x = x * factor;
-            if let Some(typst::layout::Sizing::Rel(rel)) = grid.cols.get(raw_x) {
-                let abs_pt = rel.abs.abs.to_pt();
-                if abs_pt > 1.0 && rel.rel.is_zero() {
-                    col_widths_pt[x] = abs_pt;
+            match grid.cols.get(raw_x) {
+                Some(typst::layout::Sizing::Rel(rel)) => {
+                    let abs_pt = Self::resolve_length_pt(rel.abs, 11.0);
+                    let w = abs_pt + rel.rel.get() * avail_w_pt;
+                    if w > 1.0 {
+                        col_widths_pt[x] = w;
+                    }
+                }
+                Some(typst::layout::Sizing::Fr(fr)) => {
+                    col_fr[x] = fr.get().max(0.0);
+                }
+                Some(typst::layout::Sizing::Auto) | None => {
+                    col_widths_pt[x] = natural_col_w[x].max(24.0);
                 }
             }
         }
+
+        // Resolve horizontal column gutters (`gutter: 1fr` or `gutter: 10pt`) and `Sizing::Fr` columns.
+        let num_gutters = num_cols.saturating_sub(1);
+        let mut gutter_abs_pt = vec![0.0_f64; num_gutters];
+        let mut gutter_fr = vec![0.0_f64; num_gutters];
+        if grid.has_gutter && num_gutters > 0 {
+            for x in 0..num_gutters {
+                let raw_g = x * 2 + 1;
+                match grid.cols.get(raw_g) {
+                    Some(typst::layout::Sizing::Rel(rel)) => {
+                        let abs_pt = Self::resolve_length_pt(rel.abs, 11.0);
+                        gutter_abs_pt[x] = (abs_pt + rel.rel.get() * avail_w_pt).max(0.0);
+                    }
+                    Some(typst::layout::Sizing::Fr(fr)) => {
+                        gutter_fr[x] = fr.get().max(0.0);
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        let total_fr: f64 = col_fr.iter().sum::<f64>() + gutter_fr.iter().sum::<f64>();
+        if total_fr > 0.0 {
+            // If gutters are fractional (e.g. `#grid(columns: (4), gutter: 1fr)`), give the last
+            // auto column slightly more breathing room so Word's wider OMML/font metrics don't wrap it.
+            if !is_semantic_table
+                && gutter_fr.iter().any(|&gf| gf > 0.0)
+                && col_fr[num_cols - 1] == 0.0
+            {
+                col_widths_pt[num_cols - 1] += 12.0;
+            }
+            let used_w: f64 =
+                col_widths_pt.iter().sum::<f64>() + gutter_abs_pt.iter().sum::<f64>();
+            let rem_w = (avail_w_pt - used_w).max(0.0);
+            for x in 0..num_cols {
+                if col_fr[x] > 0.0 {
+                    // Notice: if `collect_table_cell_nodes` already measured the exact laid-out width
+                    // of a `Sizing::Fr` column from a hard cell group, only use `natural_col_w[x]` as a floor
+                    // when `natural_col_w[x]` didn't come from a small single-word cell.
+                    let fr_w = (col_fr[x] / total_fr) * rem_w;
+                    col_widths_pt[x] = fr_w.max(24.0);
+                }
+            }
+            for x in 0..num_gutters {
+                if gutter_fr[x] > 0.0 {
+                    gutter_abs_pt[x] += (gutter_fr[x] / total_fr) * rem_w;
+                }
+            }
+        }
+
+        // Absorb horizontal gutter widths into preceding columns so column X positions match Typst.
+        for x in 0..num_gutters {
+            if gutter_abs_pt[x] > 0.0 {
+                col_widths_pt[x] += gutter_abs_pt[x];
+            }
+        }
+
         for y in 0..num_rows {
             let raw_y = y * factor;
             if let Some(typst::layout::Sizing::Rel(rel)) = grid.rows.get(raw_y) {
-                let abs_pt = rel.abs.abs.to_pt();
+                let abs_pt = Self::resolve_length_pt(rel.abs, 11.0);
                 if abs_pt > 1.0 && rel.rel.is_zero() {
                     row_heights_pt[y] = abs_pt;
                     row_has_explicit_height[y] = true;
@@ -65,29 +168,10 @@ impl<'a> ExtractorContext<'a> {
             }
         }
 
-        for (&(cx, cy), (cell_elem, cnodes, csize)) in &cell_nodes_map {
-            let colspan = Self::get_cell_colspan(cell_elem);
-            let rowspan = Self::get_cell_rowspan(cell_elem);
-            let w_pt = csize
-                .x
-                .to_pt()
-                .max(Self::estimate_nodes_bbox(cnodes).2 + 12.0);
-            let h_pt = csize
-                .y
-                .to_pt()
-                .max(Self::estimate_nodes_bbox(cnodes).3 + 8.0);
-            if colspan == 1 && cx < num_cols && col_widths_pt[cx] <= 1.0 {
-                col_widths_pt[cx] = col_widths_pt[cx].max(w_pt);
-            }
-            if rowspan == 1 && cy < num_rows && !row_has_explicit_height[cy] {
-                row_heights_pt[cy] = row_heights_pt[cy].max(h_pt);
-            }
-        }
-
-        // Fill in any zero-width columns with a sensible default (e.g. from colspan cells or 90pt).
-        for w in &mut col_widths_pt {
+        // Fill in any zero-width columns with a sensible default (e.g. from colspan cells or 60pt).
+        for (x, w) in col_widths_pt.iter_mut().enumerate() {
             if *w <= 1.0 {
-                *w = 90.0;
+                *w = natural_col_w[x].max(60.0);
             }
         }
 
@@ -131,13 +215,26 @@ impl<'a> ExtractorContext<'a> {
 
                         let (inset, halign, valign, is_header_cell, cell_blocks) =
                             if let Some((cell_elem, cnodes, _)) = cell_nodes_map.get(&(x, y)) {
+                                Self::collect_linebreak_preceding_texts(
+                                    &resolved_cell.body,
+                                    &mut self.linebreak_preceding_texts,
+                                );
                                 let (ins, ha, va, ih) =
-                                    Self::extract_cell_props(cell_elem, is_header);
+                                    Self::extract_cell_props(cell_elem, is_header, is_semantic_table);
                                 let blks = self.extract_blocks_from_nodes(cnodes, 0, ha);
                                 (ins, ha, va, ih, blks)
                             } else {
                                 (
-                                    SidesPtIr::default(),
+                                    if is_semantic_table {
+                                        SidesPtIr::default()
+                                    } else {
+                                        SidesPtIr {
+                                            top: 1.0,
+                                            bottom: 1.0,
+                                            left: 0.0,
+                                            right: 2.0,
+                                        }
+                                    },
                                     HAlignIr::Left,
                                     VAlignIr::Top,
                                     is_header,
@@ -221,13 +318,13 @@ impl<'a> ExtractorContext<'a> {
             header_rows,
             rows,
             align: inherited_align,
+            left_indent_pt,
             summary,
         })
     }
 
     pub(crate) fn collect_table_cell_nodes(
         nodes: &[TreeNode],
-        factor: usize,
         out: &mut HashMap<(usize, usize), (Content, Vec<TreeNode>, Size)>,
     ) {
         for node in nodes {
@@ -237,12 +334,10 @@ impl<'a> ExtractorContext<'a> {
                         if tc.is_repeated.get(StyleChain::default()) {
                             continue;
                         }
-                        if let (Smart::Custom(raw_x), Smart::Custom(raw_y)) = (
+                        if let (Smart::Custom(x), Smart::Custom(y)) = (
                             tc.x.get(StyleChain::default()),
                             tc.y.get(StyleChain::default()),
                         ) {
-                            let x = raw_x / factor;
-                            let y = raw_y / factor;
                             let size = Self::find_group_size(children);
                             out.entry((x, y))
                                 .and_modify(|(_, existing_children, _)| {
@@ -256,12 +351,10 @@ impl<'a> ExtractorContext<'a> {
                         if gc.is_repeated.get(StyleChain::default()) {
                             continue;
                         }
-                        if let (Smart::Custom(raw_x), Smart::Custom(raw_y)) = (
+                        if let (Smart::Custom(x), Smart::Custom(y)) = (
                             gc.x.get(StyleChain::default()),
                             gc.y.get(StyleChain::default()),
                         ) {
-                            let x = raw_x / factor;
-                            let y = raw_y / factor;
                             let size = Self::find_group_size(children);
                             out.entry((x, y))
                                 .and_modify(|(_, existing_children, _)| {
@@ -279,7 +372,7 @@ impl<'a> ExtractorContext<'a> {
                     {
                         continue;
                     }
-                    Self::collect_table_cell_nodes(children, factor, out);
+                    Self::collect_table_cell_nodes(children, out);
                 }
                 TreeNode::Group {
                     group, children, ..
@@ -294,7 +387,7 @@ impl<'a> ExtractorContext<'a> {
                         {
                             if elem.is::<TableCell>() || elem.is::<GridCell>() {
                                 let mut temp = HashMap::new();
-                                Self::collect_table_cell_nodes(children, factor, &mut temp);
+                                Self::collect_table_cell_nodes(children, &mut temp);
                                 for ((x, y), (ce, cc, sz)) in temp {
                                     let final_sz = if sz.x.to_pt() > 0.0 {
                                         sz
@@ -312,7 +405,7 @@ impl<'a> ExtractorContext<'a> {
                             }
                         }
                     }
-                    Self::collect_table_cell_nodes(children, factor, out);
+                    Self::collect_table_cell_nodes(children, out);
                 }
                 _ => {}
             }
@@ -361,6 +454,7 @@ impl<'a> ExtractorContext<'a> {
     pub(crate) fn extract_cell_props(
         elem: &Content,
         default_is_header: bool,
+        is_semantic_table: bool,
     ) -> (SidesPtIr, HAlignIr, VAlignIr, bool) {
         if let Some(tc) = elem.to_packed::<TableCell>() {
             let align = tc.align.get(StyleChain::default());
@@ -374,11 +468,30 @@ impl<'a> ExtractorContext<'a> {
         } else if let Some(gc) = elem.to_packed::<GridCell>() {
             let align = gc.align.get(StyleChain::default());
             let (ha, va) = Self::alignment_to_ir(align);
-            let inset = Self::sides_rel_length_to_pt(&gc.inset.get(StyleChain::default()));
+            let inset_cfg = gc.inset.get(StyleChain::default());
+            let inset = if matches!(inset_cfg, Smart::Auto) {
+                SidesPtIr {
+                    top: 1.0,
+                    bottom: 1.0,
+                    left: 0.0,
+                    right: 2.0,
+                }
+            } else {
+                Self::sides_rel_length_to_pt(&inset_cfg)
+            };
             (inset, ha, va, default_is_header)
         } else {
             (
-                SidesPtIr::default(),
+                if is_semantic_table {
+                    SidesPtIr::default()
+                } else {
+                    SidesPtIr {
+                        top: 1.0,
+                        bottom: 1.0,
+                        left: 0.0,
+                        right: 2.0,
+                    }
+                },
                 HAlignIr::Left,
                 VAlignIr::Top,
                 default_is_header,

@@ -87,8 +87,17 @@ impl<'a> ExtractorContext<'a> {
                         if (y_pt - prev_y).abs() > text.size.to_pt() * 0.55
                             && state.script == ScriptKindIr::Normal
                         {
-                            // New visual line inside the paragraph: insert a space if needed.
-                            if Self::should_insert_line_join_space(out, &text.text) {
+                            // Check if this visual line jump was caused by an explicit `LinebreakElem` (`\`).
+                            let accumulated_txt = Self::inlines_to_plain_text(out);
+                            let trimmed_acc = accumulated_txt.trim_end();
+                            let is_explicit_br = !trimmed_acc.is_empty()
+                                && self
+                                    .linebreak_preceding_texts
+                                    .iter()
+                                    .any(|sfx| trimmed_acc.ends_with(sfx));
+                            if is_explicit_br {
+                                out.push(InlineNode::LineBreak);
+                            } else if Self::should_insert_line_join_space(out, &text.text) {
                                 out.push(InlineNode::Text(TextRunIr {
                                     text: " ".to_string(),
                                     ..Self::text_item_to_run(text, state)

@@ -330,6 +330,7 @@ impl<'a> ExtractorContext<'a> {
                     .get_cloned(StyleChain::default())
                     .map(|s| s.to_string()),
                 children,
+                list_level,
                 inherited_align,
             ) {
                 self.report.tables_count += 1;
@@ -343,6 +344,7 @@ impl<'a> ExtractorContext<'a> {
                 false,
                 None,
                 children,
+                list_level,
                 inherited_align,
             ) {
                 self.report.tables_count += 1;

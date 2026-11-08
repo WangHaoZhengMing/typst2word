@@ -13,6 +13,8 @@ pub struct TableIr {
     pub header_rows: usize,
     pub rows: Vec<TableRowIr>,
     pub align: HAlignIr,
+    #[serde(default)]
+    pub left_indent_pt: f64,
     pub summary: Option<String>,
 }
 

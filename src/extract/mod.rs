@@ -58,6 +58,8 @@ pub(crate) struct ExtractorContext<'a> {
     pub(crate) next_equation_number: usize,
     /// Set of locations already emitted as unsupported so we don't duplicate badges.
     pub(crate) seen_unsupported_locs: HashSet<Location>,
+    /// Trailing text snippets immediately preceding an explicit `LinebreakElem` (`\`) in source.
+    pub(crate) linebreak_preceding_texts: HashSet<String>,
     /// Left X coordinate (in pt) of the main page content area.
     pub(crate) content_left_pt: f64,
     /// Right X coordinate (in pt) of the main page content area.
@@ -68,6 +70,11 @@ impl<'a> ExtractorContext<'a> {
     pub(crate) fn new(compiled: &'a CompiledTypstDocument, world: &'a TypstWorld) -> Self {
         let mut doc_styles = Styles::new();
         Self::collect_document_styles(&compiled.evaluated_content, &mut doc_styles);
+        let mut linebreak_preceding_texts = HashSet::new();
+        Self::collect_linebreak_preceding_texts(
+            &compiled.evaluated_content,
+            &mut linebreak_preceding_texts,
+        );
         Self {
             compiled,
             world,
@@ -81,8 +88,61 @@ impl<'a> ExtractorContext<'a> {
             next_footnote_id: 1,
             next_equation_number: 1,
             seen_unsupported_locs: HashSet::new(),
+            linebreak_preceding_texts,
             content_left_pt: 70.866,
             content_right_pt: 595.276 - 70.866,
+        }
+    }
+
+    pub(crate) fn collect_linebreak_preceding_texts(
+        content: &Content,
+        out: &mut HashSet<String>,
+    ) {
+        if let Some(styled) = content.to_packed::<StyledElem>() {
+            Self::collect_linebreak_preceding_texts(&styled.child, out);
+        } else if let Some(seq) = content.to_packed::<SequenceElem>() {
+            let mut recent = String::new();
+            for child in &seq.children {
+                if child.is::<typst::text::LinebreakElem>() {
+                    let trimmed = recent.trim();
+                    if !trimmed.is_empty() {
+                        let suffix: String = trimmed
+                            .chars()
+                            .rev()
+                            .take(8)
+                            .collect::<Vec<_>>()
+                            .into_iter()
+                            .rev()
+                            .collect();
+                        out.insert(suffix);
+                    }
+                    recent.clear();
+                } else {
+                    Self::collect_linebreak_preceding_texts(child, out);
+                    let plain = child.plain_text();
+                    if !plain.is_empty() {
+                        recent.push_str(&plain);
+                    }
+                }
+            }
+        } else if let Some(item) = content.to_packed::<typst::model::EnumItem>() {
+            Self::collect_linebreak_preceding_texts(&item.body, out);
+        } else if let Some(item) = content.to_packed::<typst::model::ListItem>() {
+            Self::collect_linebreak_preceding_texts(&item.body, out);
+        } else if let Some(par) = content.to_packed::<typst::model::ParElem>() {
+            Self::collect_linebreak_preceding_texts(&par.body, out);
+        } else if let Some(align) = content.to_packed::<typst::layout::AlignElem>() {
+            Self::collect_linebreak_preceding_texts(&align.body, out);
+        } else if let Some(blk) = content.to_packed::<typst::layout::BlockElem>() {
+            if let Some(typst::layout::BlockBody::Content(body)) =
+                blk.body.get_ref(StyleChain::default())
+            {
+                Self::collect_linebreak_preceding_texts(body, out);
+            }
+        } else if let Some(tc) = content.to_packed::<typst::model::TableCell>() {
+            Self::collect_linebreak_preceding_texts(&tc.body, out);
+        } else if let Some(gc) = content.to_packed::<typst::layout::GridCell>() {
+            Self::collect_linebreak_preceding_texts(&gc.body, out);
         }
     }
 

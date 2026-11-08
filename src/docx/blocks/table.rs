@@ -14,6 +14,10 @@ impl<'a> DocxBuilder<'a> {
     pub(crate) fn render_table(&mut self, table: &TableIr, out: &mut String) {
         out.push_str("<w:tbl><w:tblPr>");
         Self::render_table_jc(table.align, out);
+        if table.left_indent_pt > 0.5 && table.align == crate::ir::HAlignIr::Left {
+            let ind_dxa = pt_to_dxa(table.left_indent_pt);
+            let _ = write!(out, r#"<w:tblInd w:w="{ind_dxa}" w:type="dxa"/>"#);
+        }
         let total_w_dxa: i64 = table.col_widths_pt.iter().map(|&w| pt_to_dxa(w)).sum();
         if total_w_dxa > 0 {
             let _ = write!(out, r#"<w:tblW w:w="{total_w_dxa}" w:type="dxa"/>"#);
