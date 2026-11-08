@@ -62,8 +62,13 @@ impl<'a> ExtractorContext<'a> {
         let spacing_pt = Self::resolve_length_pt(par.spacing.get(chain), default_font_pt);
         // Word's line spacing (`w:line`) already includes `par.leading` on every line of the
         // paragraph, so the additional paragraph-after gap needed to match Typst's inter-paragraph
-        // distance (`1em + par.spacing`) is `par.spacing - par.leading`.
-        let space_after_pt = (spacing_pt - leading_pt).max(1.5);
+        // distance (`1em + par.spacing`) is `par.spacing - par.leading` (or full `spacing_pt` for
+        // large display-sized single-line paragraphs where `w:line` is clamped to 1.0x).
+        let space_after_pt = if base_font_pt > default_font_pt * 1.4 {
+            spacing_pt + 2.0
+        } else {
+            (spacing_pt - leading_pt).max(1.5)
+        };
 
         let mut first_line_indent_pt =
             Self::resolve_length_pt(par.first_line_indent.get(chain).amount(), base_font_pt);
@@ -159,6 +164,17 @@ impl<'a> ExtractorContext<'a> {
                         continue;
                     }
                     Self::collect_line_left_edges(children, offset, lines);
+                }
+                TreeNode::Shape { pos, shape, .. } => {
+                    let b = shape.geometry.bbox(None);
+                    let x = (offset.x + pos.x + b.min.x).to_pt();
+                    let y = (offset.y + pos.y + b.min.y).to_pt();
+                    if let Some(existing) = lines.iter_mut().find(|(ly, _)| (*ly - y).abs() < 6.0)
+                    {
+                        existing.1 = existing.1.min(x);
+                    } else {
+                        lines.push((y, x));
+                    }
                 }
                 _ => {}
             }

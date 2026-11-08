@@ -49,8 +49,14 @@ impl<'a> DocxBuilder<'a> {
 
         out.push_str("<w:p><w:pPr>");
         let _ = write!(out, r#"<w:pStyle w:val="{style_id}"/>"#);
-        if level >= 2 && sz_pt <= 12.5 {
-            out.push_str(r#"<w:spacing w:before="60" w:after="40" w:line="240" w:lineRule="auto"/>"#);
+        if level >= 2 && sz_pt <= 13.0 {
+            let line_dxa = Self::compute_line_spacing_dxa(content, Some(0.65 * sz_pt));
+            let before_dxa = crate::units::pt_to_dxa(sz_pt * 0.567);
+            let after_dxa = crate::units::pt_to_dxa(sz_pt * 0.483);
+            let _ = write!(
+                out,
+                r#"<w:spacing w:before="{before_dxa}" w:after="{after_dxa}" w:line="{line_dxa}" w:lineRule="auto"/>"#
+            );
         }
         if align != HAlignIr::Left {
             Self::render_jc(align, out);
