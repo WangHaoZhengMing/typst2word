@@ -63,6 +63,14 @@ pub(crate) struct ExtractorContext<'a> {
     pub(crate) content_left_pt: f64,
     /// Right X coordinate (in pt) of the main page content area.
     pub(crate) content_right_pt: f64,
+    /// Page-level column count (`#set page(columns: N)`).
+    pub(crate) page_columns: usize,
+    /// Active column layout `(column_count, gutter_pt)` during extraction.
+    pub(crate) active_columns: (usize, f64),
+    /// Accumulated horizontal inset (in pt) when inside bordered/padded container blocks.
+    pub(crate) container_inset_pt: f64,
+    /// Pending list/enum marker text from an orphaned `PdfMarkerTag(ListItemLabel)`.
+    pub(crate) pending_list_marker: Option<String>,
 }
 
 impl<'a> ExtractorContext<'a> {
@@ -90,6 +98,20 @@ impl<'a> ExtractorContext<'a> {
             linebreak_preceding_texts,
             content_left_pt: 70.866,
             content_right_pt: 595.276 - 70.866,
+            page_columns: 1,
+            active_columns: (1, 0.0),
+            container_inset_pt: 0.0,
+            pending_list_marker: None,
+        }
+    }
+
+    pub(crate) fn current_column_width_pt(&self) -> f64 {
+        let full_w = (self.content_right_pt - self.content_left_pt).max(100.0);
+        let (count, gutter_pt) = self.active_columns;
+        if count > 1 {
+            ((full_w - (count - 1) as f64 * gutter_pt) / count as f64).max(72.0)
+        } else {
+            full_w
         }
     }
 

@@ -57,6 +57,62 @@ impl<'a> ExtractorContext<'a> {
             self.flush_stray_inlines(&mut stray_inlines, &mut blocks, inherited_align);
         }
 
+        // Merge adjacent 1-cell `__styled_container__` tables produced when a single
+        // `#block(stroke: ..., fill: ...)[...]` broke across columns or pages in Typst.
+        let mut i = 1;
+        while i < blocks.len() {
+            let can_merge = match (&blocks[i - 1], &blocks[i]) {
+                (BlockNode::Table(a), BlockNode::Table(b)) => {
+                    a.summary.as_deref() == Some("__styled_container__")
+                        && b.summary.as_deref() == Some("__styled_container__")
+                        && a.rows.len() == 1
+                        && b.rows.len() == 1
+                        && a.rows[0].cells.len() == 1
+                        && b.rows[0].cells.len() == 1
+                }
+                _ => false,
+            };
+            if can_merge {
+                let BlockNode::Table(mut b) = blocks.remove(i) else {
+                    unreachable!()
+                };
+                if let BlockNode::Table(a) = &mut blocks[i - 1] {
+                    let mut b_blocks = std::mem::take(&mut b.rows[0].cells[0].blocks);
+                    let a_blocks = &mut a.rows[0].cells[0].blocks;
+                    if let (
+                        Some(BlockNode::Enum {
+                            items: a_items,
+                            level: a_lvl,
+                            ..
+                        }),
+                        Some(BlockNode::Enum { level: b_lvl, .. }),
+                    ) = (a_blocks.last_mut(), b_blocks.first())
+                        && *a_lvl == *b_lvl
+                    {
+                        if let BlockNode::Enum { items: b_items, .. } = b_blocks.remove(0) {
+                            a_items.extend(b_items);
+                        }
+                    } else if let (
+                        Some(BlockNode::List {
+                            items: a_items,
+                            level: a_lvl,
+                            ..
+                        }),
+                        Some(BlockNode::List { level: b_lvl, .. }),
+                    ) = (a_blocks.last_mut(), b_blocks.first())
+                        && *a_lvl == *b_lvl
+                    {
+                        if let BlockNode::List { items: b_items, .. } = b_blocks.remove(0) {
+                            a_items.extend(b_items);
+                        }
+                    }
+                    a_blocks.extend(b_blocks);
+                }
+            } else {
+                i += 1;
+            }
+        }
+
         blocks
     }
 
@@ -327,6 +383,74 @@ impl<'a> ExtractorContext<'a> {
             return;
         }
 
+        // 9b. Orphaned `PdfMarkerTag(ListItemLabel | ListItemBody)` when a `ListElem` or `EnumElem`
+        //     inside a hard `Group` (`#block`) split across columns or pages.
+        if let Some(marker) = elem.to_packed::<typst::pdf::PdfMarkerTag>() {
+            match marker.kind {
+                typst::pdf::PdfMarkerTagKind::ListItemLabel => {
+                    let lbl = Self::nodes_to_plain_text(children).trim().to_string();
+                    if !lbl.is_empty() {
+                        self.pending_list_marker = Some(lbl);
+                    }
+                    return;
+                }
+                typst::pdf::PdfMarkerTagKind::ListItemBody => {
+                    let marker_str = self
+                        .pending_list_marker
+                        .take()
+                        .unwrap_or_else(|| "•".to_string());
+                    let item_blocks =
+                        self.extract_blocks_from_nodes(children, list_level + 1, HAlignIr::Left);
+                    let is_enum = marker_str
+                        .chars()
+                        .next()
+                        .is_some_and(|c| c.is_ascii_alphanumeric());
+                    if is_enum {
+                        let parsed_num = marker_str
+                            .trim_matches(|c: char| !c.is_ascii_digit())
+                            .parse::<u64>()
+                            .ok();
+                        let item = crate::ir::EnumItemIr {
+                            number: parsed_num,
+                            marker_text: marker_str,
+                            blocks: item_blocks,
+                        };
+                        if let Some(BlockNode::Enum { items, level, .. }) = blocks.last_mut()
+                            && *level == list_level
+                        {
+                            items.push(item);
+                        } else {
+                            self.report.lists_count += 1;
+                            blocks.push(BlockNode::Enum {
+                                items: vec![item],
+                                tight: true,
+                                level: list_level,
+                            });
+                        }
+                    } else {
+                        let item = crate::ir::ListItemIr {
+                            marker: marker_str,
+                            blocks: item_blocks,
+                        };
+                        if let Some(BlockNode::List { items, level, .. }) = blocks.last_mut()
+                            && *level == list_level
+                        {
+                            items.push(item);
+                        } else {
+                            self.report.lists_count += 1;
+                            blocks.push(BlockNode::List {
+                                items: vec![item],
+                                tight: true,
+                                level: list_level,
+                            });
+                        }
+                    }
+                    return;
+                }
+                _ => {}
+            }
+        }
+
         // 10. Table (`TableElem`) and Grid (`GridElem`).
         if let Some(table) = elem.to_packed::<TableElem>() {
             if let Some(table_ir) = self.extract_table_or_grid(
@@ -479,6 +603,38 @@ impl<'a> ExtractorContext<'a> {
             ));
             let child_blocks = self.extract_blocks_from_nodes(children, list_level, ha);
             blocks.extend(child_blocks);
+            return;
+        }
+
+        // 20b. Scoped multi-column layout (`ColumnsElem`, e.g. `#columns(2)[...]`).
+        if let Some(cols_elem) = elem.to_packed::<typst::layout::ColumnsElem>() {
+            let count = cols_elem.count.get(self.style_chain()).get();
+            let gutter_rel = cols_elem.gutter.get(self.style_chain());
+            let base_font_pt = Self::resolve_length_pt(
+                self.style_chain().get(typst::text::TextElem::size).0,
+                11.0,
+            );
+            let full_w = (self.content_right_pt - self.content_left_pt).max(100.0);
+            let gutter_pt = (Self::resolve_length_pt(gutter_rel.abs, base_font_pt)
+                + gutter_rel.rel.get() * full_w)
+                .max(6.0);
+
+            let prev_cols = self.active_columns;
+            if count > 1 {
+                self.active_columns = (count, gutter_pt);
+            }
+            let child_blocks = self.extract_blocks_from_nodes(children, list_level, inherited_align);
+            self.active_columns = prev_cols;
+
+            if count > 1 && self.page_columns <= 1 {
+                blocks.push(BlockNode::Columns {
+                    count,
+                    gutter_pt,
+                    body: child_blocks,
+                });
+            } else {
+                blocks.extend(child_blocks);
+            }
             return;
         }
 

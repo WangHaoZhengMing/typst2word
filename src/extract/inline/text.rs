@@ -50,6 +50,7 @@ impl<'a> ExtractorContext<'a> {
             overline: state.overline.clone(),
             color,
             highlight: state.highlight.clone(),
+            border: state.border.clone(),
             script: state.script,
             smallcaps: state.smallcaps,
             is_code: state.is_code,
@@ -61,6 +62,7 @@ impl<'a> ExtractorContext<'a> {
             "Hei" | "STHeiti" => "Heiti SC".to_string(),
             "Kai" | "STKaiti" => "Kaiti SC".to_string(),
             "Song" | "STSong" => "Songti SC".to_string(),
+            "Pingfang sc" | "pingfang sc" | "PingFang SC" => "PingFang SC".to_string(),
             other => other.to_string(),
         }
     }
@@ -80,6 +82,7 @@ impl<'a> ExtractorContext<'a> {
                         && a.overline.is_some() == b.overline.is_some()
                         && a.color == b.color
                         && a.highlight == b.highlight
+                        && a.border.is_some() == b.border.is_some()
                         && a.script == b.script
                         && a.smallcaps == b.smallcaps
                         && a.is_code == b.is_code

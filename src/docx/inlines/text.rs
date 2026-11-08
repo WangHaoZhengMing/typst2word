@@ -64,6 +64,15 @@ impl<'a> DocxBuilder<'a> {
         if let Some(color) = &run.color {
             let _ = write!(out, r#"<w:color w:val="{color}"/>"#);
         }
+        if let Some(bdr) = &run.border {
+            let sz = ((bdr.thickness_pt * 8.0).round() as u32).clamp(2, 96);
+            let val = Self::dash_to_w_border_val(&bdr.dash);
+            let _ = write!(
+                out,
+                r#"<w:bdr w:val="{val}" w:sz="{sz}" w:space="2" w:color="{}"/>"#,
+                bdr.color
+            );
+        }
         if let Some(hl) = &run.highlight {
             let _ = write!(
                 out,

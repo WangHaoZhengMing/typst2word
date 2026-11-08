@@ -164,6 +164,37 @@ impl<'a> DocxBuilder<'a> {
             BlockNode::ColumnBreak => {
                 out.push_str(r#"<w:p><w:r><w:br w:type="column"/></w:r></w:p>"#);
             }
+            BlockNode::Columns {
+                count,
+                gutter_pt,
+                body,
+            } => {
+                // 1. End the preceding 1-column section with a section-break paragraph.
+                out.push_str(
+                    r#"<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="20" w:lineRule="exact"/><w:rPr><w:sz w:val="2"/><w:szCs w:val="2"/></w:rPr>"#,
+                );
+                self.render_sect_pr_inner(
+                    self.ir.page_setup.columns.max(1),
+                    36.0,
+                    self.has_scoped_columns,
+                    out,
+                );
+                out.push_str("</w:pPr></w:p>");
+
+                // 2. Render the multi-column body with active column width.
+                let prev_cols = self.active_columns;
+                self.active_columns = (*count, *gutter_pt);
+                self.render_blocks(body, out);
+                self.active_columns = prev_cols;
+
+                // 3. End the multi-column section with a continuous section break.
+                self.has_scoped_columns = true;
+                out.push_str(
+                    r#"<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="20" w:lineRule="exact"/><w:rPr><w:sz w:val="2"/><w:szCs w:val="2"/></w:rPr>"#,
+                );
+                self.render_sect_pr_inner(*count, *gutter_pt, true, out);
+                out.push_str("</w:pPr></w:p>");
+            }
             BlockNode::UnsupportedBlock(unsup) => {
                 self.render_unsupported_block(unsup, out);
             }

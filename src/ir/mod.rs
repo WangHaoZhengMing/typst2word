@@ -138,6 +138,12 @@ pub enum BlockNode {
     PageBreak,
     /// Explicit column break (`#colbreak()`).
     ColumnBreak,
+    /// Multi-column layout section (`#columns(N, gutter: ...)[...]`).
+    Columns {
+        count: usize,
+        gutter_pt: f64,
+        body: Vec<BlockNode>,
+    },
     /// Unsupported Typst element rendered visibly in Word.
     UnsupportedBlock(UnsupportedIr),
 }

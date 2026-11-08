@@ -34,6 +34,7 @@ pub(crate) struct ActiveInlineState {
     pub(crate) strike: Option<StrokeIr>,
     pub(crate) overline: Option<StrokeIr>,
     pub(crate) highlight: Option<ColorHex>,
+    pub(crate) border: Option<StrokeIr>,
     pub(crate) script: ScriptKindIr,
     pub(crate) smallcaps: bool,
     pub(crate) is_code: bool,
@@ -143,7 +144,7 @@ impl<'a> ExtractorContext<'a> {
                 }
                 TreeNode::Group {
                     group,
-                    pos: _,
+                    pos,
                     children,
                 } => {
                     if Self::is_cetz_group_nodes(children) {
@@ -157,6 +158,100 @@ impl<'a> ExtractorContext<'a> {
                             continue;
                         }
                     }
+
+                    // Check if this inline `Group` is a `#box(...)` with border/fill/underline shapes!
+                    let mut bg_shapes = Vec::new();
+                    let mut content_children = Vec::new();
+                    let mut shape_nodes = Vec::new();
+                    for child in children {
+                        match child {
+                            TreeNode::Shape {
+                                shape,
+                                span,
+                                pos: spos,
+                            } => {
+                                bg_shapes.push((*spos, shape.clone(), *span));
+                                shape_nodes.push(child.clone());
+                            }
+                            TreeNode::Element {
+                                elem,
+                                children: achildren,
+                                pos: apos,
+                                ..
+                            } if elem.is::<typst::pdf::ArtifactElem>() => {
+                                for ac in achildren {
+                                    if let TreeNode::Shape {
+                                        shape,
+                                        span,
+                                        pos: spos,
+                                    } = ac
+                                    {
+                                        bg_shapes.push((*apos + *spos, shape.clone(), *span));
+                                    }
+                                }
+                                shape_nodes.push(child.clone());
+                            }
+                            other => content_children.push(other.clone()),
+                        }
+                    }
+
+                    if !bg_shapes.is_empty() {
+                        let inner_text = Self::nodes_to_plain_text(&content_children);
+                        if inner_text.trim().is_empty() {
+                            // Empty / whitespace-only inline `#box(width: 4em, stroke: (bottom: 0.5pt))` (`#uline()`):
+                            // emit only the shape so whitespace doesn't offset the underline!
+                            self.extract_inlines_from_nodes(
+                                &shape_nodes,
+                                out,
+                                state,
+                                last_y,
+                                last_x_end,
+                            );
+                            *last_x_end = Some(pos.x.to_pt() + group.frame.size().x.to_pt());
+                            continue;
+                        } else {
+                            // Non-empty inline `#box([正确答案：A], stroke: 1pt, outset: 2.5pt)`:
+                            // apply `border` / `highlight` / `underline` to the inner text runs!
+                            let box_fill = bg_shapes
+                                .iter()
+                                .find_map(|(_, s, _)| s.fill.as_ref().and_then(paint_to_hex));
+                            let box_stroke = bg_shapes.iter().find_map(|(_, s, _)| {
+                                s.stroke.as_ref().map(Self::fixed_stroke_to_ir)
+                            });
+                            let is_bottom_line_only = bg_shapes.len() == 1
+                                && matches!(
+                                    bg_shapes[0].1.geometry,
+                                    typst::visualize::Geometry::Line(_)
+                                );
+
+                            let prev_hl = state.highlight.clone();
+                            let prev_bdr = state.border.clone();
+                            let prev_ul = state.underline.clone();
+                            if let Some(f) = box_fill {
+                                state.highlight = Some(f);
+                            }
+                            if let Some(st) = box_stroke {
+                                if is_bottom_line_only {
+                                    state.underline = Some(st);
+                                } else {
+                                    state.border = Some(st);
+                                }
+                            }
+                            self.extract_inlines_from_nodes(
+                                &content_children,
+                                out,
+                                state,
+                                last_y,
+                                last_x_end,
+                            );
+                            state.highlight = prev_hl;
+                            state.border = prev_bdr;
+                            state.underline = prev_ul;
+                            *last_x_end = Some(pos.x.to_pt() + group.frame.size().x.to_pt());
+                            continue;
+                        }
+                    }
+
                     self.extract_inlines_from_nodes(children, out, state, last_y, last_x_end);
                 }
                 TreeNode::Element {
@@ -186,6 +281,11 @@ impl<'a> ExtractorContext<'a> {
         last_y: &mut Option<f64>,
         last_x_end: &mut Option<f64>,
     ) {
+        // 0. Skip page furniture artifacts (headers, footers, page numbers) and footnote entries.
+        if Self::is_page_furniture_elem(elem) {
+            return;
+        }
+
         // 1. Check for unsupported inline elements.
         if let Some(unsup) = self.check_unsupported_element(elem, loc) {
             out.push(InlineNode::UnsupportedInline(unsup));

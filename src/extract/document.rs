@@ -2,7 +2,7 @@
 //! header / footer artifacts and page-break bookkeeping.
 
 use typst::foundations::{Content, SequenceElem, Smart, StyleChain, StyledElem};
-use typst::layout::{ColumnsElem, PageElem, PagebreakElem};
+use typst::layout::{PageElem, PagebreakElem};
 use typst::model::{Document, FootnoteEntry};
 use typst::pdf::{ArtifactElem, ArtifactKind};
 
@@ -34,17 +34,18 @@ impl<'a> ExtractorContext<'a> {
                 .custom()
                 .and_then(|p| p.as_ref().and_then(paint_to_hex));
 
-            // Check if the document uses columns (`#set page(columns: N)` or `#columns(N)`).
+            // Check if the document uses page-level columns (`#set page(columns: N)`).
+            // Scoped `#columns(N)[...]` (`ColumnsElem`) is extracted as `BlockNode::Columns`
+            // so that 1-column pages are not forced into multi-column layout.
             if let Some(cols) = Self::find_columns_in_content(
                 &self.compiled.evaluated_content,
                 StyleChain::default(),
             ) {
                 setup.columns = cols;
-            } else {
-                let cols = self.compiled.query_elem::<ColumnsElem>();
-                if let Some(col_elem) = cols.first() {
-                    setup.columns = col_elem.count.get(StyleChain::default()).get();
-                }
+            }
+            self.page_columns = setup.columns;
+            if setup.columns > 1 {
+                self.active_columns = (setup.columns, 18.0);
             }
 
             // Typst's default margin is 2.5 / 21 of the shorter page dimension (~70.87pt for A4).
@@ -160,12 +161,6 @@ impl<'a> ExtractorContext<'a> {
             }
             return Self::find_columns_in_content(&styled.child, chained);
         }
-        if let Some(col_elem) = content.to_packed::<ColumnsElem>() {
-            let c = col_elem.count.get(styles).get();
-            if c > 1 {
-                return Some(c);
-            }
-        }
         if let Some(seq) = content.to_packed::<SequenceElem>() {
             for child in &seq.children {
                 if let Some(c) = Self::find_columns_in_content(child, styles) {
@@ -249,32 +244,42 @@ impl<'a> ExtractorContext<'a> {
         None
     }
 
-    pub(crate) fn collect_pagebreak_following_texts(content: &Content, out: &mut Vec<String>) {
+    pub(crate) fn flatten_content_leaves<'b>(content: &'b Content, out: &mut Vec<&'b Content>) {
         if let Some(styled) = content.to_packed::<StyledElem>() {
-            Self::collect_pagebreak_following_texts(&styled.child, out);
+            Self::flatten_content_leaves(&styled.child, out);
         } else if let Some(seq) = content.to_packed::<SequenceElem>() {
-            for (i, child) in seq.children.iter().enumerate() {
-                if child.is::<PagebreakElem>() {
-                    let mut found_text = None;
-                    for next in &seq.children[i + 1..] {
-                        if next.is::<PagebreakElem>() {
-                            break;
-                        }
-                        let plain: String = next
-                            .plain_text()
-                            .chars()
-                            .filter(|c| !c.is_whitespace())
-                            .take(10)
-                            .collect();
-                        if !plain.is_empty() {
-                            found_text = Some(plain);
-                            break;
-                        }
+            for child in &seq.children {
+                Self::flatten_content_leaves(child, out);
+            }
+        } else if let Some(align) = content.to_packed::<typst::layout::AlignElem>() {
+            Self::flatten_content_leaves(&align.body, out);
+        } else {
+            out.push(content);
+        }
+    }
+
+    pub(crate) fn collect_pagebreak_following_texts(content: &Content, out: &mut Vec<String>) {
+        let mut leaves = Vec::new();
+        Self::flatten_content_leaves(content, &mut leaves);
+        for (i, leaf) in leaves.iter().enumerate() {
+            if leaf.is::<PagebreakElem>() {
+                let mut found_text = None;
+                for next in &leaves[i + 1..] {
+                    if next.is::<PagebreakElem>() {
+                        break;
                     }
-                    out.push(found_text.unwrap_or_else(|| "__PAGEBREAK_ANY__".to_string()));
-                } else {
-                    Self::collect_pagebreak_following_texts(child, out);
+                    let plain: String = next
+                        .plain_text()
+                        .chars()
+                        .filter(|c| !c.is_whitespace())
+                        .take(10)
+                        .collect();
+                    if !plain.is_empty() {
+                        found_text = Some(plain);
+                        break;
+                    }
                 }
+                out.push(found_text.unwrap_or_else(|| "__PAGEBREAK_ANY__".to_string()));
             }
         }
     }

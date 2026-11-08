@@ -37,13 +37,21 @@ impl<'a> ExtractorContext<'a> {
             return None;
         }
 
+        let col_w = self.current_column_width_pt();
+        let (count, gutter_pt) = self.active_columns;
         let (left_bound, right_bound) = if min_x >= self.content_left_pt - 8.0 {
-            (self.content_left_pt, self.content_right_pt)
+            if count > 1 && width <= col_w + 12.0 {
+                let col_idx = (((min_x - self.content_left_pt).max(0.0))
+                    / (col_w + gutter_pt).max(1.0))
+                .floor() as usize;
+                let col_idx = col_idx.min(count - 1);
+                let col_left = self.content_left_pt + col_idx as f64 * (col_w + gutter_pt);
+                (col_left, col_left + col_w)
+            } else {
+                (self.content_left_pt, self.content_right_pt)
+            }
         } else {
-            (
-                0.0,
-                (self.content_right_pt - self.content_left_pt).max(100.0),
-            )
+            (0.0, col_w.max(100.0))
         };
 
         let span_width = (right_bound - left_bound).max(100.0);

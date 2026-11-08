@@ -36,6 +36,8 @@ pub(crate) struct DocxBuilder<'a> {
     pub(crate) next_enum_num_id: usize,
     pub(crate) header_rel_id: Option<String>,
     pub(crate) footer_rel_id: Option<String>,
+    pub(crate) active_columns: (usize, f64),
+    pub(crate) has_scoped_columns: bool,
 }
 
 impl<'a> DocxBuilder<'a> {
@@ -53,6 +55,8 @@ impl<'a> DocxBuilder<'a> {
             next_enum_num_id: 2,
             header_rel_id: None,
             footer_rel_id: None,
+            active_columns: (1, 0.0),
+            has_scoped_columns: false,
         }
     }
 
@@ -65,7 +69,19 @@ impl<'a> DocxBuilder<'a> {
 
     pub(crate) fn content_width_dxa(&self) -> i64 {
         let ps = &self.ir.page_setup;
-        let w_pt = (ps.width_pt - ps.margin_left_pt - ps.margin_right_pt).max(200.0);
+        let full_w_pt = (ps.width_pt - ps.margin_left_pt - ps.margin_right_pt).max(200.0);
+        let (cols, gutter_pt) = if self.active_columns.0 > 1 {
+            self.active_columns
+        } else if ps.columns > 1 {
+            (ps.columns, 18.0)
+        } else {
+            (1, 0.0)
+        };
+        let w_pt = if cols > 1 {
+            ((full_w_pt - (cols - 1) as f64 * gutter_pt) / cols as f64).max(100.0)
+        } else {
+            full_w_pt
+        };
         pt_to_dxa(w_pt)
     }
 

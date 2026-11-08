@@ -200,13 +200,22 @@ impl<'a> ExtractorContext<'a> {
                                     closed.children.extend(gchildren);
                                 }
                             }
+                            let is_furniture = Self::is_page_furniture_elem(&closed.elem);
                             let node = TreeNode::Element {
                                 elem: closed.elem,
                                 loc: closed.loc,
                                 pos: closed.pos,
                                 children: closed.children,
                             };
-                            Self::push_node(root_nodes, stack, node);
+                            if is_furniture
+                                && !stack
+                                    .iter()
+                                    .any(|open| Self::is_page_furniture_elem(&open.elem))
+                            {
+                                root_nodes.push(node);
+                            } else {
+                                Self::push_node(root_nodes, stack, node);
+                            }
                         }
                     }
                 }
@@ -306,6 +315,27 @@ impl<'a> ExtractorContext<'a> {
         } else {
             root.push(node);
         }
+    }
+
+    pub(crate) fn is_page_furniture_elem(elem: &Content) -> bool {
+        if elem.is::<typst::model::FootnoteEntry>() {
+            return true;
+        }
+        if let Some(artifact) = elem.to_packed::<typst::pdf::ArtifactElem>() {
+            return matches!(
+                artifact.kind.get(typst::foundations::StyleChain::default()),
+                typst::pdf::ArtifactKind::Header
+                    | typst::pdf::ArtifactKind::Footer
+                    | typst::pdf::ArtifactKind::Page
+                    | typst::pdf::ArtifactKind::Background
+                    | typst::pdf::ArtifactKind::Watermark
+                    | typst::pdf::ArtifactKind::PageNumber
+                    | typst::pdf::ArtifactKind::LineNumber
+                    | typst::pdf::ArtifactKind::Bates
+                    | typst::pdf::ArtifactKind::PaginationOther
+            );
+        }
+        false
     }
 
     pub(crate) fn is_pdf_marker(node: &TreeNode, pred: impl Fn(&PdfMarkerTagKind) -> bool) -> bool {

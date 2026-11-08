@@ -3,9 +3,9 @@
 
 use typst::foundations::{Content, Smart, StyleChain};
 use typst::layout::{
-    GridCell, GridElem, GroupItem, Point, RotateElem, ScaleAmount, ScaleElem, Size,
+    GridCell, GroupItem, Point, RotateElem, ScaleAmount, ScaleElem, Size,
 };
-use typst::model::{EnumElem, ListElem, TableCell, TableElem};
+use typst::model::TableCell;
 use typst::pdf::ArtifactElem;
 use typst::syntax::Span;
 use typst::text::RawElem;
@@ -19,6 +19,7 @@ use crate::extract::ExtractorContext;
 use crate::extract::frame_tree::TreeNode;
 use crate::ir::{
     BlockNode, BordersIr, DashPatternIr, HAlignIr, ShapeIr, ShapeKindIr, SidesPtIr, StrokeIr,
+    TableCellIr, TableIr, TableRowIr, VAlignIr,
 };
 
 impl<'a> ExtractorContext<'a> {
@@ -389,8 +390,9 @@ impl<'a> ExtractorContext<'a> {
         inherited_align: HAlignIr,
     ) -> Option<BlockNode> {
         // Check if this group starts with background/border `Shape` items (e.g. `#block(fill: ..., stroke: ...)[...]`)
-        // AND is not a table/grid/cetz canvas.
-        if Self::contains_table_or_list_elem(children) || Self::is_cetz_group_nodes(children) {
+        // AND is not a raw table/grid cell or CeTZ canvas.
+        if Self::is_direct_table_or_code_container(children) || Self::is_cetz_group_nodes(children)
+        {
             return None;
         }
 
@@ -436,13 +438,79 @@ impl<'a> ExtractorContext<'a> {
             return None;
         }
 
+        let mut line_starts = Vec::new();
+        Self::collect_line_left_edges(&content_nodes, Point::zero(), &mut line_starts);
+        let inferred_pad = line_starts
+            .first()
+            .map(|(_, lx)| lx.clamp(4.0, 24.0))
+            .unwrap_or(6.0);
+        let v_pad = (inferred_pad * 0.65).clamp(4.0, 12.0);
+
+        let prev_inset = self.container_inset_pt;
+        self.container_inset_pt += 2.0 * inferred_pad;
         let body_blocks =
             self.extract_blocks_from_nodes(&content_nodes, list_level, inherited_align);
+        self.container_inset_pt = prev_inset;
+
         if body_blocks.is_empty() {
             return None;
         }
 
         let size = group.frame.size();
+        let width_pt = size.x.to_pt().max(40.0);
+        let inset = SidesPtIr {
+            top: v_pad,
+            bottom: v_pad,
+            left: inferred_pad,
+            right: inferred_pad,
+        };
+
+        // If the styled `#block(stroke: ..., fill: ...)[...]` contains tables, lists, enums,
+        // figures, rules, CeTZ canvases, or more than 3 blocks, represent it as a breakable
+        // 1-cell bordered `BlockNode::Table` so all inner blocks render natively and flow
+        // across columns/pages in Word!
+        let needs_table_container = body_blocks.iter().any(|b| {
+            !matches!(
+                b,
+                BlockNode::Paragraph { .. }
+                    | BlockNode::Heading { .. }
+                    | BlockNode::EquationBlock(_)
+                    | BlockNode::CodeBlock { .. }
+            )
+        }) || body_blocks.len() > 3;
+
+        if needs_table_container {
+            self.report.tables_count += 1;
+            return Some(BlockNode::Table(TableIr {
+                is_semantic_table: false,
+                col_widths_pt: vec![width_pt],
+                row_heights_pt: vec![0.0],
+                header_rows: 0,
+                rows: vec![TableRowIr {
+                    height_pt: None,
+                    is_header: false,
+                    cells: vec![TableCellIr {
+                        x: 0,
+                        y: 0,
+                        colspan: 1,
+                        rowspan: 1,
+                        vmerge: None,
+                        hmerged_covered: false,
+                        fill,
+                        borders: BordersIr::splat(stroke),
+                        inset,
+                        halign: inherited_align,
+                        valign: VAlignIr::Top,
+                        is_header_cell: false,
+                        blocks: body_blocks,
+                    }],
+                }],
+                align: inherited_align,
+                left_indent_pt: 0.0,
+                summary: Some("__styled_container__".to_string()),
+            }));
+        }
+
         let corner_radius_pt = bg_shapes.iter().find_map(|(_, s, _)| {
             if let Geometry::Curve(curve) = &s.geometry
                 && let Some(CurveItem::Move(p)) = curve.0.first()
@@ -457,30 +525,18 @@ impl<'a> ExtractorContext<'a> {
             }
             None
         });
-        let mut line_starts = Vec::new();
-        Self::collect_line_left_edges(&content_nodes, Point::zero(), &mut line_starts);
-        let inferred_pad = line_starts
-            .first()
-            .map(|(_, lx)| lx.clamp(4.0, 24.0))
-            .unwrap_or(8.0);
-        let v_pad = (inferred_pad * 0.65).clamp(4.0, 12.0);
 
         self.report.shapes_count += 1;
         Some(BlockNode::ShapeBlock(ShapeIr {
             kind: ShapeKindIr::Rect,
-            width_pt: size.x.to_pt().max(40.0),
+            width_pt,
             height_pt: size.y.to_pt().max(20.0),
             fill,
             fill_rule_even_odd: false,
             stroke: stroke.clone(),
             borders: BordersIr::splat(stroke),
             corner_radius_pt,
-            inset: SidesPtIr {
-                top: v_pad,
-                bottom: v_pad,
-                left: inferred_pad,
-                right: inferred_pad,
-            },
+            inset,
             rotation_deg: 0.0,
             scale_x: 1.0,
             scale_y: 1.0,
@@ -489,22 +545,12 @@ impl<'a> ExtractorContext<'a> {
         }))
     }
 
-    pub(crate) fn contains_table_or_list_elem(nodes: &[TreeNode]) -> bool {
+    pub(crate) fn is_direct_table_or_code_container(nodes: &[TreeNode]) -> bool {
         for node in nodes {
-            if let TreeNode::Element { elem, children, .. } = node {
-                if elem.is::<TableElem>()
-                    || elem.is::<GridElem>()
-                    || elem.is::<TableCell>()
-                    || elem.is::<GridCell>()
-                    || elem.is::<ListElem>()
-                    || elem.is::<EnumElem>()
-                    || elem.is::<RawElem>()
-                {
-                    return true;
-                }
-                if Self::contains_table_or_list_elem(children) {
-                    return true;
-                }
+            if let TreeNode::Element { elem, .. } = node
+                && (elem.is::<TableCell>() || elem.is::<GridCell>() || elem.is::<RawElem>())
+            {
+                return true;
             }
         }
         false

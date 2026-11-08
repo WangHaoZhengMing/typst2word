@@ -17,6 +17,7 @@ pub struct TextRunIr {
     pub overline: Option<StrokeIr>,
     pub color: Option<ColorHex>,
     pub highlight: Option<ColorHex>,
+    pub border: Option<StrokeIr>,
     pub script: ScriptKindIr,
     pub smallcaps: bool,
     pub is_code: bool,

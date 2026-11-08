@@ -47,7 +47,7 @@ impl<'a> ExtractorContext<'a> {
             0.0
         };
         let content_avail_w =
-            (self.content_right_pt - self.content_left_pt - left_indent_pt).max(180.0);
+            (self.current_column_width_pt() - left_indent_pt - self.container_inset_pt).max(120.0);
         let outer_group_w = Self::find_group_size(children).x.to_pt();
         let avail_w_pt = if outer_group_w > 40.0 {
             outer_group_w

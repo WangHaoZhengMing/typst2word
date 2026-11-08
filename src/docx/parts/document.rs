@@ -63,11 +63,32 @@ impl<'a> DocxBuilder<'a> {
         out.push_str(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#);
         let _ = write!(out, "<w:{tag} {}>", Self::xml_namespaces());
         self.render_blocks(blocks, &mut out);
+        if tag == "ftr" && self.ir.report.pages_count > 1 {
+            let total = self.ir.report.pages_count;
+            let static_pat = format!(r#"<w:t xml:space="preserve">1/{total}</w:t>"#);
+            if out.contains(&static_pat) {
+                let dyn_pat = format!(
+                    r#"<w:fldChar w:fldCharType="begin"/><w:instrText xml:space="preserve"> PAGE </w:instrText><w:fldChar w:fldCharType="separate"/><w:t>1</w:t><w:fldChar w:fldCharType="end"/><w:t xml:space="preserve">/{total}</w:t>"#
+                );
+                out = out.replace(&static_pat, &dyn_pat);
+            }
+        }
         let _ = write!(out, "</w:{tag}>");
         out
     }
 
     pub(crate) fn render_sect_pr(&self, out: &mut String) {
+        let ps = &self.ir.page_setup;
+        self.render_sect_pr_inner(ps.columns, 36.0, self.has_scoped_columns, out);
+    }
+
+    pub(crate) fn render_sect_pr_inner(
+        &self,
+        cols: usize,
+        gutter_pt: f64,
+        is_continuous: bool,
+        out: &mut String,
+    ) {
         let ps = &self.ir.page_setup;
         out.push_str("<w:sectPr>");
         if let Some(hid) = &self.header_rel_id {
@@ -75,6 +96,9 @@ impl<'a> DocxBuilder<'a> {
         }
         if let Some(fid) = &self.footer_rel_id {
             let _ = write!(out, r#"<w:footerReference w:type="default" r:id="{fid}"/>"#);
+        }
+        if is_continuous {
+            out.push_str(r#"<w:type w:val="continuous"/>"#);
         }
         let w_dxa = pt_to_dxa(ps.width_pt).max(1440);
         let h_dxa = pt_to_dxa(ps.height_pt).max(1440);
@@ -94,8 +118,11 @@ impl<'a> DocxBuilder<'a> {
             pt_to_dxa(ps.header_margin_pt),
             pt_to_dxa(ps.footer_margin_pt),
         );
-        if ps.columns > 1 {
-            let _ = write!(out, r#"<w:cols w:num="{}" w:space="720"/>"#, ps.columns);
+        if cols > 1 {
+            let space_dxa = pt_to_dxa(gutter_pt).max(120);
+            let _ = write!(out, r#"<w:cols w:num="{cols}" w:space="{space_dxa}"/>"#);
+        } else if self.has_scoped_columns {
+            out.push_str(r#"<w:cols w:space="720"/>"#);
         }
         out.push_str("</w:sectPr>");
     }

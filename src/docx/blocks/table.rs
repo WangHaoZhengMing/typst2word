@@ -12,6 +12,7 @@ impl<'a> DocxBuilder<'a> {
     // Table & Grid Rendering
     // =========================================================================
     pub(crate) fn render_table(&mut self, table: &TableIr, out: &mut String) {
+        let is_styled_container = table.summary.as_deref() == Some("__styled_container__");
         out.push_str("<w:tbl><w:tblPr>");
         Self::render_table_jc(table.align, out);
         if table.left_indent_pt > 0.5 && table.align == crate::ir::HAlignIr::Left {
@@ -24,7 +25,9 @@ impl<'a> DocxBuilder<'a> {
         } else {
             out.push_str(r#"<w:tblW w:w="5000" w:type="pct"/>"#);
         }
-        if let Some(summary) = &table.summary {
+        if let Some(summary) = &table.summary
+            && !is_styled_container
+        {
             let _ = write!(
                 out,
                 r#"<w:tblCaption w:val="{}"/><w:tblDescription w:val="{}"/>"#,
@@ -44,9 +47,13 @@ impl<'a> DocxBuilder<'a> {
         out.push_str("</w:tblGrid>");
 
         // Rows
-        let keep_rows_together = table.rows.len() <= 15;
+        let keep_rows_together = !is_styled_container && table.rows.len() <= 15;
         for row in &table.rows {
-            out.push_str("<w:tr><w:trPr><w:cantSplit/>");
+            if is_styled_container {
+                out.push_str("<w:tr><w:trPr>");
+            } else {
+                out.push_str("<w:tr><w:trPr><w:cantSplit/>");
+            }
             if row.is_header {
                 out.push_str("<w:tblHeader/>");
             }
@@ -135,11 +142,16 @@ impl<'a> DocxBuilder<'a> {
                     );
                 } else {
                     let mut cell_xml = String::new();
-                    self.render_table_cell_blocks(&cell.blocks, keep_rows_together, &mut cell_xml);
-                    if !cell_xml.contains("<w:p") {
+                    self.render_table_cell_blocks(
+                        &cell.blocks,
+                        keep_rows_together,
+                        is_styled_container,
+                        &mut cell_xml,
+                    );
+                    if !cell_xml.contains("<w:p") || !cell_xml.ends_with("</w:p>") {
                         let _ = write!(
                             cell_xml,
-                            r#"<w:p><w:pPr>{keep_next_xml}<w:spacing w:before="0" w:after="0" w:line="220" w:lineRule="auto"/></w:pPr></w:p>"#
+                            r#"<w:p><w:pPr>{keep_next_xml}<w:spacing w:before="0" w:after="0" w:line="20" w:lineRule="exact"/><w:rPr><w:sz w:val="2"/><w:szCs w:val="2"/></w:rPr></w:pPr></w:p>"#
                         );
                     }
                     out.push_str(&cell_xml);
@@ -158,6 +170,7 @@ impl<'a> DocxBuilder<'a> {
         &mut self,
         blocks: &[BlockNode],
         keep_next: bool,
+        is_styled_container: bool,
         out: &mut String,
     ) {
         let len = blocks.len();
@@ -174,11 +187,13 @@ impl<'a> DocxBuilder<'a> {
                 }
                 if idx + 1 == len {
                     cell_style.space_after_pt = 0.0;
-                } else {
+                } else if !is_styled_container {
                     cell_style.space_after_pt = cell_style.space_after_pt.min(2.0);
                 }
-                // Compact line spacing inside table/grid cells (~0.35em leading in Typst).
-                cell_style.line_spacing_pt = Some(2.0);
+                if !is_styled_container {
+                    // Compact line spacing inside table/grid cells (~0.35em leading in Typst).
+                    cell_style.line_spacing_pt = Some(2.0);
+                }
                 let mut para_xml = String::new();
                 self.render_paragraph(content, &cell_style, bookmark.as_deref(), &mut para_xml);
                 if keep_next {
