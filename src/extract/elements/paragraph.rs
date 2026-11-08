@@ -17,6 +17,7 @@ impl<'a> ExtractorContext<'a> {
         loc: Location,
         children: &[TreeNode],
         blocks: &mut Vec<BlockNode>,
+        list_level: usize,
         inherited_align: HAlignIr,
     ) {
         // Check if this paragraph is actually just a wrapper around a single CeTZ canvas or block shape!
@@ -60,11 +61,23 @@ impl<'a> ExtractorContext<'a> {
 
         let leading_pt = Self::resolve_length_pt(par.leading.get(chain), default_font_pt);
         let spacing_pt = Self::resolve_length_pt(par.spacing.get(chain), default_font_pt);
+        let plain_txt = Self::inlines_to_plain_text(&content);
+        let plain_no_ws: String = plain_txt.chars().filter(|c| !c.is_whitespace()).collect();
+        let ends_with_explicit_linebreak = !plain_no_ws.is_empty()
+            && self
+                .linebreak_preceding_texts
+                .iter()
+                .any(|sfx| plain_no_ws.ends_with(sfx));
+
         // Word's line spacing (`w:line`) already includes `par.leading` on every line of the
         // paragraph, so the additional paragraph-after gap needed to match Typst's inter-paragraph
         // distance (`1em + par.spacing`) is `par.spacing - par.leading` (or full `spacing_pt` for
         // large display-sized single-line paragraphs where `w:line` is clamped to 1.0x).
-        let space_after_pt = if base_font_pt > default_font_pt * 1.4 {
+        // When a paragraph is terminated by an explicit `linebreak()` (`\`) before a block/list,
+        // Typst only applies `par.leading` (no `par.spacing`), so `space_after_pt` is `0.0`.
+        let space_after_pt = if ends_with_explicit_linebreak {
+            0.0
+        } else if base_font_pt > default_font_pt * 1.4 {
             spacing_pt + 2.0
         } else {
             (spacing_pt - leading_pt).max(1.5)
@@ -87,6 +100,7 @@ impl<'a> ExtractorContext<'a> {
             base_align
         };
 
+        let mut left_indent_pt = 0.0;
         if matches!(align, HAlignIr::Left | HAlignIr::Justify)
             && first_line_indent_pt < 0.5
             && hanging_indent_pt < 0.5
@@ -97,12 +111,20 @@ impl<'a> ExtractorContext<'a> {
             } else if vis_hang > 2.0 {
                 hanging_indent_pt = vis_hang;
             }
+            if list_level == 0
+                && let Some(vis_left) = self.node_left_offset_in_column(children)
+                && vis_left > 2.0
+                && vis_left <= 48.0
+            {
+                left_indent_pt = vis_left;
+            }
         }
 
         let style = ParagraphStyleIr {
             align,
             first_line_indent_pt,
             hanging_indent_pt,
+            left_indent_pt,
             space_after_pt,
             line_spacing_pt: Some(leading_pt),
             ..Default::default()
@@ -119,6 +141,7 @@ impl<'a> ExtractorContext<'a> {
     pub(crate) fn infer_paragraph_line_indents(nodes: &[TreeNode]) -> (f64, f64) {
         let mut line_starts: Vec<(f64, f64)> = Vec::new();
         Self::collect_line_left_edges(nodes, Point::zero(), &mut line_starts);
+        line_starts.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
         if line_starts.len() < 2 {
             return (0.0, 0.0);
         }
@@ -126,8 +149,6 @@ impl<'a> ExtractorContext<'a> {
         let x2 = line_starts[1].1;
         if x1 - x2 > 3.0 && x1 - x2 < 72.0 {
             (x1 - x2, 0.0)
-        } else if x2 - x1 > 3.0 && x2 - x1 < 72.0 {
-            (0.0, x2 - x1)
         } else {
             (0.0, 0.0)
         }
@@ -164,17 +185,6 @@ impl<'a> ExtractorContext<'a> {
                         continue;
                     }
                     Self::collect_line_left_edges(children, offset, lines);
-                }
-                TreeNode::Shape { pos, shape, .. } => {
-                    let b = shape.geometry.bbox(None);
-                    let x = (offset.x + pos.x + b.min.x).to_pt();
-                    let y = (offset.y + pos.y + b.min.y).to_pt();
-                    if let Some(existing) = lines.iter_mut().find(|(ly, _)| (*ly - y).abs() < 6.0)
-                    {
-                        existing.1 = existing.1.min(x);
-                    } else {
-                        lines.push((y, x));
-                    }
                 }
                 _ => {}
             }

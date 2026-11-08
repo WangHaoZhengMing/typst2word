@@ -41,7 +41,7 @@ impl<'a> ExtractorContext<'a> {
         let (count, gutter_pt) = self.active_columns;
         let (left_bound, right_bound) = if min_x >= self.content_left_pt - 8.0 {
             if count > 1 && width <= col_w + 12.0 {
-                let col_idx = (((min_x - self.content_left_pt).max(0.0))
+                let col_idx = (((min_x - self.content_left_pt + 4.0).max(0.0))
                     / (col_w + gutter_pt).max(1.0))
                 .floor() as usize;
                 let col_idx = col_idx.min(count - 1);
@@ -56,18 +56,44 @@ impl<'a> ExtractorContext<'a> {
 
         let span_width = (right_bound - left_bound).max(100.0);
         let max_x = min_x + width;
-        let left_gap = (min_x - left_bound).max(0.0);
-        let right_gap = (right_bound - max_x).max(0.0);
+        let left_gap = min_x - left_bound;
+        let right_gap = right_bound - max_x;
 
         if left_gap <= 8.0 || width >= span_width * 0.85 {
             Some(HAlignIr::Left)
-        } else if left_gap > 45.0 && right_gap <= 8.0 {
+        } else if left_gap > 45.0 && (-2.0..=8.0).contains(&right_gap) {
             Some(HAlignIr::Right)
-        } else if left_gap > 12.0 && right_gap > 12.0 && (left_gap - right_gap).abs() <= 18.0 {
+        } else if left_gap > 12.0 && right_gap > 12.0 && (left_gap - right_gap).abs() <= 3.0 {
             Some(HAlignIr::Center)
         } else {
             None
         }
+    }
+
+    /// Measure the visual left offset of `nodes` relative to the active column's left edge
+    /// (captures `#pad(left: ...)` when not inside a bordered/inset table container).
+    pub(crate) fn node_left_offset_in_column(&self, nodes: &[TreeNode]) -> Option<f64> {
+        if self.container_inset_pt > 0.1 {
+            return None;
+        }
+        let (min_x, _min_y, width, _height) = Self::estimate_nodes_bbox(nodes);
+        if width <= 0.5 || !min_x.is_finite() {
+            return None;
+        }
+        let col_w = self.current_column_width_pt();
+        let (count, gutter_pt) = self.active_columns;
+        let left_bound = if min_x < self.content_left_pt - 4.0 {
+            0.0
+        } else if count > 1 && width <= col_w + 12.0 {
+            let col_idx = (((min_x - self.content_left_pt + 4.0).max(0.0))
+                / (col_w + gutter_pt).max(1.0))
+            .floor() as usize;
+            let col_idx = col_idx.min(count - 1);
+            self.content_left_pt + col_idx as f64 * (col_w + gutter_pt)
+        } else {
+            self.content_left_pt
+        };
+        Some((min_x - left_bound).max(0.0))
     }
 
     pub(crate) fn find_explicit_align_elem(nodes: &[TreeNode]) -> Option<HAlignIr> {

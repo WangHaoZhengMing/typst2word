@@ -77,36 +77,72 @@ impl<'a> ExtractorContext<'a> {
                     unreachable!()
                 };
                 if let BlockNode::Table(a) = &mut blocks[i - 1] {
-                    let mut b_blocks = std::mem::take(&mut b.rows[0].cells[0].blocks);
-                    let a_blocks = &mut a.rows[0].cells[0].blocks;
-                    if let (
-                        Some(BlockNode::Enum {
-                            items: a_items,
-                            level: a_lvl,
-                            ..
-                        }),
-                        Some(BlockNode::Enum { level: b_lvl, .. }),
-                    ) = (a_blocks.last_mut(), b_blocks.first())
-                        && *a_lvl == *b_lvl
-                    {
-                        if let BlockNode::Enum { items: b_items, .. } = b_blocks.remove(0) {
-                            a_items.extend(b_items);
+                    let b_cell = &mut b.rows[0].cells[0];
+                    let mut b_blocks = std::mem::take(&mut b_cell.blocks);
+                    let starts_with_single_list_item = matches!(
+                        b_blocks.first(),
+                        Some(BlockNode::List { items, .. }) if items.len() == 1
+                    );
+                    if starts_with_single_list_item && b_blocks.len() > 1 {
+                        let a_inset_l = a.rows[0].cells[0].inset.left;
+                        let a_inset_r = a.rows[0].cells[0].inset.right;
+                        a.rows[0].cells[0].inset.bottom = 16.0;
+                        let first_blk = b_blocks.remove(0);
+                        let mut row1_cell = b_cell.clone();
+                        row1_cell.borders.bottom = None;
+                        row1_cell.inset.top = 1.5;
+                        row1_cell.inset.bottom = 0.0;
+                        row1_cell.inset.left = a_inset_l;
+                        row1_cell.inset.right = a_inset_r;
+                        row1_cell.blocks = vec![first_blk];
+                        let mut row2_cell = b_cell.clone();
+                        row2_cell.borders.top = None;
+                        row2_cell.inset.top = 0.0;
+                        row2_cell.inset.bottom += 11.0;
+                        row2_cell.inset.left = a_inset_l;
+                        row2_cell.inset.right = a_inset_r;
+                        row2_cell.blocks = b_blocks;
+                        a.rows.push(crate::ir::TableRowIr {
+                            height_pt: Some(1.0),
+                            is_header: false,
+                            cells: vec![row1_cell],
+                        });
+                        a.rows.push(crate::ir::TableRowIr {
+                            height_pt: None,
+                            is_header: false,
+                            cells: vec![row2_cell],
+                        });
+                    } else {
+                        let a_blocks = &mut a.rows[0].cells[0].blocks;
+                        if let (
+                            Some(BlockNode::Enum {
+                                items: a_items,
+                                level: a_lvl,
+                                ..
+                            }),
+                            Some(BlockNode::Enum { level: b_lvl, .. }),
+                        ) = (a_blocks.last_mut(), b_blocks.first())
+                            && *a_lvl == *b_lvl
+                        {
+                            if let BlockNode::Enum { items: b_items, .. } = b_blocks.remove(0) {
+                                a_items.extend(b_items);
+                            }
+                        } else if let (
+                            Some(BlockNode::List {
+                                items: a_items,
+                                level: a_lvl,
+                                ..
+                            }),
+                            Some(BlockNode::List { level: b_lvl, .. }),
+                        ) = (a_blocks.last_mut(), b_blocks.first())
+                            && *a_lvl == *b_lvl
+                        {
+                            if let BlockNode::List { items: b_items, .. } = b_blocks.remove(0) {
+                                a_items.extend(b_items);
+                            }
                         }
-                    } else if let (
-                        Some(BlockNode::List {
-                            items: a_items,
-                            level: a_lvl,
-                            ..
-                        }),
-                        Some(BlockNode::List { level: b_lvl, .. }),
-                    ) = (a_blocks.last_mut(), b_blocks.first())
-                        && *a_lvl == *b_lvl
-                    {
-                        if let BlockNode::List { items: b_items, .. } = b_blocks.remove(0) {
-                            a_items.extend(b_items);
-                        }
+                        a_blocks.extend(b_blocks);
                     }
-                    a_blocks.extend(b_blocks);
                 }
             } else {
                 i += 1;
@@ -175,6 +211,7 @@ impl<'a> ExtractorContext<'a> {
             &mut last_y,
             &mut last_x_end,
         );
+        Self::merge_adjacent_text_runs(&mut inlines);
         stray.clear();
         if !inlines.is_empty() {
             self.report.paragraphs_count += 1;
@@ -232,7 +269,52 @@ impl<'a> ExtractorContext<'a> {
                     return;
                 }
 
-                let inner = self.extract_blocks_from_nodes(children, list_level, inherited_align);
+                let mut inner =
+                    self.extract_blocks_from_nodes(children, list_level, inherited_align);
+                if self.container_inset_pt <= 0.1 && list_level == 0 {
+                    let gx = pos.x.to_pt();
+                    let gw = group.frame.size().x.to_pt();
+                    let col_w = self.current_column_width_pt();
+                    let (count, gutter_pt) = self.active_columns;
+                    let left_bound = if gx < self.content_left_pt - 4.0 {
+                        0.0
+                    } else if count > 1 && gw <= col_w + 12.0 {
+                        let col_idx = (((gx - self.content_left_pt + 4.0).max(0.0))
+                            / (col_w + gutter_pt).max(1.0))
+                        .floor() as usize;
+                        self.content_left_pt
+                            + (col_idx.min(count - 1) as f64) * (col_w + gutter_pt)
+                    } else {
+                        self.content_left_pt
+                    };
+                    let group_left_offset = gx - left_bound;
+                    if (2.0..=48.0).contains(&group_left_offset)
+                        && gw > 20.0
+                        && gw < col_w - 2.0
+                    {
+                        for b in &mut inner {
+                            match b {
+                                BlockNode::Paragraph { style, .. } => {
+                                    if style.left_indent_pt < group_left_offset {
+                                        style.left_indent_pt = group_left_offset;
+                                    }
+                                }
+                                BlockNode::List { indent_pt, .. }
+                                | BlockNode::Enum { indent_pt, .. } => {
+                                    if *indent_pt < group_left_offset {
+                                        *indent_pt = group_left_offset;
+                                    }
+                                }
+                                BlockNode::Table(t) => {
+                                    if t.left_indent_pt < group_left_offset {
+                                        t.left_indent_pt = group_left_offset;
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
                 blocks.extend(inner);
             }
             TreeNode::Shape { shape, span, pos } => {
@@ -361,7 +443,7 @@ impl<'a> ExtractorContext<'a> {
 
         // 6. Paragraph (`ParElem`).
         if let Some(par) = elem.to_packed::<ParElem>() {
-            self.extract_paragraph_block(par, loc, children, blocks, inherited_align);
+            self.extract_paragraph_block(par, loc, children, blocks, list_level, inherited_align);
             return;
         }
 
@@ -634,6 +716,36 @@ impl<'a> ExtractorContext<'a> {
                 al.alignment.get(StyleChain::default()),
             ));
             let child_blocks = self.extract_blocks_from_nodes(children, list_level, ha);
+            blocks.extend(child_blocks);
+            return;
+        }
+
+        // 20a. Explicit `PadElem` container (`#pad(left: 2em)[...]`): propagate horizontal padding.
+        if let Some(pad) = elem.to_packed::<typst::layout::PadElem>() {
+            let chain = self.style_chain();
+            let base_font_pt =
+                Self::resolve_length_pt(chain.get(typst::text::TextElem::size).0, 11.0);
+            let pad_left_pt = Self::resolve_length_pt(pad.left.get(chain).abs, base_font_pt);
+            let pad_right_pt = Self::resolve_length_pt(pad.right.get(chain).abs, base_font_pt);
+            let mut child_blocks =
+                self.extract_blocks_from_nodes(children, list_level, inherited_align);
+            if pad_left_pt > 0.1 || pad_right_pt > 0.1 {
+                for b in &mut child_blocks {
+                    match b {
+                        BlockNode::Paragraph { style, .. } => {
+                            style.left_indent_pt += pad_left_pt;
+                            style.right_indent_pt += pad_right_pt;
+                        }
+                        BlockNode::List { indent_pt, .. } | BlockNode::Enum { indent_pt, .. } => {
+                            *indent_pt += pad_left_pt;
+                        }
+                        BlockNode::Table(t) => {
+                            t.left_indent_pt += pad_left_pt;
+                        }
+                        _ => {}
+                    }
+                }
+            }
             blocks.extend(child_blocks);
             return;
         }

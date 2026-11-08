@@ -175,6 +175,10 @@ func normalizeForMatch(_ s: String) -> String {
     for ch in s.unicodeScalars {
         if CharacterSet.whitespacesAndNewlines.contains(ch) { continue }
         if ch == "_" || ch == "\u{200B}" || ch == "\u{00A0}" { continue }
+        if ch == "‣" || ch == "◦" || ch == "▪" {
+            out.unicodeScalars.append("•")
+            continue
+        }
         out.unicodeScalars.append(ch)
     }
     return out
@@ -200,12 +204,11 @@ func extractPageSpans(page: PDFPage, pageNum: Int, bitmap: PageBitmap) -> [SpanB
         let left = Double(b.minX)
         let right = Double(b.maxX)
 
-        // Include bottom + 2.0pt when scanning horizontal gaps so fill-in-the-blank underlines
-        // (`#box(stroke: (bottom: 0.5pt))`) keep the sentence connected as one span, while
-        // true multi-column gaps (`#grid` options or 2-column layouts) still split cleanly.
+        // Exclude table borders just outside the glyph box when splitting columns;
+        // fill-in-the-blank underlines are re-bridged below via `connectedByUnderline`.
         let h = bottom - top
-        let gapScanTop = h > 14.0 ? top + 1.5 : top
-        let gapScanBot = bottom + 2.0
+        let gapScanTop = h > 14.0 ? top + 1.5 : top + 0.5
+        let gapScanBot = max(gapScanTop + 2.0, bottom - 1.5)
 
         let xSegs = bitmap.splitHorizontalInkSegments(
             leftPt: left,
@@ -254,16 +257,28 @@ func extractPageSpans(page: PDFPage, pageNum: Int, bitmap: PageBitmap) -> [SpanB
             }
             var connectedByUnderline = false
             if abs(midLast - midCur) <= 4.5 && gapX > 22.0 && gapX <= 120.0 {
-                // Check if there is an underline bridging `last.right .. sp.left` near `bottom`
-                let bridgeSegs = bitmap.splitHorizontalInkSegments(
-                    leftPt: last.left,
-                    topPt: min(last.top, sp.top),
-                    rightPt: sp.right,
-                    bottomPt: max(last.bottom, sp.bottom) + 2.5,
-                    minGapPt: 26.0
+                // Ensure no vertical table border crosses the upper half of the gap
+                let upperInk = bitmap.refineInkBounds(
+                    leftPt: last.right + 2.0,
+                    topPt: min(last.top, sp.top) + 1.0,
+                    rightPt: sp.left - 2.0,
+                    bottomPt: (midLast + midCur) * 0.5
                 )
-                if bridgeSegs.count == 1 {
-                    connectedByUnderline = true
+                if upperInk == nil {
+                    // Check if there is a continuous underline bridging `last.right .. sp.left` near `bottom`
+                    let bridgeSegs = bitmap.splitHorizontalInkSegments(
+                        leftPt: max(0.0, last.right - 2.0),
+                        topPt: min(last.top, sp.top),
+                        rightPt: sp.left + 2.0,
+                        bottomPt: max(last.bottom, sp.bottom) + 2.5,
+                        minGapPt: 6.0
+                    )
+                    if bridgeSegs.count == 1 {
+                        let (bL, bR) = bridgeSegs[0]
+                        if bL <= last.right + 4.0 && bR >= sp.left - 4.0 {
+                            connectedByUnderline = true
+                        }
+                    }
                 }
             }
             if abs(midLast - midCur) <= 4.5 && ((gapX >= -4.0 && gapX <= 22.0) || connectedByUnderline) {
@@ -316,9 +331,9 @@ func extractPageSpans(page: PDFPage, pageNum: Int, bitmap: PageBitmap) -> [SpanB
 func charSimilarity(_ a: String, _ b: String) -> Double {
     if a == b { return 1.0 }
     if a.isEmpty || b.isEmpty { return 0.0 }
-    if a.contains(b) || b.contains(a) {
-        let minLen = Double(min(a.count, b.count))
-        let maxLen = Double(max(a.count, b.count))
+    let minLen = Double(min(a.count, b.count))
+    let maxLen = Double(max(a.count, b.count))
+    if (a.contains(b) || b.contains(a)) && minLen >= 2.0 && (minLen / maxLen) >= 0.35 {
         return 0.65 + 0.35 * (minLen / maxLen)
     }
     let setA = Set(a)

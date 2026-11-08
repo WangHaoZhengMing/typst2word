@@ -25,6 +25,27 @@ use crate::ir::BlockNode;
 impl<'a> DocxBuilder<'a> {
     pub(crate) fn render_blocks(&mut self, blocks: &[BlockNode], out: &mut String) {
         for (idx, block) in blocks.iter().enumerate() {
+            if let BlockNode::Heading {
+                level,
+                numbering,
+                content,
+                bookmark,
+                align,
+            } = block
+                && matches!(blocks.get(idx + 1), Some(BlockNode::Paragraph { .. }))
+            {
+                self.render_heading_inner(
+                    *level,
+                    numbering.as_deref(),
+                    content,
+                    bookmark.as_deref(),
+                    *align,
+                    false,
+                    true,
+                    out,
+                );
+                continue;
+            }
             self.render_block(block, out);
             // If two Word `<w:tbl>` blocks (e.g. two tables or numbered equations) are directly
             // adjacent without an intervening `<w:p>`, Word merges them into a single table!
@@ -206,7 +227,30 @@ impl<'a> DocxBuilder<'a> {
                 // 2. Render the multi-column body with active column width.
                 let prev_cols = self.active_columns;
                 self.active_columns = (*count, *gutter_pt);
-                self.render_blocks(body, out);
+                if let Some(BlockNode::Heading {
+                    level,
+                    numbering,
+                    content,
+                    bookmark,
+                    align,
+                }) = body.first()
+                {
+                    let compact_after =
+                        matches!(body.get(1), Some(BlockNode::Paragraph { .. }));
+                    self.render_heading_inner(
+                        *level,
+                        numbering.as_deref(),
+                        content,
+                        bookmark.as_deref(),
+                        *align,
+                        true,
+                        compact_after,
+                        out,
+                    );
+                    self.render_blocks(&body[1..], out);
+                } else {
+                    self.render_blocks(body, out);
+                }
                 self.active_columns = prev_cols;
 
                 // 3. End the multi-column section with a continuous section break.

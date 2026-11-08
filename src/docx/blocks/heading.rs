@@ -30,6 +30,21 @@ impl<'a> DocxBuilder<'a> {
         align: HAlignIr,
         out: &mut String,
     ) {
+        self.render_heading_inner(level, numbering, content, bookmark, align, false, false, out);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn render_heading_inner(
+        &mut self,
+        level: usize,
+        numbering: Option<&str>,
+        content: &[InlineNode],
+        bookmark: Option<&str>,
+        align: HAlignIr,
+        collapse_before: bool,
+        compact_after: bool,
+        out: &mut String,
+    ) {
         let style_id = format!("Heading{}", (level).clamp(1, 6));
         let default_sz = match level {
             1 => 15.4,
@@ -51,12 +66,22 @@ impl<'a> DocxBuilder<'a> {
         let _ = write!(out, r#"<w:pStyle w:val="{style_id}"/>"#);
         if level >= 2 && sz_pt <= 13.0 {
             let line_dxa = Self::compute_line_spacing_dxa(content, Some(0.65 * sz_pt));
-            let before_dxa = crate::units::pt_to_dxa(sz_pt * 0.567);
-            let after_dxa = crate::units::pt_to_dxa(sz_pt * 0.483);
+            let before_dxa = if collapse_before {
+                0
+            } else {
+                crate::units::pt_to_dxa(sz_pt * 0.567)
+            };
+            let after_dxa = if compact_after {
+                20
+            } else {
+                crate::units::pt_to_dxa(sz_pt * 0.483)
+            };
             let _ = write!(
                 out,
                 r#"<w:spacing w:before="{before_dxa}" w:after="{after_dxa}" w:line="{line_dxa}" w:lineRule="auto"/>"#
             );
+        } else if collapse_before {
+            out.push_str(r#"<w:spacing w:before="0"/>"#);
         }
         if align != HAlignIr::Left {
             Self::render_jc(align, out);

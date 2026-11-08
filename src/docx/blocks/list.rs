@@ -18,11 +18,47 @@ impl<'a> DocxBuilder<'a> {
         hanging_pt: f64,
         out: &mut String,
     ) {
+        self.render_list_with_trailing_gap(
+            items,
+            tight,
+            level,
+            spacing_pt,
+            indent_pt,
+            hanging_pt,
+            None,
+            out,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn render_list_with_trailing_gap(
+        &mut self,
+        items: &[ListItemIr],
+        tight: bool,
+        level: usize,
+        spacing_pt: Option<f64>,
+        indent_pt: f64,
+        hanging_pt: f64,
+        trailing_after_dxa: Option<i64>,
+        out: &mut String,
+    ) {
         let ilvl = (level).min(8);
         let num_items = items.len();
         let item_gap_dxa = Self::compute_list_item_gap_dxa(tight, spacing_pt);
         for (idx, item) in items.iter().enumerate() {
-            let is_last_top = level == 0 && idx + 1 == num_items;
+            let is_last_in_list = idx + 1 == num_items;
+            let is_last_top = level == 0 && is_last_in_list;
+            let item_end_after_dxa = if is_last_in_list {
+                trailing_after_dxa.unwrap_or_else(|| {
+                    if is_last_top {
+                        item_gap_dxa.max(40)
+                    } else {
+                        item_gap_dxa
+                    }
+                })
+            } else {
+                item_gap_dxa
+            };
             let prev_ended_with_table = idx > 0
                 && matches!(
                     items[idx - 1].blocks.last(),
@@ -33,13 +69,20 @@ impl<'a> DocxBuilder<'a> {
             } else {
                 0
             };
+            let bullet_hint = match item.marker.as_str() {
+                "•" => Some("__bul0__"),
+                "‣" => Some("__bul1__"),
+                "–" => Some("__bul2__"),
+                _ => None,
+            };
             self.render_list_or_enum_item_blocks(
                 &item.blocks,
                 1, // numId 1 = bullet list
                 ilvl,
-                None,
+                bullet_hint,
                 tight,
                 item_gap_dxa,
+                item_end_after_dxa,
                 before_dxa,
                 indent_pt,
                 hanging_pt,
@@ -60,13 +103,49 @@ impl<'a> DocxBuilder<'a> {
         hanging_pt: f64,
         out: &mut String,
     ) {
+        self.render_enum_with_trailing_gap(
+            items,
+            tight,
+            level,
+            spacing_pt,
+            indent_pt,
+            hanging_pt,
+            None,
+            out,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn render_enum_with_trailing_gap(
+        &mut self,
+        items: &[EnumItemIr],
+        tight: bool,
+        level: usize,
+        spacing_pt: Option<f64>,
+        indent_pt: f64,
+        hanging_pt: f64,
+        trailing_after_dxa: Option<i64>,
+        out: &mut String,
+    ) {
         let ilvl = (level).min(8);
         let start_val = items.first().and_then(|it| it.number).unwrap_or(1);
         let num_id = self.alloc_enum_num_id(ilvl, start_val);
         let num_items = items.len();
         let item_gap_dxa = Self::compute_list_item_gap_dxa(tight, spacing_pt);
         for (idx, item) in items.iter().enumerate() {
-            let is_last_top = level == 0 && idx + 1 == num_items;
+            let is_last_in_list = idx + 1 == num_items;
+            let is_last_top = level == 0 && is_last_in_list;
+            let item_end_after_dxa = if is_last_in_list {
+                trailing_after_dxa.unwrap_or_else(|| {
+                    if is_last_top {
+                        item_gap_dxa.max(40)
+                    } else {
+                        item_gap_dxa
+                    }
+                })
+            } else {
+                item_gap_dxa
+            };
             let prev_ended_with_table = idx > 0
                 && matches!(
                     items[idx - 1].blocks.last(),
@@ -74,6 +153,8 @@ impl<'a> DocxBuilder<'a> {
                 );
             let before_dxa = if prev_ended_with_table && item_gap_dxa > 0 {
                 item_gap_dxa + 64
+            } else if idx == 0 && start_val > 1 {
+                item_gap_dxa.max(180)
             } else {
                 0
             };
@@ -89,6 +170,7 @@ impl<'a> DocxBuilder<'a> {
                 custom_prefix,
                 tight,
                 item_gap_dxa,
+                item_end_after_dxa,
                 before_dxa,
                 indent_pt,
                 hanging_pt,
@@ -165,20 +247,22 @@ impl<'a> DocxBuilder<'a> {
         custom_prefix: Option<&str>,
         tight: bool,
         item_gap_dxa: i64,
+        item_end_after_dxa: i64,
         before_dxa: i64,
         indent_pt: f64,
         hanging_pt: f64,
         is_last_top: bool,
         out: &mut String,
     ) {
-        let has_nested_list = blocks
-            .iter()
-            .skip(1)
-            .any(|b| matches!(b, BlockNode::List { .. } | BlockNode::Enum { .. }));
         let followed_by_grid_table = matches!(
             blocks.get(1),
             Some(BlockNode::Table(t)) if !t.is_semantic_table
         );
+        let followed_by_tight_list = matches!(
+            blocks.get(1),
+            Some(BlockNode::List { tight: true, .. } | BlockNode::Enum { tight: true, .. })
+        );
+        let followed_by_paragraph = matches!(blocks.get(1), Some(BlockNode::Paragraph { .. }));
         let first_line_gap_dxa = match blocks.first() {
             Some(BlockNode::Paragraph { style, .. }) => {
                 let pt = style.line_spacing_pt.unwrap_or(style.space_after_pt).max(4.0);
@@ -189,23 +273,27 @@ impl<'a> DocxBuilder<'a> {
         let after_dxa = if followed_by_grid_table {
             first_line_gap_dxa
         } else if blocks.len() > 1 {
-            10
-        } else if is_last_top && !has_nested_list {
-            40
-        } else if !has_nested_list {
-            item_gap_dxa
-        } else if tight {
-            0
+            if followed_by_paragraph {
+                item_gap_dxa.max(132)
+            } else if followed_by_tight_list || tight {
+                0
+            } else {
+                10
+            }
         } else {
-            15
+            item_end_after_dxa
         };
         let hanging_dxa = if hanging_pt > 1.0 {
-            crate::units::pt_to_dxa(hanging_pt).max(260)
+            crate::units::pt_to_dxa(hanging_pt).max(180)
         } else {
             380
         };
         let outer_indent_dxa = crate::units::pt_to_dxa(indent_pt).max(0);
-        let indent_left = (outer_indent_dxa + hanging_dxa * (ilvl as i64 + 1)).max(0) as usize;
+        let indent_left = if indent_pt > 0.1 || ilvl == 0 {
+            (outer_indent_dxa + hanging_dxa).max(0) as usize
+        } else {
+            (outer_indent_dxa + hanging_dxa * (ilvl as i64 + 1)).max(0) as usize
+        };
         if blocks.is_empty() {
             let _ = write!(
                 out,
@@ -231,13 +319,21 @@ impl<'a> DocxBuilder<'a> {
                     } else {
                         format!(r#"<w:tabs><w:tab w:val="num" w:pos="{indent_left}"/></w:tabs>"#)
                     };
-                    let keep_next_xml = if followed_by_grid_table {
-                        "<w:keepNext/>"
+                    let keep_next_xml = if followed_by_grid_table
+                        && matches!(blocks.get(1), Some(BlockNode::Table(t)) if t.rows.len() <= 4)
+                    {
+                        "<w:keepNext/><w:keepLines/>"
                     } else {
-                        ""
+                        "<w:keepLines/>"
+                    };
+                    let (eff_prefix, num_ilvl) = match custom_prefix {
+                        Some("__bul0__") => (None, 0usize),
+                        Some("__bul1__") => (None, 1usize),
+                        Some("__bul2__") => (None, 2usize),
+                        other => (other, ilvl),
                     };
                     out.push_str("<w:p><w:pPr>");
-                    if let Some(prefix) = custom_prefix {
+                    if let Some(prefix) = eff_prefix {
                         let _ = write!(
                             out,
                             r#"{keep_next_xml}<w:spacing w:before="{before_dxa}" w:after="{after_dxa}" w:line="{line_dxa}" w:lineRule="auto"/><w:ind w:left="{indent_left}" w:hanging="{hanging_dxa}"/>{tabs_xml}</w:pPr>"#
@@ -258,7 +354,7 @@ impl<'a> DocxBuilder<'a> {
                     } else {
                         let _ = write!(
                             out,
-                            r#"{keep_next_xml}<w:numPr><w:ilvl w:val="{ilvl}"/><w:numId w:val="{num_id}"/></w:numPr>{tabs_xml}<w:spacing w:before="{before_dxa}" w:after="{after_dxa}" w:line="{line_dxa}" w:lineRule="auto"/><w:ind w:left="{indent_left}" w:hanging="{hanging_dxa}"/></w:pPr>"#
+                            r#"{keep_next_xml}<w:numPr><w:ilvl w:val="{num_ilvl}"/><w:numId w:val="{num_id}"/></w:numPr>{tabs_xml}<w:spacing w:before="{before_dxa}" w:after="{after_dxa}" w:line="{line_dxa}" w:lineRule="auto"/><w:ind w:left="{indent_left}" w:hanging="{hanging_dxa}"/></w:pPr>"#
                         );
                         let bm_id = bookmark
                             .as_ref()
@@ -278,6 +374,10 @@ impl<'a> DocxBuilder<'a> {
                     let mut cont_style = style.clone();
                     if cont_style.left_indent_pt < 1.0 {
                         cont_style.left_indent_pt = indent_left as f64 / 20.0;
+                    }
+                    if idx + 1 == blocks.len() && !tight {
+                        cont_style.space_after_pt =
+                            cont_style.space_after_pt.max(item_end_after_dxa as f64 / 20.0);
                     }
                     self.render_paragraph(content, &cont_style, bookmark.as_deref(), out);
                 }
@@ -335,6 +435,94 @@ impl<'a> DocxBuilder<'a> {
                         }
                     }
                     self.render_table(&adjusted, out);
+                }
+                BlockNode::List {
+                    items: child_items,
+                    tight: child_tight,
+                    level: child_level,
+                    spacing_pt: child_spacing_pt,
+                    indent_pt: child_indent_pt,
+                    hanging_pt: child_hanging_pt,
+                } => {
+                    let child_trailing = if idx + 1 == blocks.len() {
+                        Some(item_end_after_dxa)
+                    } else if !tight {
+                        Some(item_gap_dxa.max(150))
+                    } else {
+                        None
+                    };
+                    let eff_child_indent_pt = *child_indent_pt + (indent_left as f64 / 20.0);
+                    self.render_list_with_trailing_gap(
+                        child_items,
+                        *child_tight,
+                        *child_level,
+                        *child_spacing_pt,
+                        eff_child_indent_pt,
+                        *child_hanging_pt,
+                        child_trailing,
+                        out,
+                    );
+                }
+                BlockNode::Enum {
+                    items: child_items,
+                    tight: child_tight,
+                    level: child_level,
+                    spacing_pt: child_spacing_pt,
+                    indent_pt: child_indent_pt,
+                    hanging_pt: child_hanging_pt,
+                } => {
+                    let child_trailing = if idx + 1 == blocks.len() {
+                        Some(item_end_after_dxa)
+                    } else if !tight {
+                        Some(item_gap_dxa.max(150))
+                    } else {
+                        None
+                    };
+                    let eff_child_indent_pt = *child_indent_pt + (indent_left as f64 / 20.0);
+                    self.render_enum_with_trailing_gap(
+                        child_items,
+                        *child_tight,
+                        *child_level,
+                        *child_spacing_pt,
+                        eff_child_indent_pt,
+                        *child_hanging_pt,
+                        child_trailing,
+                        out,
+                    );
+                }
+                BlockNode::EquationBlock(eq) => {
+                    let mut eq_xml = String::new();
+                    self.render_equation_block(eq, &mut eq_xml);
+                    eq_xml = eq_xml.replace(
+                        r#"<w:spacing w:before="80" w:after="80"/>"#,
+                        r#"<w:spacing w:before="110" w:after="210"/>"#,
+                    );
+                    if indent_left > 0 {
+                        let ind_tag = format!(r#"<w:pPr><w:ind w:left="{indent_left}"/>"#);
+                        eq_xml = eq_xml.replacen("<w:pPr>", &ind_tag, 1);
+                    }
+                    out.push_str(&eq_xml);
+                }
+                BlockNode::Figure {
+                    body,
+                    caption,
+                    caption_top,
+                    bookmark,
+                    ..
+                } => {
+                    let mut fig_xml = String::new();
+                    self.render_figure_indented(
+                        body,
+                        caption.as_deref(),
+                        *caption_top,
+                        bookmark.as_deref(),
+                        indent_left,
+                        &mut fig_xml,
+                    );
+                    if idx + 1 == blocks.len() && !tight {
+                        fig_xml = fig_xml.replace(r#"w:after="60""#, r#"w:after="180""#);
+                    }
+                    out.push_str(&fig_xml);
                 }
                 other => {
                     self.render_block(other, out);

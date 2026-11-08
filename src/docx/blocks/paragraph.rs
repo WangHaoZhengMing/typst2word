@@ -42,7 +42,12 @@ impl<'a> DocxBuilder<'a> {
         let first_dxa = pt_to_dxa(style.first_line_indent_pt).max(0);
         let hang_dxa = pt_to_dxa(style.hanging_indent_pt).max(0);
         if left_dxa > 0 || right_dxa > 0 || first_dxa > 0 || hang_dxa > 0 {
-            let mut ind = format!(r#"<w:ind w:left="{left_dxa}" w:right="{right_dxa}""#);
+            let eff_left_dxa = if hang_dxa > 0 {
+                left_dxa + hang_dxa
+            } else {
+                left_dxa
+            };
+            let mut ind = format!(r#"<w:ind w:left="{eff_left_dxa}" w:right="{right_dxa}""#);
             if hang_dxa > 0 {
                 let _ = write!(ind, r#" w:hanging="{hang_dxa}""#);
             } else if first_dxa > 0 {
@@ -76,6 +81,9 @@ impl<'a> DocxBuilder<'a> {
         let has_inline_eq = content
             .iter()
             .any(|inl| matches!(inl, InlineNode::EquationInline(_)));
+        if has_inline_eq && !content.iter().any(|inl| matches!(inl, InlineNode::Text(_))) {
+            return 276;
+        }
         if let Some(ls_pt) = line_spacing_pt {
             let ratio = (ls_pt / base_font_pt).clamp(0.1, 2.0);
             if is_cjk && ls_pt > 3.5 {
@@ -83,9 +91,14 @@ impl<'a> DocxBuilder<'a> {
                     return 240;
                 }
                 // In Word, CJK fonts (`PingFang SC`, `Songti SC`, `Heiti SC`) have a 1.0x (`w:line="240"`)
-                // line height of ~`1.38 * font_size_pt`, whereas Typst's line height is
-                // `(0.95 + ratio) * font_size_pt`.
-                ((240.0 * (0.95 + ratio) / 1.38).round() as i64).clamp(240, 720)
+                // line height of ~`1.38 * font_size_pt`, whereas pure-ASCII runs mapped to `Arial`
+                // have a 1.0x line height of ~`1.15 * font_size_pt`.
+                let metric_div = if Self::content_has_cjk_chars(content) {
+                    1.38
+                } else {
+                    1.15
+                };
+                ((240.0 * (0.95 + ratio) / metric_div).round() as i64).clamp(240, 720)
             } else if ratio <= 1.05 {
                 (212.0 + ratio * 24.0).round() as i64
             } else {
@@ -96,6 +109,17 @@ impl<'a> DocxBuilder<'a> {
         } else {
             242
         }
+    }
+
+    pub(crate) fn content_has_cjk_chars(content: &[InlineNode]) -> bool {
+        content.iter().any(|inl| match inl {
+            InlineNode::Text(r) => r.text.chars().any(|c| {
+                ('\u{4E00}'..='\u{9FFF}').contains(&c)
+                    || ('\u{3000}'..='\u{303F}').contains(&c)
+                    || ('\u{FF00}'..='\u{FFEF}').contains(&c)
+            }),
+            _ => false,
+        })
     }
 
     pub(crate) fn content_has_cjk(content: &[InlineNode]) -> bool {

@@ -23,11 +23,7 @@ impl<'a> DocxBuilder<'a> {
         out.push_str("</w:abstractNum><w:abstractNum w:abstractNumId=\"1\">");
         for lvl in 0..9 {
             let left = (lvl + 1) * 380;
-            let fmt = match lvl % 3 {
-                0 => "decimal",
-                1 => "lowerLetter",
-                _ => "lowerRoman",
-            };
+            let fmt = "decimal";
             let lvl_txt = format!("%{}.", lvl + 1);
             let _ = write!(
                 out,

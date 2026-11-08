@@ -441,13 +441,16 @@ impl<'a> ExtractorContext<'a> {
         let mut line_starts = Vec::new();
         Self::collect_line_left_edges(&content_nodes, Point::zero(), &mut line_starts);
         let inferred_pad = line_starts
-            .first()
-            .map(|(_, lx)| lx.clamp(4.0, 24.0))
+            .iter()
+            .map(|(_, lx)| *lx)
+            .filter(|&lx| lx >= 2.0)
+            .reduce(f64::min)
+            .map(|lx| lx.clamp(4.0, 24.0))
             .unwrap_or(6.0);
-        let v_pad = (inferred_pad * 0.65).clamp(4.0, 12.0);
+        let v_pad = inferred_pad.clamp(4.0, 12.0);
 
         let prev_inset = self.container_inset_pt;
-        self.container_inset_pt += 2.0 * inferred_pad;
+        self.container_inset_pt += 2.0 * inferred_pad + 3.0;
         let body_blocks =
             self.extract_blocks_from_nodes(&content_nodes, list_level, inherited_align);
         self.container_inset_pt = prev_inset;

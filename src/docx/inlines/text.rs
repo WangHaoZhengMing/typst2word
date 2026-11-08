@@ -22,6 +22,20 @@ impl<'a> DocxBuilder<'a> {
                 out.push_str(
                     r#"<w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="Songti SC" w:cs="Times New Roman"/>"#,
                 );
+            } else if fam == "PingFang SC" {
+                out.push_str(
+                    r#"<w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:eastAsia="Heiti SC" w:cs="Arial"/>"#,
+                );
+                let ascii_count = run
+                    .text
+                    .chars()
+                    .filter(|c| c.is_ascii_alphanumeric())
+                    .count();
+                if ascii_count > 0 {
+                    let total_chars = run.text.chars().count().max(1);
+                    let twips = ((ascii_count * 9 + total_chars / 2) / total_chars).clamp(1, 9);
+                    let _ = write!(out, r#"<w:spacing w:val="{twips}"/>"#);
+                }
             } else if fam == "Songti SC" || fam == "Kaiti SC" || fam == "Heiti SC" {
                 let _ = write!(
                     out,

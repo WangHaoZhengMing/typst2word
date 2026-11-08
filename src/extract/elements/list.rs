@@ -22,10 +22,21 @@ impl<'a> ExtractorContext<'a> {
             Self::resolve_length_pt(chain.get(typst::text::TextElem::size).0, 11.0);
         let tight = list.tight.get(chain);
         let spacing_pt = Self::resolve_list_spacing_pt(list.spacing.get(chain), tight, chain);
-        let indent_pt = Self::resolve_length_pt(list.indent.get(chain), default_font_pt);
+        let mut indent_pt = Self::resolve_length_pt(list.indent.get(chain), default_font_pt);
+        if list_level == 0
+            && let Some(vis_indent) = self.node_left_offset_in_column(children)
+            && vis_indent <= 48.0
+        {
+            indent_pt = indent_pt.max(vis_indent);
+        }
         let body_indent_pt = Self::resolve_length_pt(list.body_indent.get(chain), default_font_pt);
         let (items, max_label_w_pt) = self.extract_list_items(children, list_level);
-        let hanging_pt = (max_label_w_pt.max(6.0) + body_indent_pt).max(13.0);
+        let label_w = if max_label_w_pt > 0.5 {
+            max_label_w_pt
+        } else {
+            6.0
+        };
+        let hanging_pt = (label_w + body_indent_pt).max(10.0);
         if !items.is_empty() {
             self.report.lists_count += 1;
             blocks.push(BlockNode::List {
@@ -52,10 +63,21 @@ impl<'a> ExtractorContext<'a> {
             Self::resolve_length_pt(chain.get(typst::text::TextElem::size).0, 11.0);
         let tight = en.tight.get(chain);
         let spacing_pt = Self::resolve_list_spacing_pt(en.spacing.get(chain), tight, chain);
-        let indent_pt = Self::resolve_length_pt(en.indent.get(chain), default_font_pt);
+        let mut indent_pt = Self::resolve_length_pt(en.indent.get(chain), default_font_pt);
+        if list_level == 0
+            && let Some(vis_indent) = self.node_left_offset_in_column(children)
+            && vis_indent <= 48.0
+        {
+            indent_pt = indent_pt.max(vis_indent);
+        }
         let body_indent_pt = Self::resolve_length_pt(en.body_indent.get(chain), default_font_pt);
         let (items, max_label_w_pt) = self.extract_enum_items(en, children, list_level);
-        let hanging_pt = (max_label_w_pt.max(11.0) + body_indent_pt).max(16.0);
+        let label_w = if max_label_w_pt > 0.5 {
+            max_label_w_pt
+        } else {
+            11.0
+        };
+        let hanging_pt = (label_w + body_indent_pt).max(15.0);
         if !items.is_empty() {
             self.report.lists_count += 1;
             blocks.push(BlockNode::Enum {

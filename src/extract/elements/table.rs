@@ -63,11 +63,27 @@ impl<'a> ExtractorContext<'a> {
         let mut row_heights_pt = vec![0.0_f64; num_rows];
         let mut row_has_explicit_height = vec![false; num_rows];
 
+        let has_fr_col = grid
+            .cols
+            .iter()
+            .any(|c| matches!(c, typst::layout::Sizing::Fr(_)));
+
         for (&(cx, cy), (cell_elem, cnodes, csize)) in &cell_nodes_map {
             let colspan = Self::get_cell_colspan(cell_elem);
             let rowspan = Self::get_cell_rowspan(cell_elem);
             let (bbox_x, _, bbox_w, bbox_h) = Self::estimate_nodes_bbox(cnodes);
-            let pad_w = if is_semantic_table { 12.0 } else { 6.0 };
+            let (ins, _, _, _) = Self::extract_cell_props(cell_elem, false, is_semantic_table);
+            let pad_w = if is_semantic_table {
+                let list_pad = if Self::nodes_contain_list(cnodes) {
+                    15.0
+                } else {
+                    0.0
+                };
+                let extra = if has_fr_col { 3.5 + list_pad } else { 0.5 };
+                ins.left + ins.right + extra
+            } else {
+                6.0
+            };
             let w_pt = csize.x.to_pt().max(bbox_w + pad_w);
             let h_pt = csize.y.to_pt().max(bbox_h + 8.0);
             if colspan == 1 && cx < num_cols {
@@ -243,7 +259,10 @@ impl<'a> ExtractorContext<'a> {
                                 );
                                 let (ins, ha, va, ih) =
                                     Self::extract_cell_props(cell_elem, is_header, is_semantic_table);
+                                let prev_inset = self.container_inset_pt;
+                                self.container_inset_pt += ins.left + ins.right + 1.0;
                                 let mut blks = self.extract_blocks_from_nodes(cnodes, 0, ha);
+                                self.container_inset_pt = prev_inset;
                                 if num_cols > 1 && Self::find_explicit_align_elem(cnodes).is_none() {
                                     for blk in &mut blks {
                                         if let crate::ir::BlockNode::Paragraph { style, .. } = blk {
@@ -440,6 +459,18 @@ impl<'a> ExtractorContext<'a> {
                 _ => {}
             }
         }
+    }
+
+    pub(crate) fn nodes_contain_list(nodes: &[TreeNode]) -> bool {
+        nodes.iter().any(|n| match n {
+            TreeNode::Element { elem, children, .. } => {
+                elem.is::<ListElem>()
+                    || elem.is::<EnumElem>()
+                    || Self::nodes_contain_list(children)
+            }
+            TreeNode::Group { children, .. } => Self::nodes_contain_list(children),
+            _ => false,
+        })
     }
 
     pub(crate) fn get_cell_colspan(elem: &Content) -> usize {

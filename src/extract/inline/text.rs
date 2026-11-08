@@ -15,7 +15,7 @@ impl<'a> ExtractorContext<'a> {
         let info = item.font.info();
         let family_lower = info.family.to_lowercase();
         let bold = state.bold
-            || info.variant.weight >= FontWeight::BOLD
+            || info.variant.weight >= FontWeight::SEMIBOLD
             || family_lower.contains("bold")
             || item.stroke.is_some();
         let italic = state.italic

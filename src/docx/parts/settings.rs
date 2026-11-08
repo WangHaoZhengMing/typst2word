@@ -12,6 +12,9 @@ impl<'a> DocxBuilder<'a> {
   <w:autoSpaceDE w:val="1"/>
   <w:autoSpaceDN w:val="1"/>
   <w:doNotExpandShiftReturn/>
+  <w:compat>
+    <w:noColumnBalance/>
+  </w:compat>
   <m:mathPr>
     <m:mathFont m:val="Cambria Math"/>
     <m:brkBin m:val="before"/>
