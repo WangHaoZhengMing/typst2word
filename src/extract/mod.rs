@@ -19,6 +19,7 @@ mod document;
 mod elements;
 mod frame_tree;
 mod inline;
+mod math;
 
 use std::collections::{HashMap, HashSet};
 

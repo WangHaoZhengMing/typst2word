@@ -1,29 +1,35 @@
-//! Native Typst Math `Content` AST -> Microsoft Word Office Math (`<m:oMath>`) converter.
+//! Typst Math `Content` AST -> Semantic `MathNodeIr` extractor.
 //!
-//! Translates Typst's structured math elements (`EquationElem`, `FracElem`, `BinomElem`,
-//! `AttachElem`, `PrimesElem`, `ScriptsElem`, `LimitsElem`, `StretchElem`, `RootElem`,
-//! `LrElem`, `MidElem`, `VecElem`, `MatElem`, `CasesElem`, `AccentElem`, `UnderlineElem`,
-//! `OverlineElem`, `UnderbraceElem`, `OverbraceElem`, `UnderbracketElem`, `OverbracketElem`,
-//! `UnderparenElem`, `OverparenElem`, `UndershellElem`, `OvershellElem`, `CancelElem`,
-//! `OpElem`, `ClassElem`, `AlignPointElem`, `SymbolElem`, `TextElem`, `StyledElem`)
-//! directly into Word OMML (`<m:oMath>`).
+//! Translates Typst's structured math elements into our target-independent
+//! `MathNodeIr` tree (`crate::ir::equation`), keeping `extract` free of Word XML.
 //!
-//! The entry points and sequence handling live here; element-specific conversion is in
-//! the submodules.
+//! Submodules by math construct:
+//! - `node`: single-element router
+//! - `frac`: fractions (`frac`), binomials (`binom`), radicals (`root`, `sqrt`)
+//! - `attach`: subscripts, superscripts, pre-scripts (`attach`), limits (`limits`, `scripts`)
+//! - `nary`: big operators (`sum`, `prod`, `int`, ...) and operand collection
+//! - `delim`: fenced expressions (`lr`, `mid`)
+//! - `matrix`: vectors (`vec`), matrices (`mat`), piecewise cases (`cases`)
+//! - `accent`: accents (`hat`, ...), bars (`underline`, `overline`), braces (`underbrace`, ...), `cancel`
+//! - `symbol`: symbols, operators (`op`), primes, text runs, and inline style wrappers
 
+mod accent;
 mod attach;
 mod delim;
-mod emit;
+mod frac;
+mod matrix;
 mod nary;
 mod node;
+mod symbol;
 
 use typst::foundations::{Content, Packed, SequenceElem, StyleChain, StyledElem};
 use typst::introspection::TagElem;
 use typst::math::{AlignPointElem, EquationElem};
 use typst::text::{LinebreakElem, SpaceElem, TextElem};
 
-use crate::math::nary::{emit_nary_xml, extract_nary_operator, is_nary_operand_terminator};
-use crate::math::node::convert_math_node;
+use crate::ir::{MathNodeIr, MathRunIr, MathStyleIr};
+use nary::{build_nary_node, extract_nary_operator, is_nary_operand_terminator};
+use node::extract_math_node;
 
 /// Active math styling state propagated down `StyledElem` chains.
 #[derive(Debug, Clone, Copy, Default)]
@@ -33,66 +39,32 @@ pub(crate) struct MathStyleCtx {
     pub(crate) force_limits: Option<bool>,
 }
 
-/// Convert a Typst `EquationElem` into `(omml_xml, plain_fallback_text)`.
-///
-/// The returned `omml_xml` is a complete `<m:oMath>...</m:oMath>` element ready
-/// to be placed either directly in a paragraph (inline) or inside `<m:oMathPara>` (block).
-pub fn convert_equation_to_omml(eq: &Packed<EquationElem>, styles: StyleChain) -> (String, String) {
+/// Extract a Typst `EquationElem` into a list of semantic `MathNodeIr` nodes.
+pub(crate) fn extract_equation_math_nodes(
+    eq: &Packed<EquationElem>,
+    styles: StyleChain,
+) -> Vec<MathNodeIr> {
     let is_block = eq.block.get(styles);
     let ctx = MathStyleCtx {
         is_display: is_block,
         in_eq_arr: false,
         force_limits: None,
     };
-
-    let mut inner_xml = String::new();
-    let mut plain_text = String::new();
-
-    convert_math_root(&eq.body, styles, ctx, &mut inner_xml, &mut plain_text);
-
-    if inner_xml.trim().is_empty() {
-        inner_xml.push_str("<m:r><m:t>&#x200B;</m:t></m:r>");
-    }
-
-    let omml = format!("<m:oMath>{inner_xml}</m:oMath>");
-    (omml, plain_text.trim().to_string())
+    let mut nodes = Vec::new();
+    extract_math_root(&eq.body, styles, ctx, &mut nodes);
+    nodes
 }
 
-/// Convert any standalone math `Content` node into `<m:oMath>...</m:oMath>`.
-pub fn convert_math_content_to_omml(
-    content: &Content,
-    is_display: bool,
-    styles: StyleChain,
-) -> (String, String) {
-    if let Some(eq) = content.to_packed::<EquationElem>() {
-        return convert_equation_to_omml(eq, styles);
-    }
-    let ctx = MathStyleCtx {
-        is_display,
-        in_eq_arr: false,
-        force_limits: None,
-    };
-    let mut inner_xml = String::new();
-    let mut plain_text = String::new();
-    convert_math_root(content, styles, ctx, &mut inner_xml, &mut plain_text);
-    if inner_xml.trim().is_empty() {
-        inner_xml.push_str("<m:r><m:t>&#x200B;</m:t></m:r>");
-    }
-    let omml = format!("<m:oMath>{inner_xml}</m:oMath>");
-    (omml, plain_text.trim().to_string())
-}
-
-pub(crate) fn convert_math_root(
+pub(crate) fn extract_math_root(
     content: &Content,
     styles: StyleChain,
     ctx: MathStyleCtx,
-    xml: &mut String,
-    plain: &mut String,
+    out: &mut Vec<MathNodeIr>,
 ) {
-    // Unwrap outer StyledElem at root while keeping styles so we can detect multi-line equations.
+    // Unwrap outer `StyledElem` at root while keeping styles so we can detect multi-line equations.
     if let Some(styled) = content.to_packed::<StyledElem>() {
         let chained = styles.chain(&styled.styles);
-        convert_math_root(&styled.child, chained, ctx, xml, plain);
+        extract_math_root(&styled.child, chained, ctx, out);
         return;
     }
 
@@ -113,31 +85,48 @@ pub(crate) fn convert_math_root(
                 rows.pop();
             }
             if rows.len() > 1 {
-                xml.push_str("<m:eqArr><m:eqArrPr><m:maxDist m:val=\"1\"/></m:eqArrPr>");
                 let mut row_ctx = ctx;
                 row_ctx.in_eq_arr = true;
-                for (i, row) in rows.iter().enumerate() {
-                    if i > 0 {
-                        plain.push_str(" \\ ");
-                    }
-                    xml.push_str("<m:e>");
-                    let mut row_xml = String::new();
-                    convert_sequence_slice(row, row_ctx, &mut row_xml, plain);
-                    if row_xml.is_empty() {
-                        row_xml.push_str("<m:r><m:t>&#x200B;</m:t></m:r>");
-                    }
-                    xml.push_str(&row_xml);
-                    xml.push_str("</m:e>");
-                }
-                xml.push_str("</m:eqArr>");
+                let row_nodes = rows
+                    .iter()
+                    .map(|row| extract_sequence_as_node(row, row_ctx))
+                    .collect();
+                out.push(MathNodeIr::EquationArray { rows: row_nodes });
                 return;
             }
         }
-        convert_sequence_slice(&flat, ctx, xml, plain);
+        extract_sequence_slice(&flat, ctx, out);
         return;
     }
 
-    convert_math_node(content, styles, ctx, xml, plain);
+    extract_math_node(content, styles, ctx, out);
+}
+
+pub(crate) fn extract_math_child(
+    content: &Content,
+    styles: StyleChain,
+    ctx: MathStyleCtx,
+) -> MathNodeIr {
+    let mut nodes = Vec::new();
+    extract_math_node(content, styles, ctx, &mut nodes);
+    wrap_nodes(nodes)
+}
+
+pub(crate) fn extract_sequence_as_node(
+    items: &[(Content, StyleChain)],
+    ctx: MathStyleCtx,
+) -> MathNodeIr {
+    let mut nodes = Vec::new();
+    extract_sequence_slice(items, ctx, &mut nodes);
+    wrap_nodes(nodes)
+}
+
+pub(crate) fn wrap_nodes(mut nodes: Vec<MathNodeIr>) -> MathNodeIr {
+    if nodes.len() == 1 {
+        nodes.pop().unwrap()
+    } else {
+        MathNodeIr::Sequence(nodes)
+    }
 }
 
 pub(crate) fn flatten_sequence_preserving_styles<'a>(
@@ -158,23 +147,19 @@ pub(crate) fn flatten_sequence_preserving_styles<'a>(
     out
 }
 
-pub(crate) fn convert_sequence_slice(
+pub(crate) fn extract_sequence_slice(
     items: &[(Content, StyleChain)],
     ctx: MathStyleCtx,
-    xml: &mut String,
-    plain: &mut String,
+    out: &mut Vec<MathNodeIr>,
 ) {
     let mut i = 0;
     while i < items.len() {
         let (ref item, st) = items[i];
 
-        // Check if this item is an n-ary operator (either `AttachElem` with n-ary base,
+        // Check if this item is an n-ary operator (`AttachElem` with n-ary base,
         // `LimitsElem`/`ScriptsElem` wrapping an n-ary symbol, or a standalone n-ary `SymbolElem`).
         if let Some(nary_info) = extract_nary_operator(item, st, ctx) {
-            // Collect the operand `<m:e>` following the n-ary operator in this sequence.
-            let operand_start = i + 1;
-            // Skip leading space after n-ary operator
-            let mut cursor = operand_start;
+            let mut cursor = i + 1;
             while cursor < items.len() && items[cursor].0.is::<SpaceElem>() {
                 cursor += 1;
             }
@@ -186,7 +171,7 @@ pub(crate) fn convert_sequence_slice(
                 cursor += 1;
             }
             let operand_slice = &items[operand_begin..cursor];
-            emit_nary_xml(&nary_info, st, operand_slice, ctx, xml, plain);
+            out.push(build_nary_node(&nary_info, st, operand_slice, ctx));
             i = cursor;
             continue;
         }
@@ -199,14 +184,17 @@ pub(crate) fn convert_sequence_slice(
             let prev_is_word = i > 0 && is_multi_char_text(&items[i - 1].0);
             let next_is_word = i + 1 < items.len() && is_multi_char_text(&items[i + 1].0);
             if prev_is_word || next_is_word {
-                xml.push_str(r#"<m:r><m:rPr><m:sty m:val="p"/></m:rPr><m:t>&#x2005;</m:t></m:r>"#);
+                out.push(MathNodeIr::Run(MathRunIr {
+                    text: "\u{2005}".to_string(),
+                    style: Some(MathStyleIr::Plain),
+                    ..Default::default()
+                }));
             }
-            plain.push(' ');
             i += 1;
             continue;
         }
 
-        convert_math_node(item, st, ctx, xml, plain);
+        extract_math_node(item, st, ctx, out);
         i += 1;
     }
 }

@@ -21,6 +21,7 @@ mod blocks;
 mod builder;
 mod drawingml;
 mod inlines;
+pub(crate) mod math;
 mod package;
 mod parts;
 

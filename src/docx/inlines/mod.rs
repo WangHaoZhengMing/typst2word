@@ -6,7 +6,7 @@ mod bookmark;
 mod footnote;
 mod image;
 mod link;
-mod text;
+pub(crate) mod text;
 mod unsupported;
 
 use std::fmt::Write as _;
@@ -31,7 +31,7 @@ impl<'a> DocxBuilder<'a> {
                 self.render_text_run(run, out);
             }
             InlineNode::EquationInline(eq) => {
-                out.push_str(&eq.omml_xml);
+                crate::docx::math::render_math_omml(&eq.body, out);
             }
             InlineNode::ShapeInline(shape) => {
                 let run_xml = shape_to_drawingml_run(shape);

@@ -8,8 +8,8 @@ use typst::pdf::{PdfMarkerTag, PdfMarkerTagKind};
 
 use crate::extract::ExtractorContext;
 use crate::extract::frame_tree::TreeNode;
+use crate::extract::math::extract_equation_math_nodes;
 use crate::ir::EquationIr;
-use crate::math::convert_equation_to_omml;
 
 impl<'a> ExtractorContext<'a> {
     pub(crate) fn extract_equation(
@@ -20,7 +20,7 @@ impl<'a> ExtractorContext<'a> {
     ) -> EquationIr {
         let chain = self.style_chain();
         let is_block = eq.block.get(chain);
-        let (omml_xml, _) = convert_equation_to_omml(eq, chain);
+        let body = extract_equation_math_nodes(eq, chain);
         let source_text = self
             .compiled
             .source_snippet(self.world, eq.span())
@@ -54,7 +54,7 @@ impl<'a> ExtractorContext<'a> {
 
         EquationIr {
             is_block,
-            omml_xml,
+            body,
             source_text,
             numbering_text,
             bookmark,

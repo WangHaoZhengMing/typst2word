@@ -26,7 +26,6 @@ pub mod compiler;
 pub mod docx;
 pub mod extract;
 pub mod ir;
-pub mod math;
 pub mod units;
 pub mod xml;
 

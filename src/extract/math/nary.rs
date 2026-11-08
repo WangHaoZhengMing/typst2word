@@ -1,13 +1,12 @@
-//! N-ary operators (`sum`, `product`, `integral`, ...) -> `<m:nary>`.
+//! Big $n$-ary operators (`sum`, `product`, `integral`, ...) -> `MathNodeIr::Nary`.
 
 use typst::foundations::{Content, StyleChain, StyledElem, SymbolElem};
 use typst::math::{AlignPointElem, AttachElem, EquationElem, LimitsElem, ScriptsElem, StretchElem};
 use typst::text::{LinebreakElem, TextElem};
 
-use crate::math::attach::merge_attach_base;
-use crate::math::node::convert_math_node;
-use crate::math::{MathStyleCtx, convert_sequence_slice};
-use crate::xml::escape_xml_attr;
+use crate::extract::math::attach::merge_attach_base;
+use crate::extract::math::{MathStyleCtx, extract_math_child, extract_sequence_as_node};
+use crate::ir::MathNodeIr;
 
 pub(crate) struct NaryInfo {
     pub(crate) chr: char,
@@ -190,54 +189,30 @@ pub(crate) fn is_nary_operand_terminator(content: &Content) -> bool {
     false
 }
 
-pub(crate) fn emit_nary_xml(
+pub(crate) fn build_nary_node(
     info: &NaryInfo,
     base_styles: StyleChain,
     operand_slice: &[(Content, StyleChain)],
     ctx: MathStyleCtx,
-    xml: &mut String,
-    plain: &mut String,
-) {
-    let lim_loc = if info.und_ovr { "undOvr" } else { "subSup" };
-    let sub_hide = if info.sub.is_none() { "1" } else { "0" };
-    let sup_hide = if info.sup.is_none() { "1" } else { "0" };
-    let mut chr_buf = [0u8; 4];
-    let chr_str = escape_xml_attr(info.chr.encode_utf8(&mut chr_buf));
+) -> MathNodeIr {
+    let mut script_ctx = ctx;
+    script_ctx.is_display = false;
 
-    plain.push(info.chr);
+    let sub = info
+        .sub
+        .as_ref()
+        .map(|c| Box::new(extract_math_child(c, base_styles, script_ctx)));
+    let sup = info
+        .sup
+        .as_ref()
+        .map(|c| Box::new(extract_math_child(c, base_styles, script_ctx)));
+    let operand = Box::new(extract_sequence_as_node(operand_slice, ctx));
 
-    xml.push_str("<m:nary><m:naryPr>");
-    xml.push_str(&format!(r#"<m:chr m:val="{chr_str}"/>"#));
-    xml.push_str(&format!(r#"<m:limLoc m:val="{lim_loc}"/>"#));
-    xml.push_str(&format!(r#"<m:subHide m:val="{sub_hide}"/>"#));
-    xml.push_str(&format!(r#"<m:supHide m:val="{sup_hide}"/>"#));
-    xml.push_str("</m:naryPr><m:sub>");
-    if let Some(ref sub_c) = info.sub {
-        plain.push_str("_(");
-        let mut sub_ctx = ctx;
-        sub_ctx.is_display = false;
-        convert_math_node(sub_c, base_styles, sub_ctx, xml, plain);
-        plain.push(')');
+    MathNodeIr::Nary {
+        chr: info.chr,
+        limits_under_over: info.und_ovr,
+        sub,
+        sup,
+        operand,
     }
-    xml.push_str("</m:sub><m:sup>");
-    if let Some(ref sup_c) = info.sup {
-        plain.push_str("^(");
-        let mut sup_ctx = ctx;
-        sup_ctx.is_display = false;
-        convert_math_node(sup_c, base_styles, sup_ctx, xml, plain);
-        plain.push(')');
-    }
-    xml.push_str("</m:sup><m:e>");
-    if operand_slice.is_empty() {
-        xml.push_str("<m:r><m:t>&#x200B;</m:t></m:r>");
-    } else {
-        plain.push(' ');
-        let mut op_xml = String::new();
-        convert_sequence_slice(operand_slice, ctx, &mut op_xml, plain);
-        if op_xml.is_empty() {
-            op_xml.push_str("<m:r><m:t>&#x200B;</m:t></m:r>");
-        }
-        xml.push_str(&op_xml);
-    }
-    xml.push_str("</m:e></m:nary>");
 }

@@ -27,7 +27,9 @@ mod unsupported;
 pub use bibliography::BibEntryIr;
 pub use cetz::{CetzCanvasIr, CetzLabelDrawableIr, CetzPathDrawableIr};
 pub use document::{ConversionReport, MetadataIr, PageSetupIr};
-pub use equation::EquationIr;
+pub use equation::{
+    EquationIr, MathFracStyleIr, MathNodeIr, MathRunIr, MathScriptIr, MathStyleIr,
+};
 pub use image::{ImageFormatIr, ImageIr};
 pub use list::{EnumItemIr, ListItemIr, TermItemIr};
 pub use outline::OutlineEntryIr;

@@ -3,12 +3,24 @@
 use std::fmt::Write as _;
 
 use crate::docx::builder::DocxBuilder;
+use crate::docx::math::render_math_omml;
 use crate::ir::EquationIr;
 use crate::units::pt_to_dxa;
 use crate::xml::escape_xml;
 
 impl<'a> DocxBuilder<'a> {
     pub(crate) fn render_equation_block(&mut self, eq: &EquationIr, out: &mut String) {
+        self.render_equation_block_with_layout(eq, 80, 80, 0, out);
+    }
+
+    pub(crate) fn render_equation_block_with_layout(
+        &mut self,
+        eq: &EquationIr,
+        before_dxa: i64,
+        after_dxa: i64,
+        indent_left_dxa: usize,
+        out: &mut String,
+    ) {
         if let Some(num) = &eq.numbering_text {
             // In Word, `<m:oMathPara>` (display math mode) takes over its entire paragraph
             // and ignores sibling `<w:r>` runs or right tab stops. To preserve true Display Math
@@ -56,8 +68,8 @@ impl<'a> DocxBuilder<'a> {
                 .bookmark
                 .as_ref()
                 .map(|bm| self.emit_bookmark_start(bm, out));
-            out.push_str("<m:oMathPara><m:oMathParaPr><m:jc m:val=\"center\"/></m:oMathParaPr>");
-            out.push_str(&eq.omml_xml);
+            out.push_str(r#"<m:oMathPara><m:oMathParaPr><m:jc m:val="center"/></m:oMathParaPr>"#);
+            render_math_omml(&eq.body, out);
             out.push_str("</m:oMathPara>");
             if let Some(id) = bm_id {
                 Self::emit_bookmark_end(id, out);
@@ -78,15 +90,20 @@ impl<'a> DocxBuilder<'a> {
             return;
         }
 
-        out.push_str(
-            r#"<w:p><w:pPr><w:jc w:val="center"/><w:spacing w:before="80" w:after="80"/></w:pPr>"#,
+        out.push_str("<w:p><w:pPr>");
+        if indent_left_dxa > 0 {
+            let _ = write!(out, r#"<w:ind w:left="{indent_left_dxa}"/>"#);
+        }
+        let _ = write!(
+            out,
+            r#"<w:jc w:val="center"/><w:spacing w:before="{before_dxa}" w:after="{after_dxa}"/></w:pPr>"#
         );
         let bm_id = eq
             .bookmark
             .as_ref()
             .map(|bm| self.emit_bookmark_start(bm, out));
-        out.push_str("<m:oMathPara><m:oMathParaPr><m:jc m:val=\"center\"/></m:oMathParaPr>");
-        out.push_str(&eq.omml_xml);
+        out.push_str(r#"<m:oMathPara><m:oMathParaPr><m:jc m:val="center"/></m:oMathParaPr>"#);
+        render_math_omml(&eq.body, out);
         out.push_str("</m:oMathPara>");
         if let Some(id) = bm_id {
             Self::emit_bookmark_end(id, out);
