@@ -211,7 +211,7 @@ impl<'a> ExtractorContext<'a> {
                         }
                     }
 
-                    let bbox = shape.geometry.bbox();
+                    let bbox = shape.geometry.bbox(None);
                     let min_x = bbox.min.x.to_pt().min(0.0);
                     let min_y = bbox.min.y.to_pt().min(0.0);
                     let w_pt = (bbox.max.x.to_pt() - min_x).max(0.5);

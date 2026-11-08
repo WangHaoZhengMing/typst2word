@@ -1,62 +1,59 @@
-//! Self-contained Typst 0.14 `World` implementation with system + embedded fonts,
+//! Self-contained Typst 0.15 `World` implementation with system + embedded fonts,
 //! virtual file overlays, and `@preview` package resolution (including CeTZ).
 
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{LazyLock, OnceLock};
+use std::sync::LazyLock;
 
-use chrono::{DateTime, Datelike, FixedOffset, Local, Utc};
 use parking_lot::RwLock;
 use typst::diag::{FileError, FileResult, PackageError, PackageResult};
-use typst::foundations::{Bytes, Datetime};
+use typst::foundations::{Bytes, Datetime, Duration};
 use typst::syntax::package::PackageSpec;
-use typst::syntax::{FileId, Source, VirtualPath};
+use typst::syntax::{FileId, RootedPath, Source, VirtualPath, VirtualRoot};
 use typst::text::{Font, FontBook};
 use typst::utils::LazyHash;
-use typst::{Feature, Features, Library, LibraryExt, World};
-use typst_kit::download::{Downloader, Progress};
-use typst_kit::fonts::{FontSearcher, FontSlot};
-use typst_kit::package::PackageStorage;
+use typst::{Feature, Features, Library, LibraryBuilder, World};
+use typst_kit::datetime::Time;
+use typst_kit::downloader::SystemDownloader;
+use typst_kit::fonts::{self, FontStore};
+use typst_kit::packages::SystemPackages;
 
-/// Shared global Typst compiler resources (standard library, font book, package storage).
+use crate::compiler::compile::CUSTOM_ROUTINES;
+
+/// Shared global Typst compiler resources (standard library, fonts, package storage).
 pub struct GlobalTypstResources {
+    /// Standard library wired to our [`CUSTOM_ROUTINES`] (since Typst 0.15 the
+    /// routines live in the library rather than in the `Engine`).
     pub library: LazyHash<Library>,
-    pub book: LazyHash<FontBook>,
-    pub fonts: Vec<FontSlot>,
-    pub package_storage: PackageStorage,
+    /// System fonts followed by Typst's embedded fonts (same order as 0.14's `FontSearcher`).
+    pub fonts: FontStore,
+    /// Local data/cache package directories plus Typst Universe downloads.
+    pub packages: SystemPackages,
 }
 
 impl GlobalTypstResources {
     pub fn get() -> &'static Self {
         static INSTANCE: LazyLock<GlobalTypstResources> = LazyLock::new(|| {
             let features: Features = [Feature::Html, Feature::A11yExtras].into_iter().collect();
-            let library = Library::builder().with_features(features).build();
-            let mut searcher = FontSearcher::new();
-            searcher.include_system_fonts(true);
-            let fonts = searcher.search();
-            let package_storage = PackageStorage::new(
-                None,
-                None,
-                Downloader::new(concat!("typst2word/", env!("CARGO_PKG_VERSION"))),
-            );
+            let library = LibraryBuilder::from_routines(&CUSTOM_ROUTINES)
+                .with_features(features)
+                .build();
+            let mut fonts = FontStore::new();
+            fonts.extend(fonts::system());
+            fonts.extend(fonts::embedded());
+            let packages = SystemPackages::new(SystemDownloader::new(concat!(
+                "typst2word/",
+                env!("CARGO_PKG_VERSION")
+            )));
             GlobalTypstResources {
                 library: LazyHash::new(library),
-                book: LazyHash::new(fonts.book),
-                fonts: fonts.fonts,
-                package_storage,
+                fonts,
+                packages,
             }
         });
         &INSTANCE
     }
-}
-
-struct SilentProgress;
-
-impl Progress for SilentProgress {
-    fn print_start(&mut self) {}
-    fn print_progress(&mut self, _state: &typst_kit::download::DownloadState) {}
-    fn print_finish(&mut self, _state: &typst_kit::download::DownloadState) {}
 }
 
 #[derive(Default)]
@@ -71,7 +68,7 @@ pub struct TypstWorld {
     main_id: FileId,
     virtual_files: RwLock<HashMap<FileId, Bytes>>,
     slots: RwLock<HashMap<FileId, FileSlot>>,
-    now: OnceLock<DateTime<Utc>>,
+    now: Time,
 }
 
 impl TypstWorld {
@@ -87,14 +84,20 @@ impl TypstWorld {
         let file_name = canonical
             .file_name()
             .ok_or_else(|| format!("invalid file name '{}'", canonical.display()))?;
-        let main_id = FileId::new(None, VirtualPath::new(file_name));
+        let file_name = file_name.to_str().ok_or_else(|| {
+            format!(
+                "input file name is not valid UTF-8: '{}'",
+                canonical.display()
+            )
+        })?;
+        let main_id = project_file_id(file_name)?;
 
         Ok(Self {
             root,
             main_id,
             virtual_files: RwLock::new(HashMap::new()),
             slots: RwLock::new(HashMap::new()),
-            now: OnceLock::new(),
+            now: Time::system(),
         })
     }
 
@@ -103,7 +106,7 @@ impl TypstWorld {
         let root = root_dir
             .or_else(|| std::env::current_dir().ok())
             .unwrap_or_else(|| PathBuf::from("."));
-        let main_id = FileId::new(None, VirtualPath::new("main.typ"));
+        let main_id = project_file_id("main.typ").expect("`main.typ` is a valid virtual path");
         let mut virtual_files = HashMap::new();
         let text: String = source_text.into();
         virtual_files.insert(main_id, Bytes::from_string(text));
@@ -113,18 +116,24 @@ impl TypstWorld {
             main_id,
             virtual_files: RwLock::new(virtual_files),
             slots: RwLock::new(HashMap::new()),
-            now: OnceLock::new(),
+            now: Time::system(),
         }
     }
 
     /// Register an additional virtual file (e.g., an imported `.typ`, `.csv`, `.svg`, or `.png` in memory).
-    pub fn add_virtual_file(&self, rel_path: impl AsRef<Path>, data: impl Into<Vec<u8>>) -> FileId {
-        let id = FileId::new(None, VirtualPath::new(rel_path.as_ref()));
+    ///
+    /// Paths use forward slashes (Typst 0.15 rejects backslashes in virtual paths).
+    pub fn add_virtual_file(
+        &self,
+        rel_path: impl AsRef<str>,
+        data: impl Into<Vec<u8>>,
+    ) -> Result<FileId, String> {
+        let id = project_file_id(rel_path.as_ref())?;
         self.virtual_files
             .write()
             .insert(id, Bytes::new(data.into()));
         self.slots.write().remove(&id);
-        id
+        Ok(id)
     }
 
     /// Root directory of the project.
@@ -134,22 +143,20 @@ impl TypstWorld {
 
     /// Resolve a `FileId` to an on-disk path (handling both project files and `@preview` packages).
     pub fn resolve_system_path(&self, id: FileId) -> FileResult<PathBuf> {
-        let base_dir = if let Some(spec) = id.package() {
-            self.resolve_package_dir(spec)?
-        } else {
-            self.root.clone()
+        let base_dir = match id.root() {
+            VirtualRoot::Package(spec) => self.resolve_package_dir(spec)?,
+            VirtualRoot::Project => self.root.clone(),
         };
 
         let vpath = id.vpath();
-        if let Some(resolved) = vpath.resolve(&base_dir) {
+        if let Ok(resolved) = vpath.realize(&base_dir) {
             if resolved.exists() {
                 return Ok(resolved);
             }
         }
 
         // Also allow relative parent traversal for local project files if needed.
-        let rel = vpath.as_rootless_path();
-        let candidate = base_dir.join(rel);
+        let candidate = base_dir.join(vpath.get_without_slash());
         if candidate.exists() {
             return Ok(candidate);
         }
@@ -168,13 +175,9 @@ impl TypstWorld {
             }
         }
 
-        // Try Typst's PackageStorage (which may download if network is available).
-        let resources = GlobalTypstResources::get();
-        if let Ok(dir) = resources
-            .package_storage
-            .prepare_package(spec, &mut SilentProgress)
-        {
-            return Ok(dir);
+        // Try Typst Kit's system packages (which may download if network is available).
+        if let Ok(root) = GlobalTypstResources::get().packages.obtain(spec) {
+            return Ok(root.path().to_path_buf());
         }
 
         // Fallback: if exact version is not cached and download failed, check if another
@@ -236,7 +239,7 @@ impl World for TypstWorld {
     }
 
     fn book(&self) -> &LazyHash<FontBook> {
-        &GlobalTypstResources::get().book
+        GlobalTypstResources::get().fonts.book()
     }
 
     fn main(&self) -> FileId {
@@ -272,25 +275,17 @@ impl World for TypstWorld {
     }
 
     fn font(&self, index: usize) -> Option<Font> {
-        GlobalTypstResources::get()
-            .fonts
-            .get(index)
-            .and_then(FontSlot::get)
+        GlobalTypstResources::get().fonts.font(index)
     }
 
-    fn today(&self, offset: Option<i64>) -> Option<Datetime> {
-        let now = self.now.get_or_init(Utc::now);
-        let with_offset = match offset {
-            None => now.with_timezone(&Local).fixed_offset(),
-            Some(hours) => {
-                let secs = i32::try_from(hours).ok()?.checked_mul(3600)?;
-                now.with_timezone(&FixedOffset::east_opt(secs)?)
-            }
-        };
-        Datetime::from_ymd(
-            with_offset.year(),
-            with_offset.month().try_into().ok()?,
-            with_offset.day().try_into().ok()?,
-        )
+    fn today(&self, offset: Option<Duration>) -> Option<Datetime> {
+        self.now.today(offset)
     }
+}
+
+/// Build a `FileId` for a file in the project root.
+fn project_file_id(path: &str) -> Result<FileId, String> {
+    let vpath =
+        VirtualPath::new(path).map_err(|e| format!("invalid virtual path '{path}': {e}"))?;
+    Ok(RootedPath::new(VirtualRoot::Project, vpath).intern())
 }

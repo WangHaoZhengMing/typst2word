@@ -80,7 +80,7 @@ impl<'a> ExtractorContext<'a> {
         let mut max_x = f64::NEG_INFINITY;
         let mut max_y = f64::NEG_INFINITY;
         for (pos, sh, _) in shapes {
-            let b = sh.geometry.bbox();
+            let b = sh.geometry.bbox(None);
             min_x = min_x.min(pos.x.to_pt() + b.min.x.to_pt());
             min_y = min_y.min(pos.y.to_pt() + b.min.y.to_pt());
             max_x = max_x.max(pos.x.to_pt() + b.max.x.to_pt());

@@ -1,4 +1,4 @@
-//! Self-contained Typst 0.14 compilation & introspection/query engine.
+//! Self-contained Typst 0.15 compilation & introspection/query engine.
 //!
 //! Provides:
 //! 1. Custom `Routines` that preserve `Tag::Start` / `Tag::End` with materialized
@@ -12,33 +12,38 @@ use std::collections::HashMap;
 use std::ops::ControlFlow;
 use std::sync::LazyLock;
 
-use comemo::{Track, Tracked};
+use comemo::Track;
 use ecow::{EcoString, EcoVec};
-use typst::World;
 use typst::diag::{SourceDiagnostic, SourceResult, warning};
 use typst::engine::{Engine, Route, Sink, Traced};
 use typst::foundations::{
     Content, Label, NativeElement, NativeRuleMap, Packed, Selector, SequenceElem, StyleChain,
     StyledElem, Target, TargetElem,
 };
-use typst::introspection::{Introspector, SplitLocator};
+use typst::introspection::{EmptyIntrospector, Introspector, MAX_ITERS, SplitLocator};
 use typst::layout::{
-    BlockBody, BlockElem, ColbreakElem, ColumnsElem, HideElem, MoveElem, PagedDocument, RepeatElem,
-    RotateElem, ScaleElem, SkewElem,
+    BlockBody, BlockElem, ColbreakElem, ColumnsElem, HideElem, MoveElem, RepeatElem, RotateElem,
+    ScaleElem, SkewElem,
 };
 use typst::routines::{Arenas, Pair, RealizationKind, Routines};
-use typst::syntax::Span;
+use typst::syntax::{Span, VirtualRoot};
+use typst::utils::Protected;
 use typst::visualize::{
-    CircleElem, CurveElem, EllipseElem, LineElem, PathElem, PolygonElem, RectElem, SquareElem,
+    CircleElem, CurveElem, EllipseElem, LineElem, PolygonElem, RectElem, SquareElem,
 };
+use typst::{World, WorldExt};
 use typst_html::{FrameElem, HtmlElem};
+use typst_layout::PagedDocument;
 
 use crate::compiler::world::TypstWorld;
 
 /// Custom compiler routines that enrich `Target::Paged` realization with semantic tags
 /// for shapes, transforms, and unsupported elements (`html.elem`, `html.frame`).
+///
+/// Since Typst 0.15 the routines are attached to the `Library` (see
+/// `GlobalTypstResources`) instead of being passed through the `Engine`.
 pub static CUSTOM_ROUTINES: LazyLock<Routines> = LazyLock::new(|| Routines {
-    rules: {
+    rules: || {
         let mut rules = NativeRuleMap::new();
         typst_layout::register(&mut rules);
         typst_html::register(&mut rules);
@@ -62,14 +67,15 @@ pub static CUSTOM_ROUTINES: LazyLock<Routines> = LazyLock::new(|| Routines {
     realize: custom_realize,
     layout_frame: typst_layout::layout_frame,
     html_module: typst_html::module,
+    html_mathml_body: typst_html::html_mathml_body,
     html_span_filled: typst_html::html_span_filled,
 });
 
 /// Check whether `span` originates inside the `@preview/cetz` package.
 pub fn is_cetz_span(span: Span) -> bool {
-    span.id()
-        .and_then(|id| id.package())
-        .is_some_and(|pkg| pkg.name.as_str() == "cetz")
+    span.id().is_some_and(
+        |id| matches!(id.get().root(), VirtualRoot::Package(pkg) if pkg.name.as_str() == "cetz"),
+    )
 }
 
 /// Check whether an element should receive a synthetic `Location` during realization
@@ -88,7 +94,6 @@ fn should_locate_for_extraction(elem: &Content) -> bool {
         || elem.is::<EllipseElem>()
         || elem.is::<PolygonElem>()
         || elem.is::<CurveElem>()
-        || elem.is::<PathElem>()
         || elem.is::<LineElem>()
         || elem.is::<HtmlElem>()
         || elem.is::<FrameElem>()
@@ -106,13 +111,13 @@ fn should_locate_for_extraction(elem: &Content) -> bool {
 /// shape, transform, and HTML elements get locations before `typst_realize::realize`.
 fn annotate_content_for_realization(
     content: &Content,
-    introspector: Tracked<Introspector>,
+    engine: &mut Engine,
     locator: &mut SplitLocator,
 ) -> Option<Content> {
     if should_locate_for_extraction(content) {
         let mut cloned = content.clone();
         let key = typst_utils::hash128(&cloned);
-        let loc = locator.next_location(introspector, key);
+        let loc = locator.next_location(engine, key, cloned.span());
         cloned.set_location(loc);
         return Some(cloned);
     }
@@ -121,7 +126,7 @@ fn annotate_content_for_realization(
         let mut changed = false;
         let mut new_children = Vec::with_capacity(seq.children.len());
         for child in &seq.children {
-            if let Some(updated) = annotate_content_for_realization(child, introspector, locator) {
+            if let Some(updated) = annotate_content_for_realization(child, engine, locator) {
                 changed = true;
                 new_children.push(updated);
             } else {
@@ -145,7 +150,7 @@ fn annotate_content_for_realization(
 
     if let Some(styled) = content.to_packed::<StyledElem>() {
         if let Some(updated_child) =
-            annotate_content_for_realization(&styled.child, introspector, locator)
+            annotate_content_for_realization(&styled.child, engine, locator)
         {
             let mut packed = StyledElem::new(updated_child, styled.styles.clone())
                 .pack()
@@ -162,8 +167,7 @@ fn annotate_content_for_realization(
     }
 
     if let Some(align) = content.to_packed::<typst_library::layout::AlignElem>() {
-        if let Some(updated_child) =
-            annotate_content_for_realization(&align.body, introspector, locator)
+        if let Some(updated_child) = annotate_content_for_realization(&align.body, engine, locator)
         {
             let mut cloned = align.clone();
             cloned.body = updated_child;
@@ -185,13 +189,9 @@ fn custom_realize<'a>(
 ) -> SourceResult<Vec<Pair<'a>>> {
     let target_content = if matches!(
         kind,
-        RealizationKind::LayoutDocument { .. }
-            | RealizationKind::LayoutFragment { .. }
-            | RealizationKind::LayoutPar
+        RealizationKind::Document { .. } | RealizationKind::Fragment { .. } | RealizationKind::Par
     ) {
-        if let Some(annotated) =
-            annotate_content_for_realization(content, engine.introspector, locator)
-        {
+        if let Some(annotated) = annotate_content_for_realization(content, engine, locator) {
             arenas.content.alloc(annotated)
         } else {
             content
@@ -233,8 +233,8 @@ impl CompiledTypstDocument {
             .map_err(|e| format!("failed to load main Typst source: {e:?}"))?;
 
         let module = typst_eval::eval(
-            &CUSTOM_ROUTINES,
             tracked_world,
+            library,
             traced.track(),
             sink.track_mut(),
             Route::default().track(),
@@ -245,40 +245,44 @@ impl CompiledTypstDocument {
         let evaluated_content = module.content();
         let span_index = build_span_index(&evaluated_content);
 
-        let empty_introspector = Introspector::default();
-        let mut introspector = &empty_introspector;
+        let empty_introspector = EmptyIntrospector;
+        let mut previous: Option<PagedDocument> = None;
         let mut iter = 0;
         let mut subsink;
         let mut document: PagedDocument;
 
         loop {
             subsink = Sink::new();
+            let introspector: &dyn Introspector = match &previous {
+                Some(doc) => doc.introspector().as_ref(),
+                None => &empty_introspector,
+            };
             let constraint = comemo::Constraint::new();
             let mut engine = Engine {
+                library,
                 world: tracked_world,
-                introspector: introspector.track_with(&constraint),
+                introspector: Protected::new(introspector.track_with(&constraint)),
                 traced: traced.track(),
                 sink: subsink.track_mut(),
                 route: Route::default(),
-                routines: &CUSTOM_ROUTINES,
             };
 
             document = typst_layout::layout_document(&mut engine, &evaluated_content, styles)
                 .map_err(|diags| format_diagnostics(world, &diags))?;
-            introspector = &document.introspector;
             iter += 1;
 
-            if constraint.validate(introspector) {
+            if constraint.validate(document.introspector().as_ref() as &dyn Introspector) {
                 break;
             }
 
-            if iter >= 5 {
+            if iter >= MAX_ITERS {
                 subsink.warn(warning!(
                     Span::detached(),
-                    "layout did not converge within 5 attempts"
+                    "layout did not converge within {MAX_ITERS} attempts"
                 ));
                 break;
             }
+            previous = Some(document);
         }
 
         sink.extend_from_sink(subsink);
@@ -296,20 +300,19 @@ impl CompiledTypstDocument {
     }
 
     /// Access the `Introspector` of the compiled document.
-    pub fn introspector(&self) -> &Introspector {
-        &self.document.introspector
+    pub fn introspector(&self) -> &dyn Introspector {
+        self.document.introspector().as_ref()
     }
 
     /// Run a Typst `Selector` query against the document's `Introspector`.
     pub fn query(&self, selector: &Selector) -> EcoVec<Content> {
-        self.document.introspector.query(selector)
+        self.introspector().query(selector)
     }
 
     /// Query all materialized elements of type `T` from the document's `Introspector`.
     pub fn query_elem<T: NativeElement>(&self) -> Vec<Packed<T>> {
         let selector = Selector::Elem(T::ELEM, None);
-        self.document
-            .introspector
+        self.introspector()
             .query(&selector)
             .into_iter()
             .filter_map(|c| c.into_packed::<T>().ok())
@@ -319,12 +322,12 @@ impl CompiledTypstDocument {
     /// Query an element by label string (e.g. `"my-fig"`).
     pub fn query_label(&self, label_name: &str) -> Option<&Content> {
         let label = Label::construct(EcoString::from(label_name).into()).ok()?;
-        self.document.introspector.query_label(label).ok()
+        self.introspector().query_label(label).ok()
     }
 
     /// Iterate over all introspectable elements in document order.
     pub fn all_introspected(&self) -> impl Iterator<Item = &Content> {
-        self.document.introspector.all()
+        self.document.introspector().elements().all()
     }
 
     /// Look up pre-layout `Content` elements associated with a `Span`.
@@ -336,7 +339,7 @@ impl CompiledTypstDocument {
     pub fn source_snippet(&self, world: &TypstWorld, span: Span) -> Option<String> {
         let id = span.id()?;
         let source = world.source(id).ok()?;
-        let range = source.range(span)?;
+        let range = world.range(span)?;
         source.text().get(range).map(|s| s.to_owned())
     }
 }
@@ -364,10 +367,10 @@ fn format_diagnostics(world: &TypstWorld, diags: &[SourceDiagnostic]) -> String 
             .id()
             .and_then(|id| {
                 let source = world.source(id).ok()?;
-                let range = source.range(diag.span)?;
+                let range = world.range(diag.span)?;
                 let line = source.lines().byte_to_line(range.start)?;
                 let col = source.lines().byte_to_column(range.start)?;
-                let path = id.vpath().as_rootless_path().display().to_string();
+                let path = id.vpath().get_without_slash().to_string();
                 Some(format!("{path}:{}:{}", line + 1, col + 1))
             })
             .unwrap_or_else(|| "<detached>".to_string());
@@ -376,7 +379,7 @@ fn format_diagnostics(world: &TypstWorld, diags: &[SourceDiagnostic]) -> String 
             diag.severity, loc_info, diag.message
         ));
         for hint in &diag.hints {
-            out.push_str(&format!("\n  hint: {hint}"));
+            out.push_str(&format!("\n  hint: {}", hint.v));
         }
     }
     out

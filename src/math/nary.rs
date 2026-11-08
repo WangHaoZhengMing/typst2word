@@ -4,6 +4,7 @@ use typst::foundations::{Content, StyleChain, StyledElem, SymbolElem};
 use typst::math::{AlignPointElem, AttachElem, EquationElem, LimitsElem, ScriptsElem, StretchElem};
 use typst::text::{LinebreakElem, TextElem};
 
+use crate::math::attach::merge_attach_base;
 use crate::math::node::convert_math_node;
 use crate::math::{MathStyleCtx, convert_sequence_slice};
 use crate::xml::escape_xml_attr;
@@ -41,7 +42,7 @@ pub(crate) fn extract_nary_operator(
     }
 
     if let Some(attach) = item.to_packed::<AttachElem>() {
-        let merged = attach.merge_base().unwrap_or_else(|| attach.clone());
+        let merged = merge_attach_base(attach).unwrap_or_else(|| attach.clone());
         if merged.tl.is_set() || merged.bl.is_set() {
             return None;
         }

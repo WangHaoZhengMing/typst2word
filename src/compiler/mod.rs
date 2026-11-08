@@ -1,4 +1,4 @@
-//! Self-contained Typst 0.14 compiler backend, `World` implementation, and
+//! Self-contained Typst 0.15 compiler backend, `World` implementation, and
 //! semantic + layout query engine for `typst2word`.
 
 pub mod compile;

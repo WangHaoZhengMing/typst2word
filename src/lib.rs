@@ -1,7 +1,7 @@
 //! `typst2word` — Semantic + Visual Typst (`.typ`) to Microsoft Word (`.docx`) converter.
 //!
 //! Architecture:
-//! 1. [`compiler`]: Self-contained Typst 0.14.2 compiler & query engine (`TypstWorld`,
+//! 1. [`compiler`]: Self-contained Typst 0.15.1 compiler & query engine (`TypstWorld`,
 //!    `CUSTOM_ROUTINES`, `CompiledTypstDocument`) that preserves pre-layout `Content`
 //!    semantics, introspection `Introspector` queries, and laid-out `PagedDocument`
 //!    `Frame` tags (`Tag::Start` / `Tag::End`) including custom realization locations

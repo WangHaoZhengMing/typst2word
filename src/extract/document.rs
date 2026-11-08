@@ -3,7 +3,7 @@
 
 use typst::foundations::{Content, SequenceElem, StyleChain, StyledElem};
 use typst::layout::{ColumnsElem, PageElem, PagebreakElem};
-use typst::model::FootnoteEntry;
+use typst::model::{Document, FootnoteEntry};
 use typst::pdf::{ArtifactElem, ArtifactKind};
 
 use crate::color::paint_to_hex;
@@ -13,7 +13,7 @@ use crate::ir::{BlockNode, HAlignIr, MetadataIr, PageSetupIr};
 
 impl<'a> ExtractorContext<'a> {
     pub(crate) fn extract_metadata(&self) -> MetadataIr {
-        let info = &self.compiled.document.info;
+        let info = self.compiled.document.info();
         MetadataIr {
             title: info.title.as_ref().map(|s| s.to_string()),
             authors: info.author.iter().map(|s| s.to_string()).collect(),
@@ -24,7 +24,7 @@ impl<'a> ExtractorContext<'a> {
 
     pub(crate) fn extract_page_setup(&mut self, page_nodes: &[TreeNode]) -> PageSetupIr {
         let mut setup = PageSetupIr::default();
-        if let Some(first_page) = self.compiled.document.pages.first() {
+        if let Some(first_page) = self.compiled.document.pages().first() {
             let size = first_page.frame.size();
             setup.width_pt = size.x.to_pt();
             setup.height_pt = size.y.to_pt();

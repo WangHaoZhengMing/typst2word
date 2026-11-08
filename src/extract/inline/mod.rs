@@ -9,8 +9,8 @@ use typst::introspection::Location;
 use typst::layout::{HideElem, LayoutElem, MoveElem, Point, RotateElem, ScaleElem};
 use typst::math::EquationElem;
 use typst::model::{
-    CiteGroup, Destination, DirectLinkElem, EmphElem, FootnoteElem, LinkElem, LinkMarker, RefElem,
-    StrongElem,
+    CiteElem, CiteGroup, Destination, DirectLinkElem, EmphElem, FootnoteElem, LinkElem, LinkMarker,
+    RefElem, StrongElem,
 };
 use typst::syntax::Span;
 use typst::text::{
@@ -368,6 +368,7 @@ impl<'a> ExtractorContext<'a> {
             let keys: Vec<String> = cg
                 .children
                 .iter()
+                .filter_map(|c| c.to_packed::<CiteElem>())
                 .map(|c| c.key.resolve().as_str().to_string())
                 .collect();
             let mut cite_inlines = Vec::new();

@@ -79,7 +79,7 @@ impl<'a> ExtractorContext<'a> {
     }
 
     pub(crate) fn extract(&mut self) -> DocumentIr {
-        self.report.pages_count = self.compiled.document.pages.len();
+        self.report.pages_count = self.compiled.document.pages().len();
         for warn in &self.compiled.warnings {
             let msg = warn.message.to_string();
             self.report.compiler_warnings.push(msg);
@@ -99,7 +99,7 @@ impl<'a> ExtractorContext<'a> {
         }
 
         // 2. Pre-scan all page frames for detached `FrameParent` groups (footnotes & multi-frame continuations).
-        for page in &self.compiled.document.pages {
+        for page in self.compiled.document.pages() {
             self.collect_detached_parent_groups(&page.frame, Point::zero());
         }
 
@@ -119,8 +119,8 @@ impl<'a> ExtractorContext<'a> {
 
         // 4. Build frame trees once per page so `logical_child_groups` are attached cleanly.
         let mut page_trees: Vec<Vec<TreeNode>> =
-            Vec::with_capacity(self.compiled.document.pages.len());
-        for page in &self.compiled.document.pages {
+            Vec::with_capacity(self.compiled.document.pages().len());
+        for page in self.compiled.document.pages() {
             page_trees.push(self.build_frame_tree(&page.frame, Point::zero()));
         }
 

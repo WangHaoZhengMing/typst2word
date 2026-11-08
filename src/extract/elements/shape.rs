@@ -10,7 +10,7 @@ use typst::pdf::ArtifactElem;
 use typst::syntax::Span;
 use typst::text::RawElem;
 use typst::visualize::{
-    CircleElem, CurveElem, CurveItem, EllipseElem, FillRule, Geometry, LineElem, Paint, PathElem,
+    CircleElem, CurveElem, CurveItem, EllipseElem, FillRule, Geometry, LineElem, Paint,
     PolygonElem, RectElem, Shape, SquareElem,
 };
 
@@ -24,7 +24,7 @@ use crate::ir::{
 impl<'a> ExtractorContext<'a> {
     // =========================================================================
     // Native Shapes (`RectElem`, `SquareElem`, `CircleElem`, `EllipseElem`,
-    // `LineElem`, `PolygonElem`, `CurveElem`, `PathElem`) & CeTZ Canvases
+    // `LineElem`, `PolygonElem`, `CurveElem`) & CeTZ Canvases
     // =========================================================================
     pub(crate) fn is_native_shape_elem(elem: &Content) -> bool {
         elem.is::<RectElem>()
@@ -33,7 +33,6 @@ impl<'a> ExtractorContext<'a> {
             || elem.is::<EllipseElem>()
             || elem.is::<PolygonElem>()
             || elem.is::<CurveElem>()
-            || elem.is::<PathElem>()
             || elem.is::<LineElem>()
     }
 
@@ -280,7 +279,7 @@ impl<'a> ExtractorContext<'a> {
                 SidesPtIr::default(),
             )
         } else {
-            // `CurveElem` or `PathElem`
+            // `CurveElem` (Typst 0.15 removed the deprecated `path`)
             let mut segments = Vec::new();
             let off_x = bbox_x;
             let off_y = bbox_y;
@@ -497,7 +496,7 @@ impl<'a> ExtractorContext<'a> {
         }
         let fill = shape.fill.as_ref().and_then(paint_to_hex);
         let stroke = shape.stroke.as_ref().map(Self::fixed_stroke_to_ir);
-        let bbox = shape.geometry.bbox();
+        let bbox = shape.geometry.bbox(None);
         let width_pt = bbox.size().x.to_pt().abs().max(1.0);
         let height_pt = bbox.size().y.to_pt().abs().max(1.0);
 

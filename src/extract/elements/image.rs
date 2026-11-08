@@ -1,7 +1,7 @@
 //! `image` -> `ImageIr`.
 
-use typst::foundations::Packed;
-use typst::layout::{Frame, FrameItem, Point, Size};
+use typst::foundations::{Content, Packed, Smart};
+use typst::layout::{Abs, Frame, FrameItem, Point, Sides, Size};
 use typst::syntax::Span;
 use typst::visualize::{ExchangeFormat, Image, ImageKind, RasterFormat};
 
@@ -69,17 +69,17 @@ impl<'a> ExtractorContext<'a> {
                     (raster.data().as_slice().to_vec(), ImageFormatIr::Gif)
                 }
                 _ => {
-                    // Render WebP or raw pixel format via `typst_svg::svg_frame` into SVG.
+                    // Render WebP or raw pixel format into SVG via `typst_svg`.
                     let mut f = Frame::hard(size);
                     f.push(Point::zero(), FrameItem::Image(image.clone(), size, span));
-                    (typst_svg::svg_frame(&f).into_bytes(), ImageFormatIr::Svg)
+                    (frame_to_svg(f).into_bytes(), ImageFormatIr::Svg)
                 }
             },
             ImageKind::Svg(svg) => (svg.data().as_slice().to_vec(), ImageFormatIr::Svg),
             ImageKind::Pdf(_) => {
                 let mut f = Frame::hard(size);
                 f.push(Point::zero(), FrameItem::Image(image.clone(), size, span));
-                (typst_svg::svg_frame(&f).into_bytes(), ImageFormatIr::Svg)
+                (frame_to_svg(f).into_bytes(), ImageFormatIr::Svg)
             }
         };
 
@@ -92,4 +92,19 @@ impl<'a> ExtractorContext<'a> {
             align,
         })
     }
+}
+
+/// Render a single frame to a standalone SVG (transparent background, no bleed).
+///
+/// Typst 0.15 removed `typst_svg::svg_frame`; wrap the frame in a bare `Page` instead.
+fn frame_to_svg(frame: Frame) -> String {
+    let page = typst_layout::Page {
+        frame,
+        bleed: Sides::splat(Abs::zero()),
+        fill: Smart::Custom(None),
+        numbering: None,
+        supplement: Content::empty(),
+        number: 1,
+    };
+    typst_svg::svg(&page, &typst_svg::SvgOptions::default())
 }

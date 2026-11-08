@@ -14,7 +14,7 @@ pub(crate) fn convert_attach(
     xml: &mut String,
     plain: &mut String,
 ) {
-    let merged = attach.merge_base().unwrap_or_else(|| attach.clone());
+    let merged = merge_attach_base(attach).unwrap_or_else(|| attach.clone());
     let base_limits = should_attach_as_limits(&merged.base, styles, ctx);
 
     let sub =
@@ -137,4 +137,41 @@ pub(crate) fn should_attach_as_limits(
         return ctx.is_display && op.limits.get(styles);
     }
     false
+}
+
+/// If an `AttachElem`'s base is also an `AttachElem`, merge attachments into the
+/// base where possible (e.g. `a_b^c` written as nested attachments).
+///
+/// Port of `Packed::<AttachElem>::merge_base`, which Typst 0.15 removed from its
+/// public API when math layout moved to an internal IR.
+pub(crate) fn merge_attach_base(attach: &Packed<AttachElem>) -> Option<Packed<AttachElem>> {
+    // Extract from an EquationElem.
+    let mut base = &attach.base;
+    while let Some(equation) = base.to_packed::<EquationElem>() {
+        base = &equation.body;
+    }
+
+    // Move attachments from elem into base where possible.
+    let base = base.to_packed::<AttachElem>()?;
+    let mut elem = attach.clone();
+    let mut base = base.clone();
+
+    macro_rules! merge {
+        ($field:ident) => {
+            if !base.$field.is_set() && elem.$field.is_set() {
+                base.$field = elem.$field.clone();
+                elem.$field.unset();
+            }
+        };
+    }
+
+    merge!(t);
+    merge!(b);
+    merge!(tl);
+    merge!(tr);
+    merge!(bl);
+    merge!(br);
+
+    elem.base = base.pack();
+    Some(elem)
 }

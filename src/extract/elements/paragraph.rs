@@ -49,7 +49,7 @@ impl<'a> ExtractorContext<'a> {
             first_line_indent_pt: par
                 .first_line_indent
                 .get(StyleChain::default())
-                .amount
+                .amount()
                 .abs
                 .to_pt(),
             hanging_indent_pt: par.hanging_indent.get(StyleChain::default()).abs.to_pt(),

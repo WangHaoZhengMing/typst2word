@@ -243,8 +243,18 @@ impl<'a> ExtractorContext<'a> {
         // 1. Skip artifacts (headers, footers, page decorations) and footnote entries.
         if let Some(artifact) = elem.to_packed::<ArtifactElem>() {
             match artifact.kind.get(StyleChain::default()) {
-                ArtifactKind::Header | ArtifactKind::Footer | ArtifactKind::Page => return,
-                ArtifactKind::Other => {
+                // Page furniture (Typst 0.15 tags the page background as `Background`
+                // instead of `Page`, and adds finer-grained pagination kinds).
+                ArtifactKind::Header
+                | ArtifactKind::Footer
+                | ArtifactKind::Page
+                | ArtifactKind::Background
+                | ArtifactKind::Watermark
+                | ArtifactKind::PageNumber
+                | ArtifactKind::LineNumber
+                | ArtifactKind::Bates
+                | ArtifactKind::PaginationOther => return,
+                ArtifactKind::Other | ArtifactKind::Layout | ArtifactKind::Redaction => {
                     // Other artifacts (like decorative shapes) can still be processed if they are shapes.
                 }
             }
@@ -377,7 +387,7 @@ impl<'a> ExtractorContext<'a> {
         }
 
         // 15. Native Shapes (`RectElem`, `SquareElem`, `CircleElem`, `EllipseElem`,
-        //     `PolygonElem`, `CurveElem`, `PathElem`, `LineElem`, and rotated/scaled shapes).
+        //     `PolygonElem`, `CurveElem`, `LineElem`, and rotated/scaled shapes).
         if elem.is::<RotateElem>() || elem.is::<ScaleElem>() || elem.is::<MoveElem>() {
             if let Some(shape_ir) =
                 self.try_extract_transformed_shape(elem, pos, children, list_level, inherited_align)
