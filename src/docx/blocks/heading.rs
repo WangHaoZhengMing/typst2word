@@ -30,7 +30,9 @@ impl<'a> DocxBuilder<'a> {
         align: HAlignIr,
         out: &mut String,
     ) {
-        self.render_heading_inner(level, numbering, content, bookmark, align, false, false, out);
+        self.render_heading_inner(
+            level, numbering, content, bookmark, align, false, false, out,
+        );
     }
 
     #[allow(clippy::too_many_arguments)]

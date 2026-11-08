@@ -1,25 +1,28 @@
 //! Inline-level extraction: `TreeNode`s inside paragraphs, headings, captions, ...
 //! -> `InlineNode`s, tracking active inline styles (`strong`, `emph`, `underline`, ...).
+//!
+//! Submodules (mirroring `crate::docx::inlines`):
+//! - `style`: inline formatting wrappers (`strong`, `emph`, `underline`, `strike`, `highlight`, ...)
+//! - `box_container`: inline `#box(...)` border, shading, and blank underline strips
+//! - `link`: hyperlinks (`link`), cross-references (`ref`), and citations (`cite`)
+//! - `footnote`: inline footnote references (`footnote`)
+//! - `text`: `TextItem` -> `TextRunIr` conversion and run coalescing
 
+mod box_container;
+mod footnote;
 mod link;
+mod style;
 mod text;
 
-use typst::foundations::{Content, StyleChain};
+use typst::foundations::Content;
 use typst::introspection::Location;
 use typst::layout::{HideElem, LayoutElem, MoveElem, Point, RotateElem, ScaleElem};
 use typst::math::EquationElem;
-use typst::model::{
-    CiteElem, CiteGroup, Destination, DirectLinkElem, EmphElem, FootnoteElem, LinkElem, LinkMarker,
-    RefElem, StrongElem,
-};
+use typst::model::FootnoteElem;
 use typst::syntax::Span;
-use typst::text::{
-    HighlightElem, LinebreakElem, OverlineElem, RawElem, SmallcapsElem, StrikeElem, SubElem,
-    SuperElem, UnderlineElem,
-};
-use typst::visualize::Paint;
+use typst::text::LinebreakElem;
+use typst::visualize::{ImageElem, Paint};
 
-use crate::color::paint_to_hex;
 use crate::compiler::compile::is_cetz_span;
 use crate::extract::ExtractorContext;
 use crate::extract::frame_tree::TreeNode;
@@ -42,9 +45,6 @@ pub(crate) struct ActiveInlineState {
 }
 
 impl<'a> ExtractorContext<'a> {
-    // =========================================================================
-    // Inline-level Extraction
-    // =========================================================================
     pub(crate) fn extract_inlines_flat(&mut self, nodes: &[TreeNode]) -> Vec<InlineNode> {
         self.extract_inlines_flat_with_bold(nodes, false)
     }
@@ -83,12 +83,11 @@ impl<'a> ExtractorContext<'a> {
                     let y_pt = pos.y.to_pt();
                     let x_pt = pos.x.to_pt();
 
-                    // Detect inter-word or inter-line spacing from laid-out glyph coordinates!
+                    // Detect inter-word or inter-line spacing from laid-out glyph coordinates.
                     if let Some(prev_y) = *last_y {
                         if (y_pt - prev_y).abs() > text.size.to_pt() * 0.55
                             && state.script == ScriptKindIr::Normal
                         {
-                            // Check if this visual line jump was caused by an explicit `LinebreakElem` (`\`).
                             let accumulated_txt = Self::inlines_to_plain_text(out);
                             let trimmed_acc = accumulated_txt.trim_end();
                             let is_explicit_br = !trimmed_acc.is_empty()
@@ -154,134 +153,22 @@ impl<'a> ExtractorContext<'a> {
                     pos,
                     children,
                 } => {
-                    if Self::is_cetz_group_nodes(children) {
-                        if let Some(canvas) = self.extract_cetz_canvas(
+                    if Self::is_cetz_group_nodes(children)
+                        && let Some(canvas) = self.extract_cetz_canvas(
                             children,
                             Some(group.frame.size()),
                             HAlignIr::Left,
-                        ) {
-                            self.report.cetz_canvases_count += 1;
-                            out.push(InlineNode::CetzInline(canvas));
-                            continue;
-                        }
+                        )
+                    {
+                        self.report.cetz_canvases_count += 1;
+                        out.push(InlineNode::CetzInline(canvas));
+                        continue;
                     }
 
-                    // Check if this inline `Group` is a `#box(...)` with border/fill/underline shapes!
-                    let mut bg_shapes = Vec::new();
-                    let mut content_children = Vec::new();
-                    let mut shape_nodes = Vec::new();
-                    for child in children {
-                        match child {
-                            TreeNode::Shape {
-                                shape,
-                                span,
-                                pos: spos,
-                            } => {
-                                bg_shapes.push((*spos, shape.clone(), *span));
-                                shape_nodes.push(child.clone());
-                            }
-                            TreeNode::Element {
-                                elem,
-                                children: achildren,
-                                pos: apos,
-                                ..
-                            } if elem.is::<typst::pdf::ArtifactElem>() => {
-                                for ac in achildren {
-                                    if let TreeNode::Shape {
-                                        shape,
-                                        span,
-                                        pos: spos,
-                                    } = ac
-                                    {
-                                        bg_shapes.push((*apos + *spos, shape.clone(), *span));
-                                    }
-                                }
-                                shape_nodes.push(child.clone());
-                            }
-                            other => content_children.push(other.clone()),
-                        }
-                    }
-
-                    if !bg_shapes.is_empty() {
-                        let inner_text = Self::nodes_to_plain_text(&content_children);
-                        if inner_text.trim().is_empty() {
-                            // Empty / whitespace-only inline `#box(width: 4em, stroke: (bottom: 0.5pt))` (`#uline()`):
-                            // emit only the shape so whitespace doesn't offset the underline!
-                            self.extract_inlines_from_nodes(
-                                &shape_nodes,
-                                out,
-                                state,
-                                last_y,
-                                last_x_end,
-                            );
-                            *last_x_end = Some(pos.x.to_pt() + group.frame.size().x.to_pt());
-                            continue;
-                        } else {
-                            // Non-empty inline `#box([正确答案：A], stroke: 1pt, outset: 2.5pt)` or
-                            // `#box([答案], stroke: (bottom: 0.5pt))`:
-                            // distinguish a thin bottom-underline strip from a 4-sided box fill/stroke!
-                            let is_bottom_line_only = bg_shapes.len() == 1 && {
-                                let b = bg_shapes[0].1.geometry.bbox(None).size();
-                                matches!(bg_shapes[0].1.geometry, typst::visualize::Geometry::Line(_))
-                                    || (b.y.to_pt().abs() <= 2.5 && b.x.to_pt().abs() >= 6.0)
-                            };
-                            let prev_hl = state.highlight.clone();
-                            let prev_bdr = state.border.clone();
-                            let prev_ul = state.underline.clone();
-                            if is_bottom_line_only {
-                                let s = &bg_shapes[0].1;
-                                let st = s
-                                    .stroke
-                                    .as_ref()
-                                    .map(Self::fixed_stroke_to_ir)
-                                    .or_else(|| {
-                                        let color = s
-                                            .fill
-                                            .as_ref()
-                                            .and_then(paint_to_hex)
-                                            .unwrap_or_else(|| "000000".to_string());
-                                        let th = s
-                                            .geometry
-                                            .bbox(None)
-                                            .size()
-                                            .y
-                                            .to_pt()
-                                            .abs()
-                                            .clamp(0.5, 2.5);
-                                        Some(StrokeIr {
-                                            color,
-                                            thickness_pt: th,
-                                            ..Default::default()
-                                        })
-                                    });
-                                state.underline = st;
-                            } else {
-                                let box_fill = bg_shapes
-                                    .iter()
-                                    .find_map(|(_, s, _)| s.fill.as_ref().and_then(paint_to_hex));
-                                let box_stroke = bg_shapes.iter().find_map(|(_, s, _)| {
-                                    s.stroke.as_ref().map(Self::fixed_stroke_to_ir)
-                                });
-                                if let Some(f) = box_fill {
-                                    state.highlight = Some(f);
-                                }
-                                if let Some(st) = box_stroke {
-                                    state.border = Some(st);
-                                }
-                            }
-                            self.extract_inlines_from_nodes(
-                                &content_children,
-                                out,
-                                state,
-                                last_y,
-                                last_x_end,
-                            );
-                            state.highlight = prev_hl;
-                            state.border = prev_bdr;
-                            state.underline = prev_ul;
-                            *last_x_end = Some(pos.x.to_pt() + group.frame.size().x.to_pt());
-                            continue;
-                        }
+                    if self.try_extract_inline_box_group(
+                        group, *pos, children, out, state, last_y, last_x_end,
+                    ) {
+                        continue;
                     }
 
                     self.extract_inlines_from_nodes(children, out, state, last_y, last_x_end);
@@ -313,134 +200,21 @@ impl<'a> ExtractorContext<'a> {
         last_y: &mut Option<f64>,
         last_x_end: &mut Option<f64>,
     ) {
-        // 0. Skip page furniture artifacts (headers, footers, page numbers) and footnote entries.
-        if Self::is_page_furniture_elem(elem) {
+        if Self::is_page_furniture_elem(elem) || elem.is::<HideElem>() {
             return;
         }
 
-        // 1. Check for unsupported inline elements.
         if let Some(unsup) = self.check_unsupported_element(elem, loc) {
             out.push(InlineNode::UnsupportedInline(unsup));
             return;
         }
 
-        // 2. Inline formatting tags (`StrongElem`, `EmphElem`, `UnderlineElem`, `StrikeElem`,
-        //    `OverlineElem`, `HighlightElem`, `SubElem`, `SuperElem`, `SmallcapsElem`, `HideElem`).
-        if elem.is::<StrongElem>() {
-            let prev = state.bold;
-            state.bold = true;
-            self.extract_inlines_from_nodes(children, out, state, last_y, last_x_end);
-            state.bold = prev;
-            return;
-        }
-        if elem.is::<EmphElem>() {
-            let prev = state.italic;
-            state.italic = true;
-            self.extract_inlines_from_nodes(children, out, state, last_y, last_x_end);
-            state.italic = prev;
-            return;
-        }
-        if let Some(ul) = elem.to_packed::<UnderlineElem>() {
-            let prev = state.underline.clone();
-            let stroke = ul.stroke.resolve(StyleChain::default()).unwrap_or_default();
-            state.underline = Some(Self::abs_stroke_to_ir(&stroke));
-            // Filter out the decorative line shape inside `children` so it isn't emitted as a shape!
-            let text_only: Vec<TreeNode> = children
-                .iter()
-                .filter(|c| !matches!(c, TreeNode::Shape { .. }))
-                .cloned()
-                .collect();
-            self.extract_inlines_from_nodes(&text_only, out, state, last_y, last_x_end);
-            state.underline = prev;
-            return;
-        }
-        if let Some(st) = elem.to_packed::<StrikeElem>() {
-            let prev = state.strike.clone();
-            let stroke = st.stroke.resolve(StyleChain::default()).unwrap_or_default();
-            state.strike = Some(Self::abs_stroke_to_ir(&stroke));
-            let text_only: Vec<TreeNode> = children
-                .iter()
-                .filter(|c| !matches!(c, TreeNode::Shape { .. }))
-                .cloned()
-                .collect();
-            self.extract_inlines_from_nodes(&text_only, out, state, last_y, last_x_end);
-            state.strike = prev;
-            return;
-        }
-        if let Some(ol) = elem.to_packed::<OverlineElem>() {
-            let prev = state.overline.clone();
-            let stroke = ol.stroke.resolve(StyleChain::default()).unwrap_or_default();
-            state.overline = Some(Self::abs_stroke_to_ir(&stroke));
-            let text_only: Vec<TreeNode> = children
-                .iter()
-                .filter(|c| !matches!(c, TreeNode::Shape { .. }))
-                .cloned()
-                .collect();
-            self.extract_inlines_from_nodes(&text_only, out, state, last_y, last_x_end);
-            state.overline = prev;
-            return;
-        }
-        if let Some(hl) = elem.to_packed::<HighlightElem>() {
-            let prev = state.highlight.clone();
-            state.highlight = hl
-                .fill
-                .get_ref(StyleChain::default())
-                .as_ref()
-                .and_then(paint_to_hex)
-                .or_else(|| Some("FFF59D".to_string()));
-            let text_only: Vec<TreeNode> = children
-                .iter()
-                .filter(|c| !matches!(c, TreeNode::Shape { .. }))
-                .cloned()
-                .collect();
-            self.extract_inlines_from_nodes(&text_only, out, state, last_y, last_x_end);
-            state.highlight = prev;
-            return;
-        }
-        if elem.is::<SubElem>() {
-            let prev = state.script;
-            state.script = ScriptKindIr::Sub;
-            self.extract_inlines_from_nodes(children, out, state, last_y, last_x_end);
-            state.script = prev;
-            return;
-        }
-        if elem.is::<SuperElem>() {
-            let prev = state.script;
-            state.script = ScriptKindIr::Super;
-            self.extract_inlines_from_nodes(children, out, state, last_y, last_x_end);
-            state.script = prev;
-            return;
-        }
-        if elem.is::<SmallcapsElem>() {
-            let prev = state.smallcaps;
-            state.smallcaps = true;
-            self.extract_inlines_from_nodes(children, out, state, last_y, last_x_end);
-            state.smallcaps = prev;
-            return;
-        }
-        if elem.is::<HideElem>() {
+        // 1. Inline formatting & code tags (`style.rs`).
+        if self.try_extract_inline_style_element(elem, children, out, state, last_y, last_x_end) {
             return;
         }
 
-        // 3. Inline Code (`RawElem` with `block: false`).
-        if elem.is::<RawElem>() {
-            let prev = state.is_code;
-            state.is_code = true;
-            let before_len = out.len();
-            self.extract_inlines_from_nodes(children, out, state, last_y, last_x_end);
-            if out.len() == before_len {
-                out.push(InlineNode::Text(TextRunIr {
-                    text: elem.plain_text().to_string(),
-                    font_family: Some("Consolas".to_string()),
-                    is_code: true,
-                    ..Default::default()
-                }));
-            }
-            state.is_code = prev;
-            return;
-        }
-
-        // 4. Inline Equation (`EquationElem`).
+        // 2. Inline Equation (`EquationElem`).
         if let Some(eq) = elem.to_packed::<EquationElem>() {
             let eq_ir = self.extract_equation(eq, loc, children);
             self.report.equations_count += 1;
@@ -449,108 +223,30 @@ impl<'a> ExtractorContext<'a> {
             return;
         }
 
-        // 5. Footnote Reference (`FootnoteElem`).
+        // 3. Footnote Reference (`footnote.rs`).
         if elem.is::<FootnoteElem>() {
-            let id = self.next_footnote_id;
-            self.next_footnote_id += 1;
-            let number_text = Self::nodes_to_plain_text(children).trim().to_string();
-            let content = self.footnotes.get(&loc).cloned().unwrap_or_default();
-            self.report.footnotes_count += 1;
-            out.push(InlineNode::Footnote {
-                id,
-                number_text: if number_text.is_empty() {
-                    id.to_string()
-                } else {
-                    number_text
-                },
-                content,
-            });
+            self.extract_inline_footnote(loc, children, out);
             *last_x_end = None;
             return;
         }
 
-        // 6. Cross-reference (`RefElem`).
-        if let Some(rf) = elem.to_packed::<RefElem>() {
-            let target_str = rf.target.resolve().as_str().to_string();
-            let anchor = self
-                .label_bookmarks
-                .get(&target_str)
-                .cloned()
-                .unwrap_or_else(|| target_str.clone());
-            let mut ref_inlines = Vec::new();
-            self.extract_inlines_from_nodes(children, &mut ref_inlines, state, last_y, last_x_end);
-            // Unwrap inner Link if `RefElem` realized into a `DirectLinkElem`/`LinkMarker`.
-            let clean_inlines = Self::unwrap_link_inlines(ref_inlines);
-            out.push(InlineNode::Ref {
-                target: anchor,
-                content: clean_inlines,
-            });
+        // 4. Links, Cross-references, Citations (`link.rs`).
+        if self.try_extract_inline_link_or_ref(elem, children, out, state, last_y, last_x_end) {
             return;
         }
 
-        // 7. Citation (`CiteGroup`).
-        if let Some(cg) = elem.to_packed::<CiteGroup>() {
-            let keys: Vec<String> = cg
-                .children
-                .iter()
-                .filter_map(|c| c.to_packed::<CiteElem>())
-                .map(|c| c.key.resolve().as_str().to_string())
-                .collect();
-            let mut cite_inlines = Vec::new();
-            self.extract_inlines_from_nodes(children, &mut cite_inlines, state, last_y, last_x_end);
-            let clean_inlines = Self::unwrap_link_inlines(cite_inlines);
-            out.push(InlineNode::Citation {
-                keys,
-                content: clean_inlines,
-            });
-            return;
-        }
-
-        // 8. Hyperlink (`LinkMarker`, `LinkElem`, `DirectLinkElem`).
-        if elem.is::<LinkMarker>() || elem.is::<LinkElem>() || elem.is::<DirectLinkElem>() {
-            let dest = Self::find_link_destination(elem, children);
-            let (url, anchor) = match dest {
-                Some(Destination::Url(u)) => (Some(u.to_string()), None),
-                Some(Destination::Location(target_loc)) => (
-                    None,
-                    self.bookmarks
-                        .get(&target_loc)
-                        .cloned()
-                        .or_else(|| Some(format!("_typst_loc_{:x}", target_loc.hash()))),
-                ),
-                Some(Destination::Position(_)) => (None, None),
-                None => (None, None),
-            };
-            let mut link_inlines = Vec::new();
-            self.extract_inlines_from_nodes(children, &mut link_inlines, state, last_y, last_x_end);
-            let had_inner_link = link_inlines
-                .iter()
-                .any(|inl| matches!(inl, InlineNode::Link { .. }));
-            let clean_inlines = Self::unwrap_link_inlines(link_inlines);
-            if !had_inner_link {
-                self.report.links_count += 1;
-            }
-            out.push(InlineNode::Link {
-                url,
-                anchor,
-                content: clean_inlines,
-            });
-            return;
-        }
-
-        // 9. Inline Shapes (`RectElem`, `CircleElem`, etc. inside a paragraph or `#box(...)`).
-        if elem.is::<RotateElem>() || elem.is::<ScaleElem>() || elem.is::<MoveElem>() {
-            if let Some(shape_ir) =
+        // 5. Inline Shapes (`RectElem`, `CircleElem`, etc. inside a paragraph or `#box(...)`).
+        if (elem.is::<RotateElem>() || elem.is::<ScaleElem>() || elem.is::<MoveElem>())
+            && let Some(shape_ir) =
                 self.try_extract_transformed_shape(elem, pos, children, 0, HAlignIr::Left)
-            {
-                self.report.shapes_count += 1;
-                out.push(InlineNode::ShapeInline(shape_ir));
-                *last_x_end = None;
-                return;
-            }
+        {
+            self.report.shapes_count += 1;
+            out.push(InlineNode::ShapeInline(shape_ir));
+            *last_x_end = None;
+            return;
         }
-        if Self::is_native_shape_elem(elem) {
-            if let Some(shape_ir) = self.extract_native_shape_elem(
+        if Self::is_native_shape_elem(elem)
+            && let Some(shape_ir) = self.extract_native_shape_elem(
                 elem,
                 pos,
                 children,
@@ -558,37 +254,36 @@ impl<'a> ExtractorContext<'a> {
                 HAlignIr::Left,
                 0.0,
                 (1.0, 1.0),
-            ) {
-                self.report.shapes_count += 1;
-                out.push(InlineNode::ShapeInline(shape_ir));
-                *last_x_end = None;
-                return;
-            }
+            )
+        {
+            self.report.shapes_count += 1;
+            out.push(InlineNode::ShapeInline(shape_ir));
+            *last_x_end = None;
+            return;
         }
 
-        // 10. Inline CeTZ canvas.
+        // 6. Inline CeTZ canvas.
         if (elem.is::<LayoutElem>() || elem.elem().name() == "context")
             && (is_cetz_span(elem.span()) || Self::contains_cetz_shapes_recursive(children))
+            && let Some(canvas) = self.extract_cetz_canvas(children, None, HAlignIr::Left)
         {
-            if let Some(canvas) = self.extract_cetz_canvas(children, None, HAlignIr::Left) {
-                self.report.cetz_canvases_count += 1;
-                out.push(InlineNode::CetzInline(canvas));
-                *last_x_end = None;
-                return;
-            }
+            self.report.cetz_canvases_count += 1;
+            out.push(InlineNode::CetzInline(canvas));
+            *last_x_end = None;
+            return;
         }
 
-        // 11. Inline Image (`ImageElem`).
-        if let Some(img_elem) = elem.to_packed::<typst::visualize::ImageElem>() {
-            if let Some(img_ir) = self.extract_image_elem(img_elem, children, HAlignIr::Left) {
-                self.report.images_count += 1;
-                out.push(InlineNode::ImageInline(img_ir));
-                *last_x_end = None;
-                return;
-            }
+        // 7. Inline Image (`ImageElem`).
+        if let Some(img_elem) = elem.to_packed::<ImageElem>()
+            && let Some(img_ir) = self.extract_image_elem(img_elem, children, HAlignIr::Left)
+        {
+            self.report.images_count += 1;
+            out.push(InlineNode::ImageInline(img_ir));
+            *last_x_end = None;
+            return;
         }
 
-        // 12. Explicit Linebreak (`LinebreakElem`).
+        // 8. Explicit Linebreak (`LinebreakElem`).
         if elem.is::<LinebreakElem>() {
             out.push(InlineNode::LineBreak);
             *last_y = None;
@@ -596,7 +291,7 @@ impl<'a> ExtractorContext<'a> {
             return;
         }
 
-        // 13. Recurse into children for any other container/tag.
+        // 9. Recurse into children for any other container/tag.
         self.extract_inlines_from_nodes(children, out, state, last_y, last_x_end);
     }
 

@@ -117,10 +117,10 @@ impl<'a> ExtractorContext<'a> {
                     .filter(|c| !c.is_whitespace())
                     .take(40)
                     .collect();
-                if let Some(pos_idx) = pagebreak_targets
-                    .iter()
-                    .position(|t| t == "__PAGEBREAK_ANY__" || (!page_head.is_empty() && page_head.contains(t.as_str())))
-                {
+                if let Some(pos_idx) = pagebreak_targets.iter().position(|t| {
+                    t == "__PAGEBREAK_ANY__"
+                        || (!page_head.is_empty() && page_head.contains(t.as_str()))
+                }) {
                     pagebreak_targets.remove(pos_idx);
                     self.flush_open_stack(&mut root_nodes, &mut stack);
                     root_nodes.push(TreeNode::PageBreak);
@@ -145,7 +145,9 @@ impl<'a> ExtractorContext<'a> {
         for (_, item) in flat_items {
             match item {
                 FrameItem::Tag(Tag::Start(elem, _)) => {
-                    if elem.is::<typst::pdf::ArtifactElem>() || elem.is::<typst::model::FootnoteEntry>() {
+                    if elem.is::<typst::pdf::ArtifactElem>()
+                        || elem.is::<typst::model::FootnoteEntry>()
+                    {
                         in_artifact_depth += 1;
                     }
                 }
@@ -236,11 +238,7 @@ impl<'a> ExtractorContext<'a> {
                     Self::push_node(root_nodes, stack, TreeNode::Text { text, pos });
                 }
                 FrameItem::Shape(shape, span) => {
-                    Self::push_node(
-                        root_nodes,
-                        stack,
-                        TreeNode::Shape { shape, span, pos },
-                    );
+                    Self::push_node(root_nodes, stack, TreeNode::Shape { shape, span, pos });
                 }
                 FrameItem::Image(image, size, span) => {
                     Self::push_node(
@@ -255,11 +253,7 @@ impl<'a> ExtractorContext<'a> {
                     );
                 }
                 FrameItem::Link(dest, size) => {
-                    Self::push_node(
-                        root_nodes,
-                        stack,
-                        TreeNode::Link { dest, size, pos },
-                    );
+                    Self::push_node(root_nodes, stack, TreeNode::Link { dest, size, pos });
                 }
             }
         }

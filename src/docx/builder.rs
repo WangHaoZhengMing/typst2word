@@ -86,9 +86,9 @@ impl<'a> DocxBuilder<'a> {
     }
 
     pub(crate) fn has_large_horizontal_space(inlines: &[InlineNode]) -> bool {
-        inlines.iter().any(
-            |inl| matches!(inl, InlineNode::HorizontalSpace { width_pt } if *width_pt >= 36.0),
-        )
+        inlines
+            .iter()
+            .any(|inl| matches!(inl, InlineNode::HorizontalSpace { width_pt } if *width_pt >= 36.0))
     }
 
     pub(crate) fn alloc_rel_id(&mut self) -> String {

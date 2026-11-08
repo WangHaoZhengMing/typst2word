@@ -1,14 +1,10 @@
-//! Native shapes (`rect`, `square`, `circle`, `ellipse`, `line`, `polygon`, `path`,
-//! `curve`), transformed shapes and styled `block`/`box` containers -> `ShapeIr`.
+//! Native geometric shapes (`rect`, `square`, `circle`, `ellipse`, `line`, `polygon`,
+//! `curve`) and geometric transforms (`rotate`, `scale`, `move`) -> `ShapeIr`.
 
 use typst::foundations::{Content, Smart, StyleChain};
-use typst::layout::{
-    GridCell, GroupItem, Point, RotateElem, ScaleAmount, ScaleElem, Size,
-};
-use typst::model::TableCell;
+use typst::layout::{Point, RotateElem, ScaleAmount, ScaleElem, Size};
 use typst::pdf::ArtifactElem;
 use typst::syntax::Span;
-use typst::text::RawElem;
 use typst::visualize::{
     CircleElem, CurveElem, CurveItem, EllipseElem, FillRule, Geometry, LineElem, Paint,
     PolygonElem, RectElem, Shape, SquareElem,
@@ -19,14 +15,9 @@ use crate::extract::ExtractorContext;
 use crate::extract::frame_tree::TreeNode;
 use crate::ir::{
     BlockNode, BordersIr, DashPatternIr, HAlignIr, ShapeIr, ShapeKindIr, SidesPtIr, StrokeIr,
-    TableCellIr, TableIr, TableRowIr, VAlignIr,
 };
 
 impl<'a> ExtractorContext<'a> {
-    // =========================================================================
-    // Native Shapes (`RectElem`, `SquareElem`, `CircleElem`, `EllipseElem`,
-    // `LineElem`, `PolygonElem`, `CurveElem`) & CeTZ Canvases
-    // =========================================================================
     pub(crate) fn is_native_shape_elem(elem: &Content) -> bool {
         elem.is::<RectElem>()
             || elem.is::<SquareElem>()
@@ -123,7 +114,6 @@ impl<'a> ExtractorContext<'a> {
         rotation_deg: f64,
         scale: (f64, f64),
     ) -> Option<ShapeIr> {
-        // Collect all direct `Shape` items (background fill & border strokes) and any inner content nodes.
         let mut shape_items: Vec<(Point, Shape, Span)> = Vec::new();
         let mut body_tree_nodes: Vec<TreeNode> = Vec::new();
         let mut group_size: Option<Size> = None;
@@ -174,7 +164,6 @@ impl<'a> ExtractorContext<'a> {
             }
         }
 
-        // Determine shape dimensions from `group_size` or `shape_items` bounding box.
         let (bbox_x, bbox_y, bbox_w, bbox_h) = Self::shapes_bbox(&shape_items);
         let width_pt = group_size
             .map(|s| s.x.to_pt())
@@ -195,7 +184,6 @@ impl<'a> ExtractorContext<'a> {
             .iter()
             .find_map(|(_, s, _)| s.stroke.as_ref().map(Self::fixed_stroke_to_ir));
 
-        // Classify shape kind from the Typst element type.
         let (kind, corner_radius_pt, inset) = if let Some(rect) = elem.to_packed::<RectElem>() {
             let rad = Self::corners_radius_to_pt(
                 &rect.radius.get(StyleChain::default()),
@@ -285,12 +273,15 @@ impl<'a> ExtractorContext<'a> {
                 SidesPtIr::default(),
             )
         } else {
-            // `CurveElem` (Typst 0.15 removed the deprecated `path`)
             let mut segments = Vec::new();
-            let off_x = bbox_x;
-            let off_y = bbox_y;
             for (spos, sh, _) in &shape_items {
-                Self::geometry_to_curve_segments(&sh.geometry, *spos, off_x, off_y, &mut segments);
+                Self::geometry_to_curve_segments(
+                    &sh.geometry,
+                    *spos,
+                    bbox_x,
+                    bbox_y,
+                    &mut segments,
+                );
             }
             (
                 ShapeKindIr::CustomPath { segments },
@@ -335,7 +326,6 @@ impl<'a> ExtractorContext<'a> {
                     pos,
                     ..
                 } => {
-                    // `fill_and_stroke` wraps shape borders/backgrounds in `ArtifactElem(Other)`.
                     if elem.is::<ArtifactElem>() {
                         Self::partition_shape_and_body_nodes(
                             children,
@@ -356,8 +346,6 @@ impl<'a> ExtractorContext<'a> {
                     if group_size.is_none() {
                         *group_size = Some(group.frame.size());
                     }
-                    // If this group is the direct container of the shape (has background `Shape` items),
-                    // partition its children; otherwise treat it as body content.
                     if children.iter().any(|c| {
                         matches!(c, TreeNode::Shape { .. })
                             || matches!(c, TreeNode::Element { elem, .. } if elem.is::<ArtifactElem>())
@@ -379,184 +367,6 @@ impl<'a> ExtractorContext<'a> {
                 }
             }
         }
-    }
-
-    pub(crate) fn try_extract_styled_container_group(
-        &mut self,
-        group: &GroupItem,
-        _pos: Point,
-        children: &[TreeNode],
-        list_level: usize,
-        inherited_align: HAlignIr,
-    ) -> Option<BlockNode> {
-        // Check if this group starts with background/border `Shape` items (e.g. `#block(fill: ..., stroke: ...)[...]`)
-        // AND is not a raw table/grid cell or CeTZ canvas.
-        if Self::is_direct_table_or_code_container(children) || Self::is_cetz_group_nodes(children)
-        {
-            return None;
-        }
-
-        let mut bg_shapes = Vec::new();
-        let mut content_nodes = Vec::new();
-        for child in children {
-            match child {
-                TreeNode::Shape { shape, span, pos } => {
-                    bg_shapes.push((*pos, shape.clone(), *span));
-                }
-                TreeNode::Element {
-                    elem,
-                    children: achildren,
-                    pos,
-                    ..
-                } if elem.is::<ArtifactElem>() => {
-                    for ac in achildren {
-                        if let TreeNode::Shape {
-                            shape,
-                            span,
-                            pos: spos,
-                        } = ac
-                        {
-                            bg_shapes.push((*pos + *spos, shape.clone(), *span));
-                        }
-                    }
-                }
-                other => content_nodes.push(other.clone()),
-            }
-        }
-
-        if bg_shapes.is_empty() || content_nodes.is_empty() {
-            return None;
-        }
-
-        let fill = bg_shapes
-            .iter()
-            .find_map(|(_, s, _)| s.fill.as_ref().and_then(paint_to_hex));
-        let stroke = bg_shapes
-            .iter()
-            .find_map(|(_, s, _)| s.stroke.as_ref().map(Self::fixed_stroke_to_ir));
-        if fill.is_none() && stroke.is_none() {
-            return None;
-        }
-
-        let mut line_starts = Vec::new();
-        Self::collect_line_left_edges(&content_nodes, Point::zero(), &mut line_starts);
-        let inferred_pad = line_starts
-            .iter()
-            .map(|(_, lx)| *lx)
-            .filter(|&lx| lx >= 2.0)
-            .reduce(f64::min)
-            .map(|lx| lx.clamp(4.0, 24.0))
-            .unwrap_or(6.0);
-        let v_pad = inferred_pad.clamp(4.0, 12.0);
-
-        let prev_inset = self.container_inset_pt;
-        self.container_inset_pt += 2.0 * inferred_pad + 3.0;
-        let body_blocks =
-            self.extract_blocks_from_nodes(&content_nodes, list_level, inherited_align);
-        self.container_inset_pt = prev_inset;
-
-        if body_blocks.is_empty() {
-            return None;
-        }
-
-        let size = group.frame.size();
-        let width_pt = size.x.to_pt().max(40.0);
-        let inset = SidesPtIr {
-            top: v_pad,
-            bottom: v_pad,
-            left: inferred_pad,
-            right: inferred_pad,
-        };
-
-        // If the styled `#block(stroke: ..., fill: ...)[...]` contains tables, lists, enums,
-        // figures, rules, CeTZ canvases, or more than 3 blocks, represent it as a breakable
-        // 1-cell bordered `BlockNode::Table` so all inner blocks render natively and flow
-        // across columns/pages in Word!
-        let needs_table_container = body_blocks.iter().any(|b| {
-            !matches!(
-                b,
-                BlockNode::Paragraph { .. }
-                    | BlockNode::Heading { .. }
-                    | BlockNode::EquationBlock(_)
-                    | BlockNode::CodeBlock { .. }
-            )
-        }) || body_blocks.len() > 3;
-
-        if needs_table_container {
-            self.report.tables_count += 1;
-            return Some(BlockNode::Table(TableIr {
-                is_semantic_table: false,
-                col_widths_pt: vec![width_pt],
-                row_heights_pt: vec![0.0],
-                header_rows: 0,
-                rows: vec![TableRowIr {
-                    height_pt: None,
-                    is_header: false,
-                    cells: vec![TableCellIr {
-                        x: 0,
-                        y: 0,
-                        colspan: 1,
-                        rowspan: 1,
-                        vmerge: None,
-                        hmerged_covered: false,
-                        fill,
-                        borders: BordersIr::splat(stroke),
-                        inset,
-                        halign: inherited_align,
-                        valign: VAlignIr::Top,
-                        is_header_cell: false,
-                        blocks: body_blocks,
-                    }],
-                }],
-                align: inherited_align,
-                left_indent_pt: 0.0,
-                summary: Some("__styled_container__".to_string()),
-            }));
-        }
-
-        let corner_radius_pt = bg_shapes.iter().find_map(|(_, s, _)| {
-            if let Geometry::Curve(curve) = &s.geometry
-                && let Some(CurveItem::Move(p)) = curve.0.first()
-            {
-                let rx = p.x.to_pt();
-                let ry = p.y.to_pt();
-                if rx > 0.5 && ry.abs() < 0.5 && rx <= size.x.to_pt() * 0.5 {
-                    return Some(rx);
-                } else if ry > 0.5 && rx.abs() < 0.5 && ry <= size.y.to_pt() * 0.5 {
-                    return Some(ry);
-                }
-            }
-            None
-        });
-
-        self.report.shapes_count += 1;
-        Some(BlockNode::ShapeBlock(ShapeIr {
-            kind: ShapeKindIr::Rect,
-            width_pt,
-            height_pt: size.y.to_pt().max(20.0),
-            fill,
-            fill_rule_even_odd: false,
-            stroke: stroke.clone(),
-            borders: BordersIr::splat(stroke),
-            corner_radius_pt,
-            inset,
-            rotation_deg: 0.0,
-            scale_x: 1.0,
-            scale_y: 1.0,
-            body: body_blocks,
-            align: inherited_align,
-        }))
-    }
-
-    pub(crate) fn is_direct_table_or_code_container(nodes: &[TreeNode]) -> bool {
-        for node in nodes {
-            if let TreeNode::Element { elem, .. } = node
-                && (elem.is::<TableCell>() || elem.is::<GridCell>() || elem.is::<RawElem>())
-            {
-                return true;
-            }
-        }
-        false
     }
 
     pub(crate) fn extract_raw_shape_item(

@@ -12,7 +12,7 @@ impl<'a> DocxBuilder<'a> {
     // Table & Grid Rendering
     // =========================================================================
     pub(crate) fn render_table(&mut self, table: &TableIr, out: &mut String) {
-        let is_styled_container = table.summary.as_deref() == Some("__styled_container__");
+        let is_styled_container = table.is_styled_container;
         out.push_str("<w:tbl><w:tblPr>");
         Self::render_table_jc(table.align, out);
         if table.left_indent_pt > 0.5 && table.align == crate::ir::HAlignIr::Left {
@@ -249,7 +249,10 @@ impl<'a> DocxBuilder<'a> {
                     cell_style.space_after_pt = cell_style.space_after_pt.min(2.0);
                 } else {
                     match blocks.get(idx + 1) {
-                        Some(BlockNode::List { tight: true, .. } | BlockNode::Enum { tight: true, .. }) => {
+                        Some(
+                            BlockNode::List { tight: true, .. }
+                            | BlockNode::Enum { tight: true, .. },
+                        ) => {
                             cell_style.space_after_pt = cell_style.space_after_pt.min(0.5);
                         }
                         Some(BlockNode::HorizontalRule { .. }) => {

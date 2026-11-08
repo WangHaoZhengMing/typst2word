@@ -51,9 +51,7 @@ impl<'a> DocxBuilder<'a> {
             // adjacent without an intervening `<w:p>`, Word merges them into a single table!
             // Emit a minimal 2pt separator paragraph only between adjacent table-backed blocks.
             if Self::is_table_backed_block(block)
-                && blocks
-                    .get(idx + 1)
-                    .is_some_and(Self::is_table_backed_block)
+                && blocks.get(idx + 1).is_some_and(Self::is_table_backed_block)
             {
                 out.push_str(
                     r#"<w:p><w:pPr><w:spacing w:before="0" w:after="40" w:line="40" w:lineRule="exact"/><w:rPr><w:sz w:val="2"/><w:szCs w:val="2"/></w:rPr></w:pPr></w:p>"#,
@@ -235,8 +233,7 @@ impl<'a> DocxBuilder<'a> {
                     align,
                 }) = body.first()
                 {
-                    let compact_after =
-                        matches!(body.get(1), Some(BlockNode::Paragraph { .. }));
+                    let compact_after = matches!(body.get(1), Some(BlockNode::Paragraph { .. }));
                     self.render_heading_inner(
                         *level,
                         numbering.as_deref(),

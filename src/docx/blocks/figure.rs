@@ -15,16 +15,18 @@ impl<'a> DocxBuilder<'a> {
         bookmark: Option<&str>,
         out: &mut String,
     ) {
-        self.render_figure_indented(body, caption, caption_top, bookmark, 0, out);
+        self.render_figure_with_layout(body, caption, caption_top, bookmark, 0, 60, out);
     }
 
-    pub(crate) fn render_figure_indented(
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn render_figure_with_layout(
         &mut self,
         body: &[BlockNode],
         caption: Option<&[InlineNode]>,
         caption_top: bool,
         bookmark: Option<&str>,
         indent_left: usize,
+        caption_after_dxa: i64,
         out: &mut String,
     ) {
         let body_indent_dxa = body
@@ -39,7 +41,7 @@ impl<'a> DocxBuilder<'a> {
         let eff_indent = indent_left.max(body_indent_dxa);
         if caption_top {
             if let Some(cap) = caption {
-                self.render_caption_paragraph_indented(cap, bookmark, eff_indent, out);
+                self.render_caption_paragraph(cap, bookmark, eff_indent, caption_after_dxa, out);
             }
             self.render_figure_body_indented(body, eff_indent, out);
         } else {
@@ -61,7 +63,7 @@ impl<'a> DocxBuilder<'a> {
                 out.push_str(&body_xml);
             }
             if let Some(cap) = caption {
-                self.render_caption_paragraph_indented(cap, bookmark, eff_indent, out);
+                self.render_caption_paragraph(cap, bookmark, eff_indent, caption_after_dxa, out);
             }
         }
     }
@@ -107,15 +109,17 @@ impl<'a> DocxBuilder<'a> {
         }
     }
 
-    pub(crate) fn render_caption_paragraph_indented(
+    pub(crate) fn render_caption_paragraph(
         &mut self,
         caption: &[InlineNode],
         bookmark: Option<&str>,
         indent_left: usize,
+        after_dxa: i64,
         out: &mut String,
     ) {
-        out.push_str(
-            r#"<w:p><w:pPr><w:pStyle w:val="Caption"/><w:jc w:val="center"/><w:spacing w:before="20" w:after="60"/>"#,
+        let _ = write!(
+            out,
+            r#"<w:p><w:pPr><w:pStyle w:val="Caption"/><w:jc w:val="center"/><w:spacing w:before="20" w:after="{after_dxa}"/>"#,
         );
         if indent_left > 0 {
             let _ = write!(out, r#"<w:ind w:left="{indent_left}"/>"#);

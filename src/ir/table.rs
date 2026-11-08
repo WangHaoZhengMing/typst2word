@@ -8,6 +8,10 @@ use super::{BlockNode, BordersIr, ColorHex, HAlignIr, SidesPtIr, VAlignIr};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TableIr {
     pub is_semantic_table: bool,
+    /// True when this table represents a bordered/filled `#block(...)` container
+    /// (rather than an explicit `#table` or `#grid`).
+    #[serde(default)]
+    pub is_styled_container: bool,
     pub col_widths_pt: Vec<f64>,
     pub row_heights_pt: Vec<f64>,
     pub header_rows: usize,

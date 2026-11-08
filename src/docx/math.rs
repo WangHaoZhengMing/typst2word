@@ -113,12 +113,14 @@ fn render_math_node(node: &MathNodeIr, out: &mut String) {
             if let Some(low_n) = lower {
                 let mut lim_xml = String::new();
                 render_non_empty_node(low_n, &mut lim_xml);
-                current = format!("<m:limLow><m:e>{current}</m:e><m:lim>{lim_xml}</m:lim></m:limLow>");
+                current =
+                    format!("<m:limLow><m:e>{current}</m:e><m:lim>{lim_xml}</m:lim></m:limLow>");
             }
             if let Some(upp_n) = upper {
                 let mut lim_xml = String::new();
                 render_non_empty_node(upp_n, &mut lim_xml);
-                current = format!("<m:limUpp><m:e>{current}</m:e><m:lim>{lim_xml}</m:lim></m:limUpp>");
+                current =
+                    format!("<m:limUpp><m:e>{current}</m:e><m:lim>{lim_xml}</m:lim></m:limUpp>");
             }
             out.push_str(&current);
         }
@@ -166,11 +168,7 @@ fn render_math_node(node: &MathNodeIr, out: &mut String) {
                 escape_xml_attr(open)
             );
             if !separator.is_empty() {
-                let _ = write!(
-                    out,
-                    r#"<m:sepChr m:val="{}"/>"#,
-                    escape_xml_attr(separator)
-                );
+                let _ = write!(out, r#"<m:sepChr m:val="{}"/>"#, escape_xml_attr(separator));
             }
             let _ = write!(
                 out,
@@ -218,7 +216,10 @@ fn render_math_node(node: &MathNodeIr, out: &mut String) {
         }
         MathNodeIr::Bar { pos_bottom, body } => {
             let pos = if *pos_bottom { "bot" } else { "top" };
-            let _ = write!(out, r#"<m:bar><m:barPr><m:pos m:val="{pos}"/></m:barPr><m:e>"#);
+            let _ = write!(
+                out,
+                r#"<m:bar><m:barPr><m:pos m:val="{pos}"/></m:barPr><m:e>"#
+            );
             render_non_empty_node(body, out);
             out.push_str("</m:e></m:bar>");
         }

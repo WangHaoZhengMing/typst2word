@@ -11,8 +11,7 @@ fn read_zip_entry(docx_bytes: &[u8], entry_name: &str) -> String {
         .by_name(entry_name)
         .unwrap_or_else(|_| panic!("missing zip entry: {entry_name}"));
     let mut content = String::new();
-    file.read_to_string(&mut content)
-        .expect("utf-8 xml entry");
+    file.read_to_string(&mut content).expect("utf-8 xml entry");
     content
 }
 
@@ -91,8 +90,8 @@ fn main() {
 ) <fig-table>
 "##;
 
-    let (docx_bytes, ir) =
-        convert_typst_str_to_docx_bytes(typst_src, None).expect("compilation and conversion succeeded");
+    let (docx_bytes, ir) = convert_typst_str_to_docx_bytes(typst_src, None)
+        .expect("compilation and conversion succeeded");
     let doc_xml = assert_valid_docx_xml(&docx_bytes);
 
     assert_eq!(ir.metadata.title.as_deref(), Some("Semantic Test Document"));
@@ -178,7 +177,10 @@ fn test_native_shapes_conversion_to_word_drawingml() {
             }
         }
     }
-    assert!(saw_rect_with_body, "Rect with text body should be extracted");
+    assert!(
+        saw_rect_with_body,
+        "Rect with text body should be extracted"
+    );
     assert!(saw_ellipse, "Circle/Ellipse should be extracted");
     assert!(saw_polygon, "Polygon should be extracted");
     assert!(saw_custom_path, "Curve should be extracted");
@@ -234,7 +236,10 @@ $ a &= b + c \
     assert!(doc_xml.contains("<m:acc>"), "accent <m:acc>");
     assert!(doc_xml.contains("<m:groupChr>"), "overbrace <m:groupChr>");
     assert!(doc_xml.contains("<m:borderBox>"), "cancel <m:borderBox>");
-    assert!(doc_xml.contains("<m:eqArr>"), "aligned equation array <m:eqArr>");
+    assert!(
+        doc_xml.contains("<m:eqArr>"),
+        "aligned equation array <m:eqArr>"
+    );
 }
 
 #[test]

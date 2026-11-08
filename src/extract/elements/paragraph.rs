@@ -167,8 +167,7 @@ impl<'a> ExtractorContext<'a> {
                     }
                     let x = (offset.x + pos.x).to_pt();
                     let y = (offset.y + pos.y).to_pt();
-                    if let Some(existing) = lines.iter_mut().find(|(ly, _)| (*ly - y).abs() < 3.0)
-                    {
+                    if let Some(existing) = lines.iter_mut().find(|(ly, _)| (*ly - y).abs() < 3.0) {
                         existing.1 = existing.1.min(x);
                     } else {
                         lines.push((y, x));

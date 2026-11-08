@@ -51,7 +51,8 @@ impl<'a> ExtractorContext<'a> {
             // Typst's default margin is 2.5 / 21 of the shorter page dimension (~70.87pt for A4).
             let default_margin_pt = (2.5 / 21.0) * setup.width_pt.min(setup.height_pt);
             let chain = self.style_chain();
-            let base_font_pt = Self::resolve_length_pt(chain.get(typst::text::TextElem::size).0, 11.0);
+            let base_font_pt =
+                Self::resolve_length_pt(chain.get(typst::text::TextElem::size).0, 11.0);
             let margin_cfg = chain.get(PageElem::margin);
             let resolve_side = |side: Option<Smart<typst::layout::Rel<typst::layout::Length>>>,
                                 axis_pt: f64|

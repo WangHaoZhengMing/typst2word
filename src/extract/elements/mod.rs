@@ -4,11 +4,13 @@
 mod bibliography;
 mod cetz;
 mod code;
+mod container;
 mod equation;
 mod figure;
 mod footnote;
 mod heading;
 mod image;
+mod layout;
 mod list;
 mod outline;
 mod paragraph;

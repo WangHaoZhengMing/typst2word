@@ -196,7 +196,7 @@ pub(crate) fn build_cetz_label_wsp(label: &CetzLabelDrawableIr) -> String {
         xfrm_attrs.push_str(&format!(r#" rot="{rot}""#));
     }
 
-    let nobreak_content: Vec< crate::ir::InlineNode> = label
+    let nobreak_content: Vec<crate::ir::InlineNode> = label
         .content
         .iter()
         .map(|node| match node {

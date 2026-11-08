@@ -71,7 +71,10 @@ fn main() -> ExitCode {
                 match serde_json::to_string_pretty(&ir) {
                     Ok(json) => {
                         if let Err(e) = std::fs::write(&ir_path, json) {
-                            eprintln!("Warning: failed to write IR JSON to {}: {e}", ir_path.display());
+                            eprintln!(
+                                "Warning: failed to write IR JSON to {}: {e}",
+                                ir_path.display()
+                            );
                         }
                     }
                     Err(e) => eprintln!("Warning: failed to serialize IR JSON: {e}"),

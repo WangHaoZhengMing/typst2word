@@ -89,7 +89,9 @@ pub(crate) fn render_inline_nodes_to_wml(inlines: &[InlineNode], out: &mut Strin
             InlineNode::HorizontalSpace { width_pt } => {
                 let spaces = ((width_pt / 3.5).round() as usize).clamp(1, 8);
                 let s = "\u{00A0}".repeat(spaces);
-                out.push_str(&format!(r#"<w:r><w:t xml:space="preserve">{s}</w:t></w:r>"#));
+                out.push_str(&format!(
+                    r#"<w:r><w:t xml:space="preserve">{s}</w:t></w:r>"#
+                ));
             }
             InlineNode::UnsupportedInline(u) => {
                 let badge_run = TextRunIr {
