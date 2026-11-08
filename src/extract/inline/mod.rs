@@ -106,7 +106,7 @@ impl<'a> ExtractorContext<'a> {
                             }
                         } else if let Some(prev_x_end) = *last_x_end {
                             let gap_pt = x_pt - prev_x_end;
-                            if gap_pt > text.size.to_pt() * 1.2 {
+                            if gap_pt > text.size.to_pt() * 0.75 {
                                 out.push(InlineNode::HorizontalSpace { width_pt: gap_pt });
                             }
                         }
@@ -135,6 +135,13 @@ impl<'a> ExtractorContext<'a> {
                     }
                 }
                 TreeNode::Shape { shape, span, pos } => {
+                    if state.underline.is_some()
+                        || state.strike.is_some()
+                        || state.overline.is_some()
+                        || state.highlight.is_some()
+                    {
+                        continue;
+                    }
                     if let Some(shape_ir) =
                         self.extract_raw_shape_item(shape, *span, *pos, Vec::new(), HAlignIr::Left)
                     {
@@ -210,30 +217,55 @@ impl<'a> ExtractorContext<'a> {
                             *last_x_end = Some(pos.x.to_pt() + group.frame.size().x.to_pt());
                             continue;
                         } else {
-                            // Non-empty inline `#box([正确答案：A], stroke: 1pt, outset: 2.5pt)`:
-                            // apply `border` / `highlight` / `underline` to the inner text runs!
-                            let box_fill = bg_shapes
-                                .iter()
-                                .find_map(|(_, s, _)| s.fill.as_ref().and_then(paint_to_hex));
-                            let box_stroke = bg_shapes.iter().find_map(|(_, s, _)| {
-                                s.stroke.as_ref().map(Self::fixed_stroke_to_ir)
-                            });
-                            let is_bottom_line_only = bg_shapes.len() == 1
-                                && matches!(
-                                    bg_shapes[0].1.geometry,
-                                    typst::visualize::Geometry::Line(_)
-                                );
-
+                            // Non-empty inline `#box([正确答案：A], stroke: 1pt, outset: 2.5pt)` or
+                            // `#box([答案], stroke: (bottom: 0.5pt))`:
+                            // distinguish a thin bottom-underline strip from a 4-sided box fill/stroke!
+                            let is_bottom_line_only = bg_shapes.len() == 1 && {
+                                let b = bg_shapes[0].1.geometry.bbox(None).size();
+                                matches!(bg_shapes[0].1.geometry, typst::visualize::Geometry::Line(_))
+                                    || (b.y.to_pt().abs() <= 2.5 && b.x.to_pt().abs() >= 6.0)
+                            };
                             let prev_hl = state.highlight.clone();
                             let prev_bdr = state.border.clone();
                             let prev_ul = state.underline.clone();
-                            if let Some(f) = box_fill {
-                                state.highlight = Some(f);
-                            }
-                            if let Some(st) = box_stroke {
-                                if is_bottom_line_only {
-                                    state.underline = Some(st);
-                                } else {
+                            if is_bottom_line_only {
+                                let s = &bg_shapes[0].1;
+                                let st = s
+                                    .stroke
+                                    .as_ref()
+                                    .map(Self::fixed_stroke_to_ir)
+                                    .or_else(|| {
+                                        let color = s
+                                            .fill
+                                            .as_ref()
+                                            .and_then(paint_to_hex)
+                                            .unwrap_or_else(|| "000000".to_string());
+                                        let th = s
+                                            .geometry
+                                            .bbox(None)
+                                            .size()
+                                            .y
+                                            .to_pt()
+                                            .abs()
+                                            .clamp(0.5, 2.5);
+                                        Some(StrokeIr {
+                                            color,
+                                            thickness_pt: th,
+                                            ..Default::default()
+                                        })
+                                    });
+                                state.underline = st;
+                            } else {
+                                let box_fill = bg_shapes
+                                    .iter()
+                                    .find_map(|(_, s, _)| s.fill.as_ref().and_then(paint_to_hex));
+                                let box_stroke = bg_shapes.iter().find_map(|(_, s, _)| {
+                                    s.stroke.as_ref().map(Self::fixed_stroke_to_ir)
+                                });
+                                if let Some(f) = box_fill {
+                                    state.highlight = Some(f);
+                                }
+                                if let Some(st) = box_stroke {
                                     state.border = Some(st);
                                 }
                             }
