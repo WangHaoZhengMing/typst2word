@@ -127,6 +127,10 @@ struct ExtractorContext<'a> {
     next_footnote_id: usize,
     /// Set of locations already emitted as unsupported so we don't duplicate badges.
     seen_unsupported_locs: HashSet<Location>,
+    /// Left X coordinate (in pt) of the main page content area.
+    content_left_pt: f64,
+    /// Right X coordinate (in pt) of the main page content area.
+    content_right_pt: f64,
 }
 
 impl<'a> ExtractorContext<'a> {
@@ -142,6 +146,8 @@ impl<'a> ExtractorContext<'a> {
             footnote_raw_groups: HashMap::new(),
             next_footnote_id: 1,
             seen_unsupported_locs: HashSet::new(),
+            content_left_pt: 70.866,
+            content_right_pt: 595.276 - 70.866,
         }
     }
 
@@ -184,17 +190,25 @@ impl<'a> ExtractorContext<'a> {
             }
         }
 
-        // 4. Extract document metadata and page setup (including header/footer from page 1).
-        let metadata = self.extract_metadata();
-        let page_setup = self.extract_page_setup();
+        // 4. Build frame trees once per page so `logical_child_groups` are attached cleanly.
+        let mut page_trees: Vec<Vec<TreeNode>> = Vec::with_capacity(self.compiled.document.pages.len());
+        for page in &self.compiled.document.pages {
+            page_trees.push(self.build_frame_tree(&page.frame, Point::zero()));
+        }
 
-        // 5. Build unified tree across all pages and extract body blocks.
+        // 5. Extract document metadata and page setup (including header/footer from page 1).
+        let metadata = self.extract_metadata();
+        let first_page_nodes = page_trees.first().cloned().unwrap_or_default();
+        let page_setup = self.extract_page_setup(&first_page_nodes);
+
+        // 6. Combine page trees across all pages. Only insert hard `PageBreak` nodes between
+        //    pages if the source document explicitly used `#pagebreak()` (`PagebreakElem`).
+        let has_explicit_pb = Self::has_explicit_pagebreak(&self.compiled.evaluated_content);
         let mut all_root_nodes: Vec<TreeNode> = Vec::new();
-        for (page_idx, page) in self.compiled.document.pages.iter().enumerate() {
-            if page_idx > 0 {
+        for (page_idx, page_nodes) in page_trees.into_iter().enumerate() {
+            if page_idx > 0 && has_explicit_pb {
                 all_root_nodes.push(TreeNode::PageBreak);
             }
-            let page_nodes = self.build_frame_tree(&page.frame, Point::zero());
             all_root_nodes.extend(page_nodes);
         }
 
@@ -211,6 +225,19 @@ impl<'a> ExtractorContext<'a> {
             blocks,
             report: self.report.clone(),
         }
+    }
+
+    fn has_explicit_pagebreak(content: &Content) -> bool {
+        if content.is::<PagebreakElem>() {
+            return true;
+        }
+        if let Some(styled) = content.to_packed::<StyledElem>() {
+            return Self::has_explicit_pagebreak(&styled.child);
+        }
+        if let Some(seq) = content.to_packed::<SequenceElem>() {
+            return seq.children.iter().any(Self::has_explicit_pagebreak);
+        }
+        false
     }
 
     fn clean_redundant_pagebreaks(&self, blocks: &mut Vec<BlockNode>) {
@@ -243,7 +270,7 @@ impl<'a> ExtractorContext<'a> {
         }
     }
 
-    fn extract_page_setup(&mut self) -> PageSetupIr {
+    fn extract_page_setup(&mut self, page_nodes: &[TreeNode]) -> PageSetupIr {
         let mut setup = PageSetupIr::default();
         if let Some(first_page) = self.compiled.document.pages.first() {
             let size = first_page.frame.size();
@@ -268,14 +295,9 @@ impl<'a> ExtractorContext<'a> {
                 }
             }
 
-            // Extract header & footer from ArtifactElem(Header / Footer) on the first page.
-            let page_nodes = self.build_frame_tree(&first_page.frame, Point::zero());
-            for node in &page_nodes {
-                self.collect_header_footer_artifacts(node, &mut setup.header, &mut setup.footer);
-            }
-
-            // Estimate margins from the first page content position if available.
-            if let Some((min_x, min_y)) = Self::find_first_content_origin(&page_nodes) {
+            // Estimate margins from the first page content position if available BEFORE extracting
+            // headers/footers so `self.content_left_pt` and `self.content_right_pt` are accurate!
+            if let Some((min_x, min_y)) = Self::find_first_content_origin(page_nodes) {
                 if min_x > 10.0 && min_x < setup.width_pt * 0.4 {
                     setup.margin_left_pt = min_x;
                     setup.margin_right_pt = min_x;
@@ -284,6 +306,14 @@ impl<'a> ExtractorContext<'a> {
                     setup.margin_top_pt = min_y;
                     setup.margin_bottom_pt = min_y;
                 }
+            }
+            self.content_left_pt = setup.margin_left_pt;
+            self.content_right_pt =
+                (setup.width_pt - setup.margin_right_pt).max(setup.margin_left_pt + 100.0);
+
+            // Extract header & footer from ArtifactElem(Header / Footer) on the first page.
+            for node in page_nodes {
+                self.collect_header_footer_artifacts(node, &mut setup.header, &mut setup.footer);
             }
         }
         setup
@@ -325,12 +355,14 @@ impl<'a> ExtractorContext<'a> {
                 if let Some(artifact) = elem.to_packed::<ArtifactElem>() {
                     match artifact.kind.get(StyleChain::default()) {
                         ArtifactKind::Header => {
-                            let blocks = self.extract_blocks_from_nodes(children, 0, HAlignIr::Left);
+                            let align = self.infer_node_halign(children).unwrap_or(HAlignIr::Left);
+                            let blocks = self.extract_blocks_from_nodes(children, 0, align);
                             header.extend(blocks);
                             return;
                         }
                         ArtifactKind::Footer => {
-                            let blocks = self.extract_blocks_from_nodes(children, 0, HAlignIr::Left);
+                            let align = self.infer_node_halign(children).unwrap_or(HAlignIr::Left);
+                            let blocks = self.extract_blocks_from_nodes(children, 0, align);
                             footer.extend(blocks);
                             return;
                         }
@@ -807,8 +839,8 @@ impl<'a> ExtractorContext<'a> {
 
         // 4. Title (`#title[...]`).
         if let Some(_title) = elem.to_packed::<TitleElem>() {
-            let align = Self::infer_node_halign(children).unwrap_or(HAlignIr::Center);
-            let content = self.extract_inlines_flat(children);
+            let align = self.infer_node_halign(children).unwrap_or(HAlignIr::Left);
+            let content = self.extract_inlines_flat_with_bold(children, true);
             self.report.headings_count += 1;
             blocks.push(BlockNode::Title { content, align });
             return;
@@ -817,7 +849,7 @@ impl<'a> ExtractorContext<'a> {
         // 5. Heading (`= Heading`, `== Subheading`).
         if let Some(heading) = elem.to_packed::<HeadingElem>() {
             let level = heading.resolve_level(StyleChain::default()).get();
-            let align = Self::infer_node_halign(children).unwrap_or(inherited_align);
+            let align = self.infer_node_halign(children).unwrap_or(inherited_align);
             let bookmark = self.bookmarks.get(&loc).cloned();
             let (numbering, content) = self.extract_heading_numbering_and_body(heading, children);
             self.report.headings_count += 1;
@@ -859,7 +891,7 @@ impl<'a> ExtractorContext<'a> {
                 align: if par.justify.get(StyleChain::default()) {
                     HAlignIr::Justify
                 } else {
-                    Self::infer_node_halign(children).unwrap_or(inherited_align)
+                    self.infer_node_halign(children).unwrap_or(inherited_align)
                 },
                 first_line_indent_pt: par
                     .first_line_indent
@@ -1177,16 +1209,31 @@ impl<'a> ExtractorContext<'a> {
         heading: &Packed<HeadingElem>,
         children: &[TreeNode],
     ) -> (Option<String>, Vec<InlineNode>) {
-        let all_inlines = self.extract_inlines_flat(children);
+        let all_inlines = self.extract_inlines_flat_with_bold(children, true);
         if heading.numbering.get_ref(StyleChain::default()).is_none() {
             return (None, all_inlines);
         }
 
-        // When `heading.numbering` is set, `HEADING_RULE` prepends `numbering + HElem(0.3em, weak: true) + body`.
-        // Look for the first `HorizontalSpace` (or gap between numbering text and body text).
+        // First check synthesized `heading.numbers` if populated by Typst synthesis.
+        if let Some(ref synth_eco) = heading.numbers {
+            let synth_num = synth_eco.trim();
+            if !synth_num.is_empty() {
+                if let Some(stripped) =
+                    Self::strip_leading_prefix_from_inlines(&all_inlines, synth_num)
+                {
+                    if !stripped.is_empty() {
+                        return (Some(synth_num.to_string()), stripped);
+                    }
+                }
+            }
+        }
+
+        // Fallback: look for the first `HorizontalSpace` (or space run after numbering text).
         for (idx, inline) in all_inlines.iter().enumerate() {
             if matches!(inline, InlineNode::HorizontalSpace { .. }) && idx > 0 {
-                let prefix_str = Self::inlines_to_plain_text(&all_inlines[..idx]);
+                let prefix_str = Self::inlines_to_plain_text(&all_inlines[..idx])
+                    .trim()
+                    .to_string();
                 let body_inlines = all_inlines[idx + 1..].to_vec();
                 if !prefix_str.is_empty() && !body_inlines.is_empty() {
                     return (Some(prefix_str), body_inlines);
@@ -1195,6 +1242,72 @@ impl<'a> ExtractorContext<'a> {
         }
 
         (None, all_inlines)
+    }
+
+    fn strip_leading_prefix_from_inlines(
+        inlines: &[InlineNode],
+        prefix: &str,
+    ) -> Option<Vec<InlineNode>> {
+        let mut rem_prefix = prefix;
+        let mut out = Vec::new();
+        let mut prefix_done = false;
+
+        for inline in inlines {
+            if prefix_done {
+                if out.is_empty() && matches!(inline, InlineNode::HorizontalSpace { .. }) {
+                    continue;
+                }
+                if out.is_empty() {
+                    if let InlineNode::Text(r) = inline {
+                        let trimmed = r.text.trim_start();
+                        if trimmed.is_empty() {
+                            continue;
+                        }
+                        if trimmed.len() != r.text.len() {
+                            let mut nr = r.clone();
+                            nr.text = trimmed.to_string();
+                            out.push(InlineNode::Text(nr));
+                            continue;
+                        }
+                    }
+                }
+                out.push(inline.clone());
+                continue;
+            }
+
+            match inline {
+                InlineNode::Text(r) => {
+                    let t = r.text.as_str();
+                    if let Some(rest_run) = t.strip_prefix(rem_prefix) {
+                        rem_prefix = "";
+                        prefix_done = true;
+                        let trimmed_rest = rest_run.trim_start();
+                        if !trimmed_rest.is_empty() {
+                            let mut nr = r.clone();
+                            nr.text = trimmed_rest.to_string();
+                            out.push(InlineNode::Text(nr));
+                        }
+                    } else if let Some(rest_pref) = rem_prefix.strip_prefix(t) {
+                        rem_prefix = rest_pref;
+                        if rem_prefix.is_empty() {
+                            prefix_done = true;
+                        }
+                    } else {
+                        return None;
+                    }
+                }
+                InlineNode::HorizontalSpace { .. } if rem_prefix.is_empty() => {
+                    prefix_done = true;
+                }
+                _ => return None,
+            }
+        }
+
+        if prefix_done {
+            Some(out)
+        } else {
+            None
+        }
     }
 
     fn extract_list_items(&mut self, children: &[TreeNode], list_level: usize) -> Vec<ListItemIr> {
@@ -1365,24 +1478,51 @@ impl<'a> ExtractorContext<'a> {
             HashMap::new();
         Self::collect_table_cell_nodes(children, factor, &mut cell_nodes_map);
 
-        // Estimate column widths and row heights from laid-out cell frames and grid lines.
+        // Estimate column widths and row heights from explicit grid sizings and laid-out cell frames.
         let mut col_widths_pt = vec![0.0_f64; num_cols];
         let mut row_heights_pt = vec![0.0_f64; num_rows];
+        let mut row_has_explicit_height = vec![false; num_rows];
+
+        for x in 0..num_cols {
+            let raw_x = x * factor;
+            if let Some(typst::layout::Sizing::Rel(rel)) = grid.cols.get(raw_x) {
+                let abs_pt = rel.abs.abs.to_pt();
+                if abs_pt > 1.0 && rel.rel.is_zero() {
+                    col_widths_pt[x] = abs_pt;
+                }
+            }
+        }
+        for y in 0..num_rows {
+            let raw_y = y * factor;
+            if let Some(typst::layout::Sizing::Rel(rel)) = grid.rows.get(raw_y) {
+                let abs_pt = rel.abs.abs.to_pt();
+                if abs_pt > 1.0 && rel.rel.is_zero() {
+                    row_heights_pt[y] = abs_pt;
+                    row_has_explicit_height[y] = true;
+                }
+            }
+        }
 
         for (&(cx, cy), (cell_elem, cnodes, csize)) in &cell_nodes_map {
             let colspan = Self::get_cell_colspan(cell_elem);
             let rowspan = Self::get_cell_rowspan(cell_elem);
-            let w_pt = csize.x.to_pt().max(Self::estimate_nodes_bbox(cnodes).2);
-            let h_pt = csize.y.to_pt().max(Self::estimate_nodes_bbox(cnodes).3);
-            if colspan == 1 && cx < num_cols {
+            let w_pt = csize
+                .x
+                .to_pt()
+                .max(Self::estimate_nodes_bbox(cnodes).2 + 12.0);
+            let h_pt = csize
+                .y
+                .to_pt()
+                .max(Self::estimate_nodes_bbox(cnodes).3 + 8.0);
+            if colspan == 1 && cx < num_cols && col_widths_pt[cx] <= 1.0 {
                 col_widths_pt[cx] = col_widths_pt[cx].max(w_pt);
             }
-            if rowspan == 1 && cy < num_rows {
+            if rowspan == 1 && cy < num_rows && !row_has_explicit_height[cy] {
                 row_heights_pt[cy] = row_heights_pt[cy].max(h_pt);
             }
         }
 
-        // Fill in any zero-width columns with a sensible default (e.g. from colspan cells or 80pt).
+        // Fill in any zero-width columns with a sensible default (e.g. from colspan cells or 90pt).
         for w in &mut col_widths_pt {
             if *w <= 1.0 {
                 *w = 90.0;
@@ -1498,7 +1638,7 @@ impl<'a> ExtractorContext<'a> {
             }
 
             rows.push(TableRowIr {
-                height_pt: if row_heights_pt[y] > 1.0 {
+                height_pt: if row_has_explicit_height[y] && row_heights_pt[y] > 1.0 {
                     Some(row_heights_pt[y])
                 } else {
                     None
@@ -1934,7 +2074,7 @@ impl<'a> ExtractorContext<'a> {
             } = child
             {
                 if elem.is::<HeadingElem>() || elem.is::<TitleElem>() {
-                    title = Some(self.extract_inlines_flat(cchildren));
+                    title = Some(self.extract_inlines_flat_with_bold(cchildren, true));
                     continue;
                 }
             }
@@ -1953,19 +2093,58 @@ impl<'a> ExtractorContext<'a> {
                         .element_location()
                         .ok()
                         .and_then(|loc| self.bookmarks.get(&loc).cloned());
-                    let all_text = Self::nodes_to_plain_text(children);
+                    let all_text = Self::nodes_to_plain_text(children).replace('\u{2060}', "");
                     let page = all_text
                         .split_whitespace()
                         .last()
                         .unwrap_or("1")
                         .to_string();
-                    let title_inlines = vec![InlineNode::Text(TextRunIr {
-                        text: entry.element.plain_text().to_string(),
-                        ..Default::default()
-                    })];
+
+                    let prefix_str = Self::find_outline_entry_prefix(children);
+                    let filtered_nodes = Self::filter_outline_entry_body_nodes(children);
+                    let raw_inlines = self.extract_inlines_flat(&filtered_nodes);
+                    let mut body_inlines = Self::unwrap_link_inlines(raw_inlines);
+                    Self::strip_trailing_outline_page(&mut body_inlines, &page);
+
+                    if body_inlines.is_empty() {
+                        let fallback_title = entry
+                            .body()
+                            .ok()
+                            .map(|c| c.plain_text().to_string())
+                            .filter(|s| !s.is_empty())
+                            .unwrap_or_else(|| entry.element.plain_text().to_string());
+                        body_inlines.push(InlineNode::Text(TextRunIr {
+                            text: fallback_title,
+                            font_family: Some("Heiti SC".to_string()),
+                            font_size_pt: Some(11.0),
+                            ..Default::default()
+                        }));
+                    }
+
+                    let mut title_inlines = Vec::new();
+                    if let Some(ref pref) = prefix_str {
+                        let base_sz = body_inlines
+                            .iter()
+                            .find_map(|inl| {
+                                if let InlineNode::Text(r) = inl {
+                                    r.font_size_pt
+                                } else {
+                                    None
+                                }
+                            })
+                            .unwrap_or(11.0);
+                        title_inlines.push(InlineNode::Text(TextRunIr {
+                            text: format!("{pref}  "),
+                            font_family: Some("Libertinus Serif".to_string()),
+                            font_size_pt: Some(base_sz),
+                            ..Default::default()
+                        }));
+                    }
+                    title_inlines.extend(body_inlines);
+
                     out.push(OutlineEntryIr {
                         level,
-                        prefix: None,
+                        prefix: prefix_str,
                         title: title_inlines,
                         page,
                         target_bookmark,
@@ -1982,6 +2161,120 @@ impl<'a> ExtractorContext<'a> {
                 }
             }
             _ => {}
+        }
+    }
+
+    fn find_outline_entry_prefix(nodes: &[TreeNode]) -> Option<String> {
+        for node in nodes {
+            match node {
+                TreeNode::Element { elem, children, .. } => {
+                    if let Some(marker) = elem.to_packed::<PdfMarkerTag>() {
+                        if matches!(marker.kind, PdfMarkerTagKind::Label) {
+                            let txt = Self::nodes_to_plain_text(children)
+                                .replace('\u{2060}', "")
+                                .trim()
+                                .to_string();
+                            if !txt.is_empty() {
+                                return Some(txt);
+                            }
+                        }
+                    }
+                    if let Some(found) = Self::find_outline_entry_prefix(children) {
+                        return Some(found);
+                    }
+                }
+                TreeNode::Group { children, .. } => {
+                    if let Some(found) = Self::find_outline_entry_prefix(children) {
+                        return Some(found);
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    fn filter_outline_entry_body_nodes(nodes: &[TreeNode]) -> Vec<TreeNode> {
+        let mut out = Vec::new();
+        for node in nodes {
+            match node {
+                TreeNode::Element {
+                    elem,
+                    loc,
+                    pos,
+                    children,
+                } => {
+                    if let Some(marker) = elem.to_packed::<PdfMarkerTag>() {
+                        if matches!(marker.kind, PdfMarkerTagKind::Label) {
+                            continue;
+                        }
+                    }
+                    if elem.is::<RepeatElem>() || Self::contains_repeat_elem(children) {
+                        continue;
+                    }
+                    out.push(TreeNode::Element {
+                        elem: elem.clone(),
+                        loc: *loc,
+                        pos: *pos,
+                        children: Self::filter_outline_entry_body_nodes(children),
+                    });
+                }
+                TreeNode::Group {
+                    group,
+                    pos,
+                    children,
+                } => {
+                    if Self::contains_repeat_elem(children) {
+                        continue;
+                    }
+                    out.push(TreeNode::Group {
+                        group: group.clone(),
+                        pos: *pos,
+                        children: Self::filter_outline_entry_body_nodes(children),
+                    });
+                }
+                other => out.push(other.clone()),
+            }
+        }
+        out
+    }
+
+    fn contains_repeat_elem(nodes: &[TreeNode]) -> bool {
+        nodes.iter().any(|n| match n {
+            TreeNode::Element { elem, children, .. } => {
+                elem.is::<RepeatElem>() || Self::contains_repeat_elem(children)
+            }
+            TreeNode::Group { children, .. } => Self::contains_repeat_elem(children),
+            _ => false,
+        })
+    }
+
+    fn strip_trailing_outline_page(inlines: &mut Vec<InlineNode>, page: &str) {
+        while let Some(last) = inlines.last_mut() {
+            match last {
+                InlineNode::HorizontalSpace { .. } => {
+                    inlines.pop();
+                }
+                InlineNode::Text(r) => {
+                    let cleaned = r.text.replace('\u{2060}', "");
+                    let trimmed_end = cleaned.trim_end();
+                    if trimmed_end.is_empty() || trimmed_end == page {
+                        inlines.pop();
+                    } else if let Some(before_page) = trimmed_end.strip_suffix(page) {
+                        let stripped = before_page.trim_end();
+                        if stripped.is_empty() {
+                            inlines.pop();
+                        } else {
+                            r.text = stripped.to_string();
+                            break;
+                        }
+                    } else {
+                        r.text = trimmed_end.to_string();
+                        break;
+                    }
+                }
+                _ => break,
+            }
         }
     }
 
@@ -2240,8 +2533,8 @@ impl<'a> ExtractorContext<'a> {
         } else if elem.is::<LineElem>() {
             if let Some((lpos, Shape { geometry: Geometry::Line(end), .. }, _)) = shape_items.first()
             {
-                let x1 = lpos.x.to_pt();
-                let y1 = lpos.y.to_pt();
+                let x1 = lpos.x.to_pt() - bbox_x;
+                let y1 = lpos.y.to_pt() - bbox_y;
                 let x2 = x1 + end.x.to_pt();
                 let y2 = y1 + end.y.to_pt();
                 (
@@ -2275,8 +2568,8 @@ impl<'a> ExtractorContext<'a> {
                     match item {
                         CurveItem::Move(p) | CurveItem::Line(p) => {
                             pts.push((
-                                (spos.x + p.x).to_pt() - bbox_x.min(0.0),
-                                (spos.y + p.y).to_pt() - bbox_y.min(0.0),
+                                (spos.x + p.x).to_pt() - bbox_x,
+                                (spos.y + p.y).to_pt() - bbox_y,
                             ));
                         }
                         _ => {}
@@ -2291,8 +2584,8 @@ impl<'a> ExtractorContext<'a> {
         } else {
             // `CurveElem` or `PathElem`
             let mut segments = Vec::new();
-            let off_x = bbox_x.min(0.0);
-            let off_y = bbox_y.min(0.0);
+            let off_x = bbox_x;
+            let off_y = bbox_y;
             for (spos, sh, _) in &shape_items {
                 Self::geometry_to_curve_segments(&sh.geometry, *spos, off_x, off_y, &mut segments);
             }
@@ -2624,6 +2917,34 @@ impl<'a> ExtractorContext<'a> {
             return None;
         }
 
+        // Normalize coordinates if the CeTZ box was soft-flattened into page coordinates.
+        let min_px = paths
+            .iter()
+            .map(|p| p.x_pt)
+            .chain(labels.iter().map(|l| l.x_pt))
+            .fold(f64::INFINITY, f64::min);
+        let min_py = paths
+            .iter()
+            .map(|p| p.y_pt)
+            .chain(labels.iter().map(|l| l.y_pt))
+            .fold(f64::INFINITY, f64::min);
+        if min_px.is_finite() && min_py.is_finite() {
+            let should_shift = match explicit_box_size {
+                Some(sz) => min_px > sz.x.to_pt() * 0.4 || min_py > sz.y.to_pt() * 0.4,
+                None => min_px > 15.0 || min_py > 15.0,
+            };
+            if should_shift {
+                for p in &mut paths {
+                    p.x_pt = (p.x_pt - min_px).max(0.0);
+                    p.y_pt = (p.y_pt - min_py).max(0.0);
+                }
+                for l in &mut labels {
+                    l.x_pt = (l.x_pt - min_px).max(0.0);
+                    l.y_pt = (l.y_pt - min_py).max(0.0);
+                }
+            }
+        }
+
         let (width_pt, height_pt) = if let Some(sz) = explicit_box_size {
             (sz.x.to_pt().max(10.0), sz.y.to_pt().max(10.0))
         } else {
@@ -2740,7 +3061,6 @@ impl<'a> ExtractorContext<'a> {
                 }
                 TreeNode::Element {
                     elem,
-                    pos,
                     children,
                     ..
                 } => {
@@ -2764,8 +3084,8 @@ impl<'a> ExtractorContext<'a> {
                             };
                             if !inlines.is_empty() {
                                 let (bx, by, bw, bh) = Self::estimate_nodes_bbox(children);
-                                let lx = (offset.x + pos.x).to_pt() + bx;
-                                let ly = (offset.y + pos.y).to_pt() + by;
+                                let lx = offset.x.to_pt() + bx;
+                                let ly = offset.y.to_pt() + by;
                                 labels.push(CetzLabelDrawableIr {
                                     x_pt: lx,
                                     y_pt: ly,
@@ -2781,7 +3101,7 @@ impl<'a> ExtractorContext<'a> {
 
                     self.collect_cetz_drawables(
                         children,
-                        offset + *pos,
+                        offset,
                         next_rot,
                         box_size,
                         background,
@@ -2931,8 +3251,19 @@ impl<'a> ExtractorContext<'a> {
     // =========================================================================
 
     fn extract_inlines_flat(&mut self, nodes: &[TreeNode]) -> Vec<InlineNode> {
+        self.extract_inlines_flat_with_bold(nodes, false)
+    }
+
+    fn extract_inlines_flat_with_bold(
+        &mut self,
+        nodes: &[TreeNode],
+        force_bold: bool,
+    ) -> Vec<InlineNode> {
         let mut out = Vec::new();
-        let mut state = ActiveInlineState::default();
+        let mut state = ActiveInlineState {
+            bold: force_bold,
+            ..Default::default()
+        };
         let mut last_y: Option<f64> = None;
         let mut last_x_end: Option<f64> = None;
         self.extract_inlines_from_nodes(nodes, &mut out, &mut state, &mut last_y, &mut last_x_end);
@@ -2973,6 +3304,23 @@ impl<'a> ExtractorContext<'a> {
                             let gap_pt = x_pt - prev_x_end;
                             if gap_pt > text.size.to_pt() * 1.2 {
                                 out.push(InlineNode::HorizontalSpace { width_pt: gap_pt });
+                            } else if gap_pt > text.size.to_pt() * 0.18
+                                && state.script == ScriptKindIr::Normal
+                            {
+                                let already_spaced = matches!(
+                                    out.last(),
+                                    Some(InlineNode::HorizontalSpace { .. })
+                                        | Some(InlineNode::Tab)
+                                ) || matches!(
+                                    out.last(),
+                                    Some(InlineNode::Text(r)) if r.text.ends_with(' ')
+                                );
+                                if !already_spaced && !text.text.starts_with(' ') {
+                                    out.push(InlineNode::Text(TextRunIr {
+                                        text: " ".to_string(),
+                                        ..Self::text_item_to_run(text, state)
+                                    }));
+                                }
                             }
                         }
                     }
@@ -3276,11 +3624,17 @@ impl<'a> ExtractorContext<'a> {
                 last_y,
                 last_x_end,
             );
-            self.report.links_count += 1;
+            let had_inner_link = link_inlines
+                .iter()
+                .any(|inl| matches!(inl, InlineNode::Link { .. }));
+            let clean_inlines = Self::unwrap_link_inlines(link_inlines);
+            if !had_inner_link {
+                self.report.links_count += 1;
+            }
             out.push(InlineNode::Link {
                 url,
                 anchor,
-                content: link_inlines,
+                content: clean_inlines,
             });
             return;
         }
@@ -3372,14 +3726,15 @@ impl<'a> ExtractorContext<'a> {
             || family_lower.contains("dejavu sans mono");
 
         let color = paint_to_hex(&item.fill).filter(|hex| hex != "000000" || state.is_code);
+        let mapped_family = if is_mono {
+            "Consolas".to_string()
+        } else {
+            Self::normalize_word_font_family(&info.family)
+        };
 
         TextRunIr {
             text: item.text.to_string(),
-            font_family: Some(if is_mono {
-                "Consolas".to_string()
-            } else {
-                info.family.clone()
-            }),
+            font_family: Some(mapped_family),
             font_size_pt: Some(item.size.to_pt()),
             bold,
             italic,
@@ -3391,6 +3746,15 @@ impl<'a> ExtractorContext<'a> {
             script: state.script,
             smallcaps: state.smallcaps,
             is_code: state.is_code,
+        }
+    }
+
+    fn normalize_word_font_family(family: &str) -> String {
+        match family.trim() {
+            "Hei" | "STHeiti" => "Heiti SC".to_string(),
+            "Kai" | "STKaiti" => "Kaiti SC".to_string(),
+            "Song" | "STSong" => "Songti SC".to_string(),
+            other => other.to_string(),
         }
     }
 
@@ -3638,8 +4002,40 @@ impl<'a> ExtractorContext<'a> {
         (ha, va)
     }
 
-    fn infer_node_halign(nodes: &[TreeNode]) -> Option<HAlignIr> {
-        // Check if any child element is an `AlignElem`.
+    fn infer_node_halign(&self, nodes: &[TreeNode]) -> Option<HAlignIr> {
+        // 1. Check if any child element is an explicit `AlignElem`.
+        if let Some(explicit) = Self::find_explicit_align_elem(nodes) {
+            return Some(explicit);
+        }
+
+        // 2. Infer horizontal alignment from laid-out glyph/frame X coordinates within the content area!
+        let (min_x, _min_y, width, _height) = Self::estimate_nodes_bbox(nodes);
+        if width <= 0.5 || !min_x.is_finite() {
+            return None;
+        }
+
+        let (left_bound, right_bound) = if min_x >= self.content_left_pt - 8.0 {
+            (self.content_left_pt, self.content_right_pt)
+        } else {
+            (0.0, (self.content_right_pt - self.content_left_pt).max(100.0))
+        };
+
+        let max_x = min_x + width;
+        let left_gap = (min_x - left_bound).max(0.0);
+        let right_gap = (right_bound - max_x).max(0.0);
+
+        if left_gap <= 8.0 {
+            Some(HAlignIr::Left)
+        } else if left_gap > 15.0 && right_gap <= 8.0 {
+            Some(HAlignIr::Right)
+        } else if left_gap > 12.0 && right_gap > 12.0 && (left_gap - right_gap).abs() <= 18.0 {
+            Some(HAlignIr::Center)
+        } else {
+            None
+        }
+    }
+
+    fn find_explicit_align_elem(nodes: &[TreeNode]) -> Option<HAlignIr> {
         for node in nodes {
             if let TreeNode::Element { elem, children, .. } = node {
                 if let Some(al) = elem.to_packed::<AlignElem>() {
@@ -3648,7 +4044,7 @@ impl<'a> ExtractorContext<'a> {
                     ));
                     return Some(ha);
                 }
-                if let Some(found) = Self::infer_node_halign(children) {
+                if let Some(found) = Self::find_explicit_align_elem(children) {
                     return Some(found);
                 }
             }
@@ -3728,10 +4124,10 @@ impl<'a> ExtractorContext<'a> {
                         );
                     }
                 }
-                TreeNode::Element { pos, children, .. } => {
+                TreeNode::Element { children, .. } => {
                     Self::accumulate_nodes_bbox(
                         children,
-                        offset + *pos,
+                        offset,
                         min_x,
                         min_y,
                         max_x,

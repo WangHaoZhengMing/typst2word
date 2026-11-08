@@ -19,7 +19,7 @@
 
 = 文本与段落语义 <sec-text>
 
-本节演示基础与高级富文本内联样式：**粗体文本**、_斜体文本_、#underline[下划线文本]、#strike[删除线文本]、#overline[上划线文本]、#highlight(fill: rgb("#FFF59D"))[高亮背景文本]、化学式 H#sub[2]O、质能方程 E=mc#super[2]、#smallcaps[SmallCaps 小型大写字母]、行内代码 `typst2word::convert()`、#text(fill: rgb("#1565C0"))[自定义颜色文本]、外部超链接 #link("https://typst.app")[Typst 官方网站]、内部交叉引用 @sec-text 与 @eq-euler，以及原生 Word 脚注#footnote[这是一个转化为 Word 原生 `word/footnotes.xml` 的富文本*脚注*。]。
+本节演示基础与高级富文本内联样式：*粗体文本*、_斜体文本_、#underline[下划线文本]、#strike[删除线文本]、#overline[上划线文本]、#highlight(fill: rgb("#FFF59D"))[高亮背景文本]、化学式 H#sub[2]O、质能方程 E=mc#super[2]、#smallcaps[SmallCaps 小型大写字母]、行内代码 `typst2word::convert()`、#text(fill: rgb("#1565C0"))[自定义颜色文本]、外部超链接 #link("https://typst.app")[Typst 官方网站]、内部交叉引用 @sec-text 与 @eq-euler，以及原生 Word 脚注#footnote[这是一个转化为 Word 原生 `word/footnotes.xml` 的富文本*脚注*。]。
 
 == 列表、编号与术语定义
 

@@ -14,7 +14,7 @@ use std::fs::File;
 use std::io::{Cursor, Write};
 use std::path::Path;
 
-use zip::write::FileOptions;
+use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
 use crate::ir::*;
@@ -155,7 +155,7 @@ impl<'a> DocxBuilder<'a> {
 
         let buf = Cursor::new(Vec::new());
         let mut zip = ZipWriter::new(buf);
-        let options = FileOptions::default()
+        let options = SimpleFileOptions::default()
             .compression_method(CompressionMethod::Deflated)
             .unix_permissions(0o644);
 
@@ -195,7 +195,7 @@ impl<'a> DocxBuilder<'a> {
         zip: &mut ZipWriter<Cursor<Vec<u8>>>,
         path: &str,
         content: &str,
-        options: FileOptions,
+        options: SimpleFileOptions,
     ) -> Result<(), String> {
         zip.start_file(path, options)
             .map_err(|e| format!("zip start_file({path}) error: {e}"))?;
@@ -327,9 +327,29 @@ impl<'a> DocxBuilder<'a> {
 
                 let bm_id = bookmark.as_ref().map(|bm| self.emit_bookmark_start(bm, out));
                 if let Some(num_prefix) = numbering {
-                    out.push_str("<w:r><w:rPr><w:b/></w:rPr><w:t xml:space=\"preserve\">");
-                    out.push_str(&escape_xml(num_prefix));
-                    out.push_str(" </w:t></w:r>");
+                    let default_sz = match *level {
+                        1 => 15.4,
+                        2 => 13.2,
+                        _ => 11.0,
+                    };
+                    let sz_pt = content
+                        .iter()
+                        .find_map(|inl| {
+                            if let InlineNode::Text(r) = inl {
+                                r.font_size_pt
+                            } else {
+                                None
+                            }
+                        })
+                        .unwrap_or(default_sz);
+                    let prefix_run = TextRunIr {
+                        text: format!("{num_prefix} "),
+                        font_family: Some("Libertinus Serif".to_string()),
+                        font_size_pt: Some(sz_pt),
+                        bold: true,
+                        ..Default::default()
+                    };
+                    self.render_text_run(&prefix_run, out);
                 }
                 self.render_inlines(content, out);
                 if let Some(id) = bm_id {
@@ -428,10 +448,23 @@ impl<'a> DocxBuilder<'a> {
                         r#"<w:spacing w:before="40" w:after="{after}"/><w:ind w:left="360" w:hanging="360"/>"#
                     );
                     out.push_str("</w:pPr>");
-                    // Render term in bold followed by `: ` and the first paragraph of description.
-                    out.push_str("<w:r><w:rPr><w:b/></w:rPr><w:t xml:space=\"preserve\">");
-                    out.push_str(&escape_xml(&Self::plain_text_of_inlines(&item.term)));
-                    out.push_str(": </w:t></w:r>");
+                    // Render term runs in bold followed by Typst's default 0.6em space separator and description.
+                    for inline in &item.term {
+                        if let InlineNode::Text(r) = inline {
+                            let mut bold_run = r.clone();
+                            bold_run.bold = true;
+                            self.render_text_run(&bold_run, out);
+                        } else {
+                            self.render_inline(inline, out);
+                        }
+                    }
+                    let sep_run = TextRunIr {
+                        text: "  ".to_string(),
+                        font_family: Some("Libertinus Serif".to_string()),
+                        font_size_pt: Some(11.0),
+                        ..Default::default()
+                    };
+                    self.render_text_run(&sep_run, out);
                     if let Some(BlockNode::Paragraph { content, .. }) = item.description.first() {
                         self.render_inlines(content, out);
                         out.push_str("</w:p>");
@@ -762,10 +795,12 @@ impl<'a> DocxBuilder<'a> {
         attribution: Option<&[InlineNode]>,
         out: &mut String,
     ) {
+        let after_body = if attribution.is_some() { 40 } else { 100 };
         for block in body {
             if let BlockNode::Paragraph { content, .. } = block {
-                out.push_str(
-                    r#"<w:p><w:pPr><w:pStyle w:val="Quote"/><w:pBdr><w:left w:val="single" w:sz="18" w:space="12" w:color="94A3B8"/></w:pBdr><w:ind w:left="480" w:right="240"/><w:spacing w:before="80" w:after="80"/></w:pPr>"#,
+                let _ = write!(
+                    out,
+                    r#"<w:p><w:pPr><w:pStyle w:val="Quote"/><w:ind w:left="440" w:right="440"/><w:spacing w:before="80" w:after="{after_body}"/></w:pPr>"#,
                 );
                 self.render_inlines(content, out);
                 out.push_str("</w:p>");
@@ -775,8 +810,19 @@ impl<'a> DocxBuilder<'a> {
         }
         if let Some(attr) = attribution {
             out.push_str(
-                r#"<w:p><w:pPr><w:pStyle w:val="Quote"/><w:pBdr><w:left w:val="single" w:sz="18" w:space="12" w:color="94A3B8"/></w:pBdr><w:ind w:left="480" w:right="240"/><w:jc w:val="right"/><w:spacing w:before="0" w:after="120"/></w:pPr><w:r><w:rPr><w:i/><w:color w:val="475569"/></w:rPr><w:t xml:space="preserve">— </w:t></w:r>"#,
+                r#"<w:p><w:pPr><w:pStyle w:val="Quote"/><w:ind w:left="440" w:right="440"/><w:jc w:val="right"/><w:spacing w:before="20" w:after="120"/></w:pPr>"#,
             );
+            let plain_attr = Self::plain_text_of_inlines(attr);
+            let trimmed_attr = plain_attr.trim_start();
+            if !trimmed_attr.starts_with('—') && !trimmed_attr.starts_with('-') {
+                let dash_run = TextRunIr {
+                    text: "— ".to_string(),
+                    font_family: Some("Libertinus Serif".to_string()),
+                    font_size_pt: Some(11.0),
+                    ..Default::default()
+                };
+                self.render_text_run(&dash_run, out);
+            }
             self.render_inlines(attr, out);
             out.push_str("</w:p>");
         }
@@ -790,9 +836,32 @@ impl<'a> DocxBuilder<'a> {
         stroke: Option<&StrokeIr>,
         out: &mut String,
     ) {
+        if fill.is_none() && stroke.is_none() {
+            // Standard unboxed Typst `raw(block: true)`: render lines directly with exact syntax colors.
+            let num_lines = lines.len();
+            for (idx, line_runs) in lines.iter().enumerate() {
+                let before = if idx == 0 { 80 } else { 0 };
+                let after = if idx + 1 == num_lines { 100 } else { 15 };
+                let _ = write!(
+                    out,
+                    r#"<w:p><w:pPr><w:spacing w:before="{before}" w:after="{after}" w:line="240" w:lineRule="auto"/></w:pPr>"#,
+                );
+                for run in line_runs {
+                    let mut code_run = run.clone();
+                    code_run.is_code = true;
+                    if code_run.font_family.is_none() {
+                        code_run.font_family = Some("Consolas".to_string());
+                    }
+                    self.render_text_run(&code_run, out);
+                }
+                out.push_str("</w:p>");
+            }
+            return;
+        }
+
         let bg = fill.unwrap_or("F6F8FA");
         let bdr_color = stroke.map(|s| s.color.as_str()).unwrap_or("D0D7DE");
-        // Render as a 1-cell full-width shaded code box so all lines share a clean border and background.
+        // Render as a 1-cell full-width shaded code box when fill or stroke is set.
         let _ = write!(
             out,
             r#"<w:tbl><w:tblPr><w:tblW w:w="5000" w:type="pct"/><w:tblBorders><w:top w:val="single" w:sz="6" w:space="0" w:color="{bdr_color}"/><w:left w:val="single" w:sz="6" w:space="0" w:color="{bdr_color}"/><w:bottom w:val="single" w:sz="6" w:space="0" w:color="{bdr_color}"/><w:right w:val="single" w:sz="6" w:space="0" w:color="{bdr_color}"/></w:tblBorders></w:tblPr><w:tblGrid><w:gridCol w:w="9000"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:tcW w:w="5000" w:type="pct"/><w:shd w:val="clear" w:color="auto" w:fill="{bg}"/><w:tcMar><w:top w:w="120" w:type="dxa"/><w:left w:w="160" w:type="dxa"/><w:bottom w:w="120" w:type="dxa"/><w:right w:w="160" w:type="dxa"/></w:tcMar></w:tcPr>"#
@@ -891,23 +960,33 @@ impl<'a> DocxBuilder<'a> {
             self.render_inlines(t, out);
             out.push_str("</w:p>");
         }
+        let content_w_pt = (self.ir.page_setup.width_pt
+            - self.ir.page_setup.margin_left_pt
+            - self.ir.page_setup.margin_right_pt)
+            .max(360.0);
+        let tab_pos = pt_to_dxa(content_w_pt);
         for entry in entries {
             let indent = (entry.level.saturating_sub(1)) * 280;
             let _ = write!(
                 out,
-                r#"<w:p><w:pPr><w:tabs><w:tab w:val="right" w:leader="dot" w:pos="9000"/></w:tabs><w:ind w:left="{indent}"/><w:spacing w:before="40" w:after="40"/></w:pPr>"#
+                r#"<w:p><w:pPr><w:tabs><w:tab w:val="right" w:leader="dot" w:pos="{tab_pos}"/></w:tabs><w:ind w:left="{indent}"/><w:spacing w:before="30" w:after="30"/></w:pPr>"#
             );
+            let page_run = TextRunIr {
+                text: entry.page.clone(),
+                font_family: Some("Libertinus Serif".to_string()),
+                font_size_pt: Some(11.0),
+                ..Default::default()
+            };
             if let Some(bm) = &entry.target_bookmark {
                 let _ = write!(out, r#"<w:hyperlink w:anchor="{}" w:history="1">"#, escape_xml(bm));
                 self.render_inlines(&entry.title, out);
-                out.push_str(r#"<w:r><w:tab/></w:r><w:r><w:t>"#);
-                out.push_str(&escape_xml(&entry.page));
-                out.push_str("</w:t></w:r></w:hyperlink>");
+                out.push_str(r#"<w:r><w:tab/></w:r>"#);
+                self.render_text_run(&page_run, out);
+                out.push_str("</w:hyperlink>");
             } else {
                 self.render_inlines(&entry.title, out);
-                out.push_str(r#"<w:r><w:tab/></w:r><w:r><w:t>"#);
-                out.push_str(&escape_xml(&entry.page));
-                out.push_str("</w:t></w:r>");
+                out.push_str(r#"<w:r><w:tab/></w:r>"#);
+                self.render_text_run(&page_run, out);
             }
             out.push_str("</w:p>");
         }
@@ -1078,9 +1157,14 @@ impl<'a> DocxBuilder<'a> {
         out.push_str("<w:r><w:rPr>");
         if let Some(fam) = &run.font_family {
             let esc = escape_xml(fam);
+            let ea_esc = if fam == "Libertinus Serif" || fam == "New Computer Modern" {
+                "Heiti SC".to_string()
+            } else {
+                esc.clone()
+            };
             let _ = write!(
                 out,
-                r#"<w:rFonts w:ascii="{esc}" w:hAnsi="{esc}" w:cs="{esc}"/>"#
+                r#"<w:rFonts w:ascii="{esc}" w:hAnsi="{esc}" w:eastAsia="{ea_esc}" w:cs="{esc}"/>"#
             );
         }
         if run.bold {
@@ -1113,8 +1197,6 @@ impl<'a> DocxBuilder<'a> {
                 out,
                 r#"<w:shd w:val="clear" w:color="auto" w:fill="{hl}"/>"#
             );
-        } else if run.is_code {
-            out.push_str(r#"<w:shd w:val="clear" w:color="auto" w:fill="F1F5F9"/>"#);
         }
         if let Some(sz_pt) = run.font_size_pt {
             let half_pts = ((sz_pt * 2.0).round() as u32).clamp(4, 288);
@@ -1267,7 +1349,7 @@ impl<'a> DocxBuilder<'a> {
   <w:docDefaults>
     <w:rPrDefault>
       <w:rPr>
-        <w:rFonts w:ascii="Libertinus Serif" w:hAnsi="Libertinus Serif" w:eastAsia="PingFang SC" w:cs="Libertinus Serif"/>
+        <w:rFonts w:ascii="Libertinus Serif" w:hAnsi="Libertinus Serif" w:eastAsia="Heiti SC" w:cs="Libertinus Serif"/>
         <w:sz w:val="22"/>
         <w:szCs w:val="22"/>
       </w:rPr>
@@ -1286,7 +1368,7 @@ impl<'a> DocxBuilder<'a> {
     <w:name w:val="Title"/>
     <w:basedOn w:val="Normal"/>
     <w:qFormat/>
-    <w:pPr><w:spacing w:before="120" w:after="240"/><w:jc w:val="center"/></w:pPr>
+    <w:pPr><w:spacing w:before="120" w:after="200"/></w:pPr>
     <w:rPr><w:b/><w:sz w:val="44"/><w:szCs w:val="44"/></w:rPr>
   </w:style>
   <w:style w:type="paragraph" w:styleId="Heading1">
@@ -1341,7 +1423,7 @@ impl<'a> DocxBuilder<'a> {
     <w:name w:val="Quote"/>
     <w:basedOn w:val="Normal"/>
     <w:qFormat/>
-    <w:rPr><w:color w:val="334155"/></w:rPr>
+    <w:pPr><w:ind w:left="440" w:right="440"/><w:spacing w:before="80" w:after="80"/></w:pPr>
   </w:style>
   <w:style w:type="paragraph" w:styleId="Caption">
     <w:name w:val="caption"/>
