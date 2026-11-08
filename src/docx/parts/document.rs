@@ -86,11 +86,13 @@ impl<'a> DocxBuilder<'a> {
         let _ = write!(out, r#"<w:pgSz w:w="{w_dxa}" w:h="{h_dxa}"{orient}/>"#);
         let _ = write!(
             out,
-            r#"<w:pgMar w:top="{}" w:right="{}" w:bottom="{}" w:left="{}" w:header="720" w:footer="720" w:gutter="0"/>"#,
+            r#"<w:pgMar w:top="{}" w:right="{}" w:bottom="{}" w:left="{}" w:header="{}" w:footer="{}" w:gutter="0"/>"#,
             pt_to_dxa(ps.margin_top_pt),
             pt_to_dxa(ps.margin_right_pt),
             pt_to_dxa(ps.margin_bottom_pt),
             pt_to_dxa(ps.margin_left_pt),
+            pt_to_dxa(ps.header_margin_pt),
+            pt_to_dxa(ps.footer_margin_pt),
         );
         if ps.columns > 1 {
             let _ = write!(out, r#"<w:cols w:num="{}" w:space="720"/>"#, ps.columns);

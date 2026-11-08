@@ -9,7 +9,9 @@ impl<'a> DocxBuilder<'a> {
         let run_xml = shape_to_drawingml_run(shape);
         out.push_str("<w:p><w:pPr>");
         Self::render_jc(shape.align, out);
-        out.push_str("<w:spacing w:before=\"80\" w:after=\"80\"/></w:pPr>");
+        out.push_str(
+            r#"<w:spacing w:before="0" w:after="240" w:line="240" w:lineRule="auto"/></w:pPr>"#,
+        );
         out.push_str(&run_xml);
         out.push_str("</w:p>");
     }

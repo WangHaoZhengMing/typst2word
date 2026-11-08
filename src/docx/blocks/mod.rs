@@ -24,9 +24,33 @@ use crate::ir::BlockNode;
 
 impl<'a> DocxBuilder<'a> {
     pub(crate) fn render_blocks(&mut self, blocks: &[BlockNode], out: &mut String) {
-        for block in blocks {
+        for (idx, block) in blocks.iter().enumerate() {
             self.render_block(block, out);
+            // If two Word `<w:tbl>` blocks (e.g. two tables or numbered equations) are directly
+            // adjacent without an intervening `<w:p>`, Word merges them into a single table!
+            // Emit a minimal 2pt separator paragraph only between adjacent table-backed blocks.
+            if Self::is_table_backed_block(block)
+                && blocks
+                    .get(idx + 1)
+                    .is_some_and(Self::is_table_backed_block)
+            {
+                out.push_str(
+                    r#"<w:p><w:pPr><w:spacing w:before="0" w:after="40" w:line="40" w:lineRule="exact"/><w:rPr><w:sz w:val="2"/><w:szCs w:val="2"/></w:rPr></w:pPr></w:p>"#,
+                );
+            }
         }
+    }
+
+    pub(crate) fn is_table_backed_block(block: &BlockNode) -> bool {
+        matches!(block, BlockNode::Table(_) | BlockNode::UnsupportedBlock(_))
+            || matches!(
+                block,
+                BlockNode::EquationBlock(eq) if eq.numbering_text.is_some()
+            )
+            || matches!(
+                block,
+                BlockNode::CodeBlock { fill, stroke, .. } if fill.is_some() || stroke.is_some()
+            )
     }
 
     pub(crate) fn render_block(&mut self, block: &BlockNode, out: &mut String) {

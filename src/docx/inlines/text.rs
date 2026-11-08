@@ -14,15 +14,21 @@ impl<'a> DocxBuilder<'a> {
         out.push_str("<w:r><w:rPr>");
         if let Some(fam) = &run.font_family {
             let esc = escape_xml(fam);
-            let ea_esc = if fam == "Libertinus Serif" || fam == "New Computer Modern" {
-                "Heiti SC".to_string()
+            if fam == "Consolas" {
+                out.push_str(
+                    r#"<w:rFonts w:ascii="Menlo" w:hAnsi="Menlo" w:eastAsia="Heiti SC" w:cs="Consolas"/>"#,
+                );
             } else {
-                esc.clone()
-            };
-            let _ = write!(
-                out,
-                r#"<w:rFonts w:ascii="{esc}" w:hAnsi="{esc}" w:eastAsia="{ea_esc}" w:cs="{esc}"/>"#
-            );
+                let ea_esc = if fam == "Libertinus Serif" || fam == "New Computer Modern" {
+                    "Heiti SC".to_string()
+                } else {
+                    esc.clone()
+                };
+                let _ = write!(
+                    out,
+                    r#"<w:rFonts w:ascii="{esc}" w:hAnsi="{esc}" w:eastAsia="{ea_esc}" w:cs="{esc}"/>"#
+                );
+            }
         }
         if run.bold {
             out.push_str("<w:b/><w:bCs/>");
@@ -56,7 +62,11 @@ impl<'a> DocxBuilder<'a> {
             );
         }
         if let Some(sz_pt) = run.font_size_pt {
-            let half_pts = ((sz_pt * 2.0).round() as u32).clamp(4, 288);
+            let half_pts = if run.is_code && (sz_pt - 8.8).abs() < 0.15 {
+                17
+            } else {
+                ((sz_pt * 2.0).round() as u32).clamp(4, 288)
+            };
             let _ = write!(
                 out,
                 r#"<w:sz w:val="{half_pts}"/><w:szCs w:val="{half_pts}"/>"#

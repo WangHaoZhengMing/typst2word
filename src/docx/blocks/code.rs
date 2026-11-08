@@ -18,8 +18,8 @@ impl<'a> DocxBuilder<'a> {
             // Standard unboxed Typst `raw(block: true)`: render lines directly with exact syntax colors.
             let num_lines = lines.len();
             for (idx, line_runs) in lines.iter().enumerate() {
-                let before = if idx == 0 { 80 } else { 0 };
-                let after = if idx + 1 == num_lines { 100 } else { 15 };
+                let before = if idx == 0 { 120 } else { 0 };
+                let after = if idx + 1 == num_lines { 180 } else { 20 };
                 let _ = write!(
                     out,
                     r#"<w:p><w:pPr><w:spacing w:before="{before}" w:after="{after}" w:line="240" w:lineRule="auto"/></w:pPr>"#,

@@ -108,9 +108,20 @@ pub(crate) fn render_text_run_wml(run: &TextRunIr) -> String {
     let mut rpr = String::new();
     if let Some(ref font) = run.font_family {
         let esc = escape_xml_attr(font);
-        rpr.push_str(&format!(
-            r#"<w:rFonts w:ascii="{esc}" w:hAnsi="{esc}" w:eastAsia="{esc}" w:cs="{esc}"/>"#
-        ));
+        if font == "Consolas" {
+            rpr.push_str(
+                r#"<w:rFonts w:ascii="Menlo" w:hAnsi="Menlo" w:eastAsia="Heiti SC" w:cs="Consolas"/>"#,
+            );
+        } else {
+            let ea = if font == "Libertinus Serif" || font == "New Computer Modern" {
+                "Heiti SC".to_string()
+            } else {
+                esc.clone()
+            };
+            rpr.push_str(&format!(
+                r#"<w:rFonts w:ascii="{esc}" w:hAnsi="{esc}" w:eastAsia="{ea}" w:cs="{esc}"/>"#
+            ));
+        }
     }
     if run.bold {
         rpr.push_str("<w:b/><w:bCs/>");

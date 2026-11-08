@@ -12,17 +12,17 @@ impl<'a> DocxBuilder<'a> {
 <w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
   <w:abstractNum w:abstractNumId="0">"#,
         );
-        let bullets = ["•", "◦", "▪", "•", "◦", "▪", "•", "◦", "▪"];
+        let bullets = ["•", "‣", "–", "•", "‣", "–", "•", "‣", "–"];
         for (lvl, b) in bullets.iter().enumerate() {
-            let left = (lvl + 1) * 360;
+            let left = (lvl + 1) * 260;
             let _ = write!(
                 out,
-                r#"<w:lvl w:ilvl="{lvl}"><w:start w:val="1"/><w:numFmt w:val="bullet"/><w:lvlText w:val="{b}"/><w:lvlJc w:val="left"/><w:pPr><w:ind w:left="{left}" w:hanging="240"/></w:pPr></w:lvl>"#
+                r#"<w:lvl w:ilvl="{lvl}"><w:start w:val="1"/><w:numFmt w:val="bullet"/><w:lvlText w:val="{b}"/><w:lvlJc w:val="left"/><w:pPr><w:ind w:left="{left}" w:hanging="260"/></w:pPr></w:lvl>"#
             );
         }
         out.push_str("</w:abstractNum><w:abstractNum w:abstractNumId=\"1\">");
         for lvl in 0..9 {
-            let left = (lvl + 1) * 360;
+            let left = (lvl + 1) * 300;
             let fmt = match lvl % 3 {
                 0 => "decimal",
                 1 => "lowerLetter",
@@ -31,7 +31,7 @@ impl<'a> DocxBuilder<'a> {
             let lvl_txt = format!("%{}.", lvl + 1);
             let _ = write!(
                 out,
-                r#"<w:lvl w:ilvl="{lvl}"><w:start w:val="1"/><w:numFmt w:val="{fmt}"/><w:lvlText w:val="{lvl_txt}"/><w:lvlJc w:val="left"/><w:pPr><w:ind w:left="{left}" w:hanging="280"/></w:pPr></w:lvl>"#
+                r#"<w:lvl w:ilvl="{lvl}"><w:start w:val="1"/><w:numFmt w:val="{fmt}"/><w:lvlText w:val="{lvl_txt}"/><w:lvlJc w:val="left"/><w:pPr><w:ind w:left="{left}" w:hanging="300"/></w:pPr></w:lvl>"#
             );
         }
         out.push_str(

@@ -1,7 +1,7 @@
 //! Document-level extraction: metadata, page setup (size, margins, columns, fill),
 //! header / footer artifacts and page-break bookkeeping.
 
-use typst::foundations::{Content, SequenceElem, StyleChain, StyledElem};
+use typst::foundations::{Content, SequenceElem, Smart, StyleChain, StyledElem};
 use typst::layout::{ColumnsElem, PageElem, PagebreakElem};
 use typst::model::{Document, FootnoteEntry};
 use typst::pdf::{ArtifactElem, ArtifactKind};
@@ -47,18 +47,44 @@ impl<'a> ExtractorContext<'a> {
                 }
             }
 
-            // Estimate margins from the first page content position if available BEFORE extracting
-            // headers/footers so `self.content_left_pt` and `self.content_right_pt` are accurate!
-            if let Some((min_x, min_y)) = Self::find_first_content_origin(page_nodes) {
-                if min_x > 10.0 && min_x < setup.width_pt * 0.4 {
-                    setup.margin_left_pt = min_x;
-                    setup.margin_right_pt = min_x;
+            // Typst's default margin is 2.5 / 21 of the shorter page dimension (~70.87pt for A4).
+            let default_margin_pt = (2.5 / 21.0) * setup.width_pt.min(setup.height_pt);
+            let chain = self.style_chain();
+            let base_font_pt = Self::resolve_length_pt(chain.get(typst::text::TextElem::size).0, 11.0);
+            let margin_cfg = chain.get(PageElem::margin);
+            let resolve_side = |side: Option<Smart<typst::layout::Rel<typst::layout::Length>>>,
+                                axis_pt: f64|
+             -> Option<f64> {
+                match side {
+                    Some(Smart::Custom(rel)) => {
+                        let abs_pt = Self::resolve_length_pt(rel.abs, base_font_pt);
+                        Some((abs_pt + rel.rel.get() * axis_pt).max(14.0))
+                    }
+                    _ => None,
                 }
-                if min_y > 10.0 && min_y < setup.height_pt * 0.4 {
-                    setup.margin_top_pt = min_y;
-                    setup.margin_bottom_pt = min_y;
-                }
-            }
+            };
+
+            let (cfg_left, cfg_right, cfg_top, cfg_bottom) = match margin_cfg {
+                Smart::Custom(m) => (
+                    resolve_side(m.sides.left, setup.width_pt),
+                    resolve_side(m.sides.right, setup.width_pt),
+                    resolve_side(m.sides.top, setup.height_pt),
+                    resolve_side(m.sides.bottom, setup.height_pt),
+                ),
+                Smart::Auto => (None, None, None, None),
+            };
+
+            let inferred_left = Self::find_first_content_origin(page_nodes)
+                .map(|(lx, _)| lx)
+                .filter(|&lx| {
+                    (lx - default_margin_pt).abs() > 4.0 && lx > 14.0 && lx < setup.width_pt * 0.35
+                });
+
+            setup.margin_left_pt = cfg_left.or(inferred_left).unwrap_or(default_margin_pt);
+            setup.margin_right_pt = cfg_right.or(inferred_left).unwrap_or(default_margin_pt);
+            setup.margin_top_pt = cfg_top.unwrap_or(default_margin_pt);
+            setup.margin_bottom_pt = cfg_bottom.unwrap_or(default_margin_pt);
+
             self.content_left_pt = setup.margin_left_pt;
             self.content_right_pt =
                 (setup.width_pt - setup.margin_right_pt).max(setup.margin_left_pt + 100.0);
@@ -67,8 +93,62 @@ impl<'a> ExtractorContext<'a> {
             for node in page_nodes {
                 self.collect_header_footer_artifacts(node, &mut setup.header, &mut setup.footer);
             }
+            Self::zero_header_footer_paragraph_spacing(&mut setup.header);
+            Self::zero_header_footer_paragraph_spacing(&mut setup.footer);
+
+            setup.header_margin_pt = self
+                .find_artifact_top_y(page_nodes, ArtifactKind::Header)
+                .map(|y| y.clamp(18.0, (setup.margin_top_pt - 12.0).max(18.0)))
+                .unwrap_or_else(|| (setup.margin_top_pt * 0.58).max(28.0));
+            setup.footer_margin_pt = self
+                .find_artifact_top_y(page_nodes, ArtifactKind::Footer)
+                .map(|y| {
+                    (setup.height_pt - y - 12.0)
+                        .clamp(18.0, (setup.margin_bottom_pt - 12.0).max(18.0))
+                })
+                .unwrap_or_else(|| (setup.margin_bottom_pt * 0.58).max(28.0));
         }
         setup
+    }
+
+    pub(crate) fn zero_header_footer_paragraph_spacing(blocks: &mut [BlockNode]) {
+        for block in blocks {
+            if let BlockNode::Paragraph { style, .. } = block {
+                style.space_before_pt = 0.0;
+                style.space_after_pt = 0.0;
+            }
+        }
+    }
+
+    pub(crate) fn find_artifact_top_y(
+        &self,
+        nodes: &[TreeNode],
+        target_kind: ArtifactKind,
+    ) -> Option<f64> {
+        for node in nodes {
+            match node {
+                TreeNode::Element { elem, children, .. } => {
+                    if let Some(artifact) = elem.to_packed::<ArtifactElem>() {
+                        if artifact.kind.get(StyleChain::default()) == target_kind {
+                            let (_, min_y, _, _) = Self::estimate_nodes_bbox(children);
+                            if min_y.is_finite() && min_y > 0.0 {
+                                return Some(min_y);
+                            }
+                        }
+                    }
+                    if let Some(y) = self.find_artifact_top_y(children, target_kind) {
+                        return Some(y);
+                    }
+                }
+                TreeNode::Group { children, .. } => {
+                    if let Some(y) = self.find_artifact_top_y(children, target_kind) {
+                        return Some(y);
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
     }
 
     pub(crate) fn find_columns_in_content(content: &Content, styles: StyleChain) -> Option<usize> {

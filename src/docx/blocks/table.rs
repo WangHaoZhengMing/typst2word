@@ -3,7 +3,7 @@
 use std::fmt::Write as _;
 
 use crate::docx::builder::DocxBuilder;
-use crate::ir::{DashPatternIr, StrokeIr, TableIr, VAlignIr, VMergeState};
+use crate::ir::{BlockNode, DashPatternIr, StrokeIr, TableIr, VAlignIr, VMergeState};
 use crate::units::pt_to_dxa;
 use crate::xml::escape_xml;
 
@@ -40,8 +40,9 @@ impl<'a> DocxBuilder<'a> {
         out.push_str("</w:tblGrid>");
 
         // Rows
+        let keep_rows_together = table.rows.len() <= 15;
         for row in &table.rows {
-            out.push_str("<w:tr><w:trPr>");
+            out.push_str("<w:tr><w:trPr><w:cantSplit/>");
             if row.is_header {
                 out.push_str("<w:tblHeader/>");
             }
@@ -97,13 +98,14 @@ impl<'a> DocxBuilder<'a> {
                     );
                 }
 
-                // Cell padding / margins
+                // Cell padding / margins (subtract Word's built-in ~2.2pt font box vertical leading
+                // from top/bottom cell padding so row heights match Typst's `inset` visually).
+                let top_mar_dxa = pt_to_dxa((cell.inset.top - 2.2).max(0.0));
+                let bottom_mar_dxa = pt_to_dxa((cell.inset.bottom - 2.2).max(0.0));
                 let _ = write!(
                     out,
-                    r#"<w:tcMar><w:top w:w="{}" w:type="dxa"/><w:left w:w="{}" w:type="dxa"/><w:bottom w:w="{}" w:type="dxa"/><w:right w:w="{}" w:type="dxa"/></w:tcMar>"#,
-                    pt_to_dxa(cell.inset.top),
+                    r#"<w:tcMar><w:top w:w="{top_mar_dxa}" w:type="dxa"/><w:left w:w="{}" w:type="dxa"/><w:bottom w:w="{bottom_mar_dxa}" w:type="dxa"/><w:right w:w="{}" w:type="dxa"/></w:tcMar>"#,
                     pt_to_dxa(cell.inset.left),
-                    pt_to_dxa(cell.inset.bottom),
                     pt_to_dxa(cell.inset.right),
                 );
 
@@ -117,13 +119,24 @@ impl<'a> DocxBuilder<'a> {
                 out.push_str("</w:tcPr>");
 
                 // Cell body blocks (Word requires at least one `<w:p>` inside every `<w:tc>`!)
+                let keep_next_xml = if keep_rows_together {
+                    "<w:keepNext/>"
+                } else {
+                    ""
+                };
                 if cell.blocks.is_empty() || cell.vmerge == Some(VMergeState::Continue) {
-                    out.push_str("<w:p><w:pPr><w:spacing w:after=\"0\"/></w:pPr></w:p>");
+                    let _ = write!(
+                        out,
+                        r#"<w:p><w:pPr>{keep_next_xml}<w:spacing w:before="0" w:after="0" w:line="220" w:lineRule="auto"/></w:pPr></w:p>"#
+                    );
                 } else {
                     let mut cell_xml = String::new();
-                    self.render_blocks(&cell.blocks, &mut cell_xml);
+                    self.render_table_cell_blocks(&cell.blocks, keep_rows_together, &mut cell_xml);
                     if !cell_xml.contains("<w:p") {
-                        cell_xml.push_str("<w:p/>");
+                        let _ = write!(
+                            cell_xml,
+                            r#"<w:p><w:pPr>{keep_next_xml}<w:spacing w:before="0" w:after="0" w:line="220" w:lineRule="auto"/></w:pPr></w:p>"#
+                        );
                     }
                     out.push_str(&cell_xml);
                 }
@@ -135,8 +148,43 @@ impl<'a> DocxBuilder<'a> {
         }
 
         out.push_str("</w:tbl>");
-        // Add a small spacing paragraph after a table so consecutive tables don't merge in Word.
-        out.push_str("<w:p><w:pPr><w:spacing w:before=\"0\" w:after=\"60\"/></w:pPr></w:p>");
+    }
+
+    pub(crate) fn render_table_cell_blocks(
+        &mut self,
+        blocks: &[BlockNode],
+        keep_next: bool,
+        out: &mut String,
+    ) {
+        let len = blocks.len();
+        for (idx, block) in blocks.iter().enumerate() {
+            if let BlockNode::Paragraph {
+                content,
+                style,
+                bookmark,
+            } = block
+            {
+                let mut cell_style = style.clone();
+                if idx == 0 {
+                    cell_style.space_before_pt = 0.0;
+                }
+                if idx + 1 == len {
+                    cell_style.space_after_pt = 0.0;
+                } else {
+                    cell_style.space_after_pt = cell_style.space_after_pt.min(2.0);
+                }
+                // Compact line spacing inside table cells (~0.5em leading in Typst).
+                cell_style.line_spacing_pt = Some(5.0);
+                let mut para_xml = String::new();
+                self.render_paragraph(content, &cell_style, bookmark.as_deref(), &mut para_xml);
+                if keep_next {
+                    para_xml = para_xml.replacen("<w:pPr>", "<w:pPr><w:keepNext/>", 1);
+                }
+                out.push_str(&para_xml);
+            } else {
+                self.render_block(block, out);
+            }
+        }
     }
 
     pub(crate) fn render_tc_border(side: &str, stroke: Option<&StrokeIr>, out: &mut String) {

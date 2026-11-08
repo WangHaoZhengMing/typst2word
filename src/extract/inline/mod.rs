@@ -98,23 +98,6 @@ impl<'a> ExtractorContext<'a> {
                             let gap_pt = x_pt - prev_x_end;
                             if gap_pt > text.size.to_pt() * 1.2 {
                                 out.push(InlineNode::HorizontalSpace { width_pt: gap_pt });
-                            } else if gap_pt > text.size.to_pt() * 0.18
-                                && state.script == ScriptKindIr::Normal
-                            {
-                                let already_spaced = matches!(
-                                    out.last(),
-                                    Some(InlineNode::HorizontalSpace { .. })
-                                        | Some(InlineNode::Tab)
-                                ) || matches!(
-                                    out.last(),
-                                    Some(InlineNode::Text(r)) if r.text.ends_with(' ')
-                                );
-                                if !already_spaced && !text.text.starts_with(' ') {
-                                    out.push(InlineNode::Text(TextRunIr {
-                                        text: " ".to_string(),
-                                        ..Self::text_item_to_run(text, state)
-                                    }));
-                                }
                             }
                         }
                     }
@@ -341,6 +324,7 @@ impl<'a> ExtractorContext<'a> {
                 },
                 content,
             });
+            *last_x_end = None;
             return;
         }
 

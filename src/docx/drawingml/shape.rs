@@ -187,12 +187,17 @@ pub(crate) fn build_wsp_xml(
         let t_ins = pt_to_emu(shape.inset.top.max(0.0));
         let r_ins = pt_to_emu(shape.inset.right.max(0.0));
         let b_ins = pt_to_emu(shape.inset.bottom.max(0.0));
+        let anchor = if matches!(shape.kind, ShapeKindIr::Rect) {
+            "t"
+        } else {
+            "ctr"
+        };
         let inner_paras = render_textbox_blocks(&shape.body);
         format!(
             concat!(
                 r#"<wps:txbx><w:txbxContent>{paras}</w:txbxContent></wps:txbx>"#,
                 r#"<wps:bodyPr rot="0" vert="horz" wrap="square" "#,
-                r#"lIns="{l}" tIns="{t}" rIns="{r}" bIns="{b}" anchor="ctr">"#,
+                r#"lIns="{l}" tIns="{t}" rIns="{r}" bIns="{b}" anchor="{anchor}">"#,
                 r#"<a:spAutoFit/>"#,
                 r#"</wps:bodyPr>"#
             ),
@@ -201,6 +206,7 @@ pub(crate) fn build_wsp_xml(
             t = t_ins,
             r = r_ins,
             b = b_ins,
+            anchor = anchor,
         )
     };
 

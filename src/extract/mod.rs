@@ -22,8 +22,9 @@ mod inline;
 
 use std::collections::{HashMap, HashSet};
 
+use typst::foundations::{Content, SequenceElem, StyleChain, StyledElem, Styles};
 use typst::introspection::Location;
-use typst::layout::{GroupItem, Point};
+use typst::layout::{GroupItem, Length, Point};
 
 use crate::compiler::compile::CompiledTypstDocument;
 use crate::compiler::world::TypstWorld;
@@ -39,6 +40,7 @@ pub fn extract_document_ir(compiled: &CompiledTypstDocument, world: &TypstWorld)
 pub(crate) struct ExtractorContext<'a> {
     pub(crate) compiled: &'a CompiledTypstDocument,
     pub(crate) world: &'a TypstWorld,
+    pub(crate) doc_styles: Styles,
     pub(crate) report: ConversionReport,
     /// Map from element `Location` to bookmark anchor name (`_typst_loc_<hash>`).
     pub(crate) bookmarks: HashMap<Location, String>,
@@ -52,6 +54,8 @@ pub(crate) struct ExtractorContext<'a> {
     pub(crate) footnote_raw_groups: HashMap<Location, Vec<(Point, GroupItem)>>,
     /// Counter for assigning sequential 1-based Word footnote IDs.
     pub(crate) next_footnote_id: usize,
+    /// Counter for assigning sequential 1-based numbered block equation numbers.
+    pub(crate) next_equation_number: usize,
     /// Set of locations already emitted as unsupported so we don't duplicate badges.
     pub(crate) seen_unsupported_locs: HashSet<Location>,
     /// Left X coordinate (in pt) of the main page content area.
@@ -62,9 +66,12 @@ pub(crate) struct ExtractorContext<'a> {
 
 impl<'a> ExtractorContext<'a> {
     pub(crate) fn new(compiled: &'a CompiledTypstDocument, world: &'a TypstWorld) -> Self {
+        let mut doc_styles = Styles::new();
+        Self::collect_document_styles(&compiled.evaluated_content, &mut doc_styles);
         Self {
             compiled,
             world,
+            doc_styles,
             report: ConversionReport::default(),
             bookmarks: HashMap::new(),
             label_bookmarks: HashMap::new(),
@@ -72,10 +79,34 @@ impl<'a> ExtractorContext<'a> {
             logical_child_groups: HashMap::new(),
             footnote_raw_groups: HashMap::new(),
             next_footnote_id: 1,
+            next_equation_number: 1,
             seen_unsupported_locs: HashSet::new(),
             content_left_pt: 70.866,
             content_right_pt: 595.276 - 70.866,
         }
+    }
+
+    pub(crate) fn collect_document_styles(content: &Content, out: &mut Styles) {
+        if let Some(styled) = content.to_packed::<StyledElem>() {
+            out.apply(styled.styles.clone());
+            Self::collect_document_styles(&styled.child, out);
+        } else if let Some(seq) = content.to_packed::<SequenceElem>() {
+            for child in &seq.children {
+                if child.is::<StyledElem>() || child.is::<SequenceElem>() {
+                    Self::collect_document_styles(child, out);
+                }
+            }
+        }
+    }
+
+    pub(crate) fn style_chain(&self) -> StyleChain<'_> {
+        StyleChain::new(&self.doc_styles)
+    }
+
+    /// Resolve a Typst `Length` (which has both an absolute `Abs` component and a font-relative
+    /// `Em` component) to points (`pt`) given the active font size in points.
+    pub(crate) fn resolve_length_pt(len: Length, font_size_pt: f64) -> f64 {
+        len.abs.to_pt() + len.em.get() * font_size_pt
     }
 
     pub(crate) fn extract(&mut self) -> DocumentIr {

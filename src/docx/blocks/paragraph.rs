@@ -19,16 +19,28 @@ impl<'a> DocxBuilder<'a> {
         Self::render_jc(style.align, out);
         let before_dxa = pt_to_dxa(style.space_before_pt).max(0);
         let after_dxa = pt_to_dxa(style.space_after_pt).max(0);
+        let base_font_pt = content
+            .iter()
+            .find_map(|inl| match inl {
+                InlineNode::Text(r) => r.font_size_pt,
+                _ => None,
+            })
+            .unwrap_or(11.0)
+            .max(6.0);
         if let Some(ls_pt) = style.line_spacing_pt {
-            let line_dxa = (pt_to_dxa(ls_pt) + 240).max(240);
+            // In Typst, baseline-to-baseline distance is `1.0em + leading` (default `1.65em`),
+            // which corresponds to `w:line="246" w:lineRule="auto"` in Word for CJK + Latin text.
+            let line_dxa = ((246.0 * (base_font_pt + ls_pt) / (1.65 * base_font_pt)).round()
+                as i64)
+                .clamp(180, 720);
             let _ = write!(
                 out,
                 r#"<w:spacing w:before="{before_dxa}" w:after="{after_dxa}" w:line="{line_dxa}" w:lineRule="auto"/>"#
             );
-        } else if before_dxa > 0 || after_dxa > 0 {
+        } else {
             let _ = write!(
                 out,
-                r#"<w:spacing w:before="{before_dxa}" w:after="{after_dxa}"/>"#
+                r#"<w:spacing w:before="{before_dxa}" w:after="{after_dxa}" w:line="246" w:lineRule="auto"/>"#
             );
         }
         let left_dxa = pt_to_dxa(style.left_indent_pt).max(0);

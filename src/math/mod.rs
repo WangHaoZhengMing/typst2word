@@ -20,7 +20,7 @@ mod node;
 use typst::foundations::{Content, Packed, SequenceElem, StyleChain, StyledElem};
 use typst::introspection::TagElem;
 use typst::math::{AlignPointElem, EquationElem};
-use typst::text::{LinebreakElem, SpaceElem};
+use typst::text::{LinebreakElem, SpaceElem, TextElem};
 
 use crate::math::nary::{emit_nary_xml, extract_nary_operator, is_nary_operand_terminator};
 use crate::math::node::convert_math_node;
@@ -188,6 +188,21 @@ pub(crate) fn convert_sequence_slice(
             let operand_slice = &items[operand_begin..cursor];
             emit_nary_xml(&nary_info, st, operand_slice, ctx, xml, plain);
             i = cursor;
+            continue;
+        }
+
+        if item.is::<SpaceElem>() {
+            let is_multi_char_text = |c: &Content| {
+                c.to_packed::<TextElem>()
+                    .is_some_and(|t| t.text.chars().count() > 1)
+            };
+            let prev_is_word = i > 0 && is_multi_char_text(&items[i - 1].0);
+            let next_is_word = i + 1 < items.len() && is_multi_char_text(&items[i + 1].0);
+            if prev_is_word || next_is_word {
+                xml.push_str(r#"<m:r><m:rPr><m:sty m:val="p"/></m:rPr><m:t>&#x2005;</m:t></m:r>"#);
+            }
+            plain.push(' ');
+            i += 1;
             continue;
         }
 

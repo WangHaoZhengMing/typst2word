@@ -135,8 +135,13 @@ impl<'a> ExtractorContext<'a> {
             &mut group_size,
         );
 
+        let default_body_align = if elem.is::<RectElem>() || elem.is::<SquareElem>() {
+            HAlignIr::Left
+        } else {
+            HAlignIr::Center
+        };
         let body_blocks =
-            self.extract_blocks_from_nodes(&body_tree_nodes, list_level, HAlignIr::Center);
+            self.extract_blocks_from_nodes(&body_tree_nodes, list_level, default_body_align);
 
         // Check for unsupported tiling paint on the element or its shapes.
         for (_, sh, sp) in &shape_items {

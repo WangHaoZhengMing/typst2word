@@ -15,7 +15,9 @@ impl<'a> DocxBuilder<'a> {
         out: &mut String,
     ) {
         if let Some(t) = title {
-            out.push_str(r#"<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr>"#);
+            out.push_str(
+                r#"<w:p><w:pPr><w:pStyle w:val="Heading1"/><w:spacing w:before="120" w:after="60" w:line="240" w:lineRule="auto"/></w:pPr>"#,
+            );
             self.render_inlines(t, out);
             out.push_str("</w:p>");
         }
@@ -24,11 +26,13 @@ impl<'a> DocxBuilder<'a> {
             - self.ir.page_setup.margin_right_pt)
             .max(360.0);
         let tab_pos = pt_to_dxa(content_w_pt);
-        for entry in entries {
-            let indent = (entry.level.saturating_sub(1)) * 280;
+        let num_entries = entries.len();
+        for (idx, entry) in entries.iter().enumerate() {
+            let indent = (entry.level.saturating_sub(1)) * 250;
+            let after = if idx + 1 == num_entries { 80 } else { 22 };
             let _ = write!(
                 out,
-                r#"<w:p><w:pPr><w:tabs><w:tab w:val="right" w:leader="dot" w:pos="{tab_pos}"/></w:tabs><w:ind w:left="{indent}"/><w:spacing w:before="30" w:after="30"/></w:pPr>"#
+                r#"<w:p><w:pPr><w:tabs><w:tab w:val="right" w:leader="dot" w:pos="{tab_pos}"/></w:tabs><w:ind w:left="{indent}"/><w:spacing w:before="22" w:after="{after}" w:line="250" w:lineRule="auto"/></w:pPr>"#
             );
             let page_run = TextRunIr {
                 text: entry.page.clone(),

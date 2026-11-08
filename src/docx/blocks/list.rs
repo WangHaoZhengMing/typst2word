@@ -16,13 +16,16 @@ impl<'a> DocxBuilder<'a> {
         out: &mut String,
     ) {
         let ilvl = (level).min(8);
-        for item in items {
+        let num_items = items.len();
+        for (idx, item) in items.iter().enumerate() {
+            let is_last_top = level == 0 && idx + 1 == num_items;
             self.render_list_or_enum_item_blocks(
                 &item.blocks,
                 1, // numId 1 = bullet list
                 ilvl,
                 None,
                 tight,
+                is_last_top,
                 out,
             );
         }
@@ -37,7 +40,9 @@ impl<'a> DocxBuilder<'a> {
         out: &mut String,
     ) {
         let ilvl = (level).min(8);
-        for item in items {
+        let num_items = items.len();
+        for (idx, item) in items.iter().enumerate() {
+            let is_last_top = level == 0 && idx + 1 == num_items;
             let custom_prefix = if Self::is_standard_decimal_marker(&item.marker_text) {
                 None
             } else {
@@ -49,6 +54,7 @@ impl<'a> DocxBuilder<'a> {
                 ilvl,
                 custom_prefix,
                 tight,
+                is_last_top,
                 out,
             );
         }
@@ -56,12 +62,20 @@ impl<'a> DocxBuilder<'a> {
 
     /// `BlockNode::Terms` -> hanging-indent paragraphs with bold terms.
     pub(crate) fn render_terms(&mut self, items: &[TermItemIr], tight: bool, out: &mut String) {
-        let after = if tight { 60 } else { 140 };
-        for item in items {
+        let num_items = items.len();
+        for (idx, item) in items.iter().enumerate() {
+            let is_last = idx + 1 == num_items;
+            let after = if is_last {
+                110
+            } else if tight {
+                15
+            } else {
+                110
+            };
             out.push_str("<w:p><w:pPr>");
             let _ = write!(
                 out,
-                r#"<w:spacing w:before="40" w:after="{after}"/><w:ind w:left="360" w:hanging="360"/>"#
+                r#"<w:spacing w:before="10" w:after="{after}" w:line="246" w:lineRule="auto"/><w:ind w:left="440" w:hanging="440"/>"#
             );
             out.push_str("</w:pPr>");
             // Render term runs in bold followed by Typst's default 0.6em space separator and description.
@@ -94,6 +108,7 @@ impl<'a> DocxBuilder<'a> {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn render_list_or_enum_item_blocks(
         &mut self,
         blocks: &[BlockNode],
@@ -101,14 +116,25 @@ impl<'a> DocxBuilder<'a> {
         ilvl: usize,
         custom_prefix: Option<&str>,
         tight: bool,
+        is_last_top: bool,
         out: &mut String,
     ) {
-        let after_dxa = if tight { 40 } else { 120 };
-        let indent_left = 360 * (ilvl + 1);
+        let has_nested_list = blocks
+            .iter()
+            .skip(1)
+            .any(|b| matches!(b, BlockNode::List { .. } | BlockNode::Enum { .. }));
+        let after_dxa = if is_last_top && !has_nested_list {
+            110
+        } else if tight {
+            10
+        } else {
+            100
+        };
+        let indent_left = 260 * (ilvl + 1);
         if blocks.is_empty() {
             let _ = write!(
                 out,
-                r#"<w:p><w:pPr><w:numPr><w:ilvl w:val="{ilvl}"/><w:numId w:val="{num_id}"/></w:numPr><w:spacing w:after="{after_dxa}"/></w:pPr></w:p>"#
+                r#"<w:p><w:pPr><w:numPr><w:ilvl w:val="{ilvl}"/><w:numId w:val="{num_id}"/></w:numPr><w:spacing w:before="0" w:after="{after_dxa}" w:line="242" w:lineRule="auto"/></w:pPr></w:p>"#
             );
             return;
         }
@@ -122,7 +148,7 @@ impl<'a> DocxBuilder<'a> {
                     if let Some(prefix) = custom_prefix {
                         let _ = write!(
                             out,
-                            r#"<w:spacing w:after="{after_dxa}"/><w:ind w:left="{indent_left}" w:hanging="280"/></w:pPr>"#
+                            r#"<w:spacing w:before="0" w:after="{after_dxa}" w:line="242" w:lineRule="auto"/><w:ind w:left="{indent_left}" w:hanging="260"/></w:pPr>"#
                         );
                         let bm_id = bookmark
                             .as_ref()
@@ -140,7 +166,7 @@ impl<'a> DocxBuilder<'a> {
                     } else {
                         let _ = write!(
                             out,
-                            r#"<w:numPr><w:ilvl w:val="{ilvl}"/><w:numId w:val="{num_id}"/></w:numPr><w:spacing w:after="{after_dxa}"/></w:pPr>"#
+                            r#"<w:numPr><w:ilvl w:val="{ilvl}"/><w:numId w:val="{num_id}"/></w:numPr><w:spacing w:before="0" w:after="{after_dxa}" w:line="242" w:lineRule="auto"/></w:pPr>"#
                         );
                         let bm_id = bookmark
                             .as_ref()
