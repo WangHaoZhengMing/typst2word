@@ -7,7 +7,7 @@
 //!    `Frame` tags (`Tag::Start` / `Tag::End`) including custom realization locations
 //!    for native shapes, transforms, and HTML elements.
 //! 2. [`ir`]: Unified Semantic + Visual Intermediate Representation (`DocumentIr`).
-//! 3. [`extractor`]: Combines introspection queries, `CellGrid` table metadata, and
+//! 3. [`extract`]: Combines introspection queries, `CellGrid` table metadata, and
 //!    laid-out `Frame` trees to extract headings, paragraphs, inline styles, lists,
 //!    enums, terms, tables/grids, quotes, syntax-highlighted code blocks, figures,
 //!    outlines, bibliographies, footnotes, hyperlinks, cross-references, native shapes,
@@ -19,7 +19,7 @@
 
 pub mod compiler;
 pub mod docx;
-pub mod extractor;
+pub mod extract;
 pub mod ir;
 pub mod math_omml;
 pub mod shape_dml;
@@ -29,7 +29,7 @@ use std::path::Path;
 
 use compiler::{TypstWorld, compile_world};
 use docx::{write_docx_to_bytes, write_docx_to_path};
-use extractor::extract_document_ir;
+use extract::extract_document_ir;
 use ir::DocumentIr;
 
 /// Compile a Typst `.typ` file and extract its `DocumentIr`.
