@@ -58,6 +58,7 @@ impl<'a> ExtractorContext<'a> {
         // Estimate column widths and row heights from explicit grid sizings and laid-out cell frames.
         let mut col_widths_pt = vec![0.0_f64; num_cols];
         let mut natural_col_w = vec![0.0_f64; num_cols];
+        let mut col_min_x = vec![f64::INFINITY; num_cols];
         let mut col_fr = vec![0.0_f64; num_cols];
         let mut row_heights_pt = vec![0.0_f64; num_rows];
         let mut row_has_explicit_height = vec![false; num_rows];
@@ -65,17 +66,15 @@ impl<'a> ExtractorContext<'a> {
         for (&(cx, cy), (cell_elem, cnodes, csize)) in &cell_nodes_map {
             let colspan = Self::get_cell_colspan(cell_elem);
             let rowspan = Self::get_cell_rowspan(cell_elem);
-            let pad_w = if is_semantic_table { 12.0 } else { 8.0 };
-            let w_pt = csize
-                .x
-                .to_pt()
-                .max(Self::estimate_nodes_bbox(cnodes).2 + pad_w);
-            let h_pt = csize
-                .y
-                .to_pt()
-                .max(Self::estimate_nodes_bbox(cnodes).3 + 8.0);
+            let (bbox_x, _, bbox_w, bbox_h) = Self::estimate_nodes_bbox(cnodes);
+            let pad_w = if is_semantic_table { 12.0 } else { 6.0 };
+            let w_pt = csize.x.to_pt().max(bbox_w + pad_w);
+            let h_pt = csize.y.to_pt().max(bbox_h + 8.0);
             if colspan == 1 && cx < num_cols {
                 natural_col_w[cx] = natural_col_w[cx].max(w_pt);
+                if bbox_w > 0.5 && bbox_x.is_finite() {
+                    col_min_x[cx] = col_min_x[cx].min(bbox_x);
+                }
             }
             if rowspan == 1 && cy < num_rows && !row_has_explicit_height[cy] {
                 row_heights_pt[cy] = row_heights_pt[cy].max(h_pt);
@@ -129,7 +128,7 @@ impl<'a> ExtractorContext<'a> {
                 && gutter_fr.iter().any(|&gf| gf > 0.0)
                 && col_fr[num_cols - 1] == 0.0
             {
-                col_widths_pt[num_cols - 1] += 12.0;
+                col_widths_pt[num_cols - 1] += 4.0;
             }
             let used_w: f64 =
                 col_widths_pt.iter().sum::<f64>() + gutter_abs_pt.iter().sum::<f64>();
@@ -155,6 +154,29 @@ impl<'a> ExtractorContext<'a> {
             if gutter_abs_pt[x] > 0.0 {
                 col_widths_pt[x] += gutter_abs_pt[x];
             }
+        }
+
+        // For non-semantic multi-column grids where all columns have laid-out X coordinates,
+        // use exact inter-column X deltas from Typst's layout engine (`col_min_x[x+1] - col_min_x[x]`).
+        if !is_semantic_table
+            && num_cols > 1
+            && col_min_x.iter().all(|x| x.is_finite())
+            && col_min_x.windows(2).all(|w| w[1] > w[0] + 12.0)
+        {
+            for x in 0..(num_cols - 1) {
+                col_widths_pt[x] = col_min_x[x + 1] - col_min_x[x];
+            }
+            let col_w = self.current_column_width_pt();
+            let (col_count, col_gutter) = self.active_columns;
+            let right_bound = if col_count > 1 && col_min_x[0] >= self.content_left_pt - 4.0 {
+                let cidx = (((col_min_x[0] - self.content_left_pt).max(0.0))
+                    / (col_w + col_gutter).max(1.0))
+                .floor() as usize;
+                self.content_left_pt + (cidx.min(col_count - 1) as f64) * (col_w + col_gutter) + col_w
+            } else {
+                self.content_right_pt
+            };
+            col_widths_pt[num_cols - 1] = (right_bound - col_min_x[num_cols - 1] + 4.0).max(24.0);
         }
 
         for y in 0..num_rows {
@@ -213,7 +235,7 @@ impl<'a> ExtractorContext<'a> {
                         let fill = resolved_cell.fill.as_ref().and_then(paint_to_hex);
                         let borders = Self::extract_cell_borders(resolved_cell, is_semantic_table);
 
-                        let (inset, halign, valign, is_header_cell, cell_blocks) =
+                        let (mut inset, halign, valign, is_header_cell, cell_blocks) =
                             if let Some((cell_elem, cnodes, _)) = cell_nodes_map.get(&(x, y)) {
                                 Self::collect_linebreak_preceding_texts(
                                     &resolved_cell.body,
@@ -221,26 +243,34 @@ impl<'a> ExtractorContext<'a> {
                                 );
                                 let (ins, ha, va, ih) =
                                     Self::extract_cell_props(cell_elem, is_header, is_semantic_table);
-                                let blks = self.extract_blocks_from_nodes(cnodes, 0, ha);
+                                let mut blks = self.extract_blocks_from_nodes(cnodes, 0, ha);
+                                if num_cols > 1 && Self::find_explicit_align_elem(cnodes).is_none() {
+                                    for blk in &mut blks {
+                                        if let crate::ir::BlockNode::Paragraph { style, .. } = blk {
+                                            style.align = ha;
+                                        }
+                                    }
+                                }
                                 (ins, ha, va, ih, blks)
                             } else {
-                                (
-                                    if is_semantic_table {
-                                        SidesPtIr::default()
-                                    } else {
-                                        SidesPtIr {
-                                            top: 1.0,
-                                            bottom: 1.0,
-                                            left: 0.0,
-                                            right: 2.0,
-                                        }
-                                    },
-                                    HAlignIr::Left,
-                                    VAlignIr::Top,
-                                    is_header,
-                                    Vec::new(),
-                                )
+                                let ins = if is_semantic_table {
+                                    SidesPtIr::default()
+                                } else {
+                                    SidesPtIr { top: 1.0, bottom: 1.0, left: 0.0, right: 2.0 }
+                                };
+                                (ins, HAlignIr::Left, VAlignIr::Top, is_header, Vec::new())
                             };
+
+                        if !is_semantic_table && grid.has_gutter && y + 1 < num_rows {
+                            if let Some(typst::layout::Sizing::Rel(rel)) = grid.rows.get(raw_y + 1)
+                                && rel.rel.is_zero()
+                            {
+                                let row_gutter_pt = Self::resolve_length_pt(rel.abs, 11.0);
+                                if row_gutter_pt > 1.3 {
+                                    inset.bottom += row_gutter_pt - 1.3;
+                                }
+                            }
+                        }
 
                         row_cells.push(TableCellIr {
                             x,
@@ -413,42 +443,29 @@ impl<'a> ExtractorContext<'a> {
     }
 
     pub(crate) fn get_cell_colspan(elem: &Content) -> usize {
-        if let Some(tc) = elem.to_packed::<TableCell>() {
-            tc.colspan.get(StyleChain::default()).get()
-        } else if let Some(gc) = elem.to_packed::<GridCell>() {
-            gc.colspan.get(StyleChain::default()).get()
-        } else {
-            1
-        }
+        elem.to_packed::<TableCell>()
+            .map(|tc| tc.colspan.get(StyleChain::default()).get())
+            .or_else(|| elem.to_packed::<GridCell>().map(|gc| gc.colspan.get(StyleChain::default()).get()))
+            .unwrap_or(1)
     }
 
     pub(crate) fn get_cell_rowspan(elem: &Content) -> usize {
-        if let Some(tc) = elem.to_packed::<TableCell>() {
-            tc.rowspan.get(StyleChain::default()).get()
-        } else if let Some(gc) = elem.to_packed::<GridCell>() {
-            gc.rowspan.get(StyleChain::default()).get()
-        } else {
-            1
-        }
+        elem.to_packed::<TableCell>()
+            .map(|tc| tc.rowspan.get(StyleChain::default()).get())
+            .or_else(|| elem.to_packed::<GridCell>().map(|gc| gc.rowspan.get(StyleChain::default()).get()))
+            .unwrap_or(1)
     }
 
     pub(crate) fn extract_cell_borders(
         cell: &typst::layout::grid::resolve::Cell,
-        is_semantic_table: bool,
+        _is_semantic_table: bool,
     ) -> BordersIr {
-        let mut borders = BordersIr {
+        BordersIr {
             top: cell.stroke.top.as_deref().map(Self::abs_stroke_to_ir),
             bottom: cell.stroke.bottom.as_deref().map(Self::abs_stroke_to_ir),
             left: cell.stroke.left.as_deref().map(Self::abs_stroke_to_ir),
             right: cell.stroke.right.as_deref().map(Self::abs_stroke_to_ir),
-        };
-        if is_semantic_table && !borders.has_any() && !cell.stroke_overridden.iter().any(|&b| b) {
-            // Default 0.5pt black table border if not explicitly overridden to `none`.
-            // Note: if `cell.stroke` has `None` on all sides because user set `stroke: none`,
-            // `cell.stroke` is already `None`, so we respect `cell.stroke` directly!
         }
-        let _ = &mut borders;
-        borders
     }
 
     pub(crate) fn extract_cell_props(
@@ -456,9 +473,9 @@ impl<'a> ExtractorContext<'a> {
         default_is_header: bool,
         is_semantic_table: bool,
     ) -> (SidesPtIr, HAlignIr, VAlignIr, bool) {
+        let grid_def = SidesPtIr { top: 0.0, bottom: 0.0, left: 0.0, right: 0.0 };
         if let Some(tc) = elem.to_packed::<TableCell>() {
-            let align = tc.align.get(StyleChain::default());
-            let (ha, va) = Self::alignment_to_ir(align);
+            let (ha, va) = Self::alignment_to_ir(tc.align.get(StyleChain::default()));
             let inset = Self::sides_rel_length_to_pt(&tc.inset.get(StyleChain::default()));
             let is_header = matches!(
                 tc.kind.get(StyleChain::default()),
@@ -466,36 +483,15 @@ impl<'a> ExtractorContext<'a> {
             ) || default_is_header;
             (inset, ha, va, is_header)
         } else if let Some(gc) = elem.to_packed::<GridCell>() {
-            let align = gc.align.get(StyleChain::default());
-            let (ha, va) = Self::alignment_to_ir(align);
-            let inset_cfg = gc.inset.get(StyleChain::default());
-            let inset = if matches!(inset_cfg, Smart::Auto) {
-                SidesPtIr {
-                    top: 0.0,
-                    bottom: 0.0,
-                    left: 0.0,
-                    right: 2.0,
-                }
-            } else {
-                Self::sides_rel_length_to_pt(&inset_cfg)
-            };
+            let (ha, va) = Self::alignment_to_ir(gc.align.get(StyleChain::default()));
+            let inset = Self::sides_rel_length_to_pt_with_default(
+                &gc.inset.get(StyleChain::default()),
+                grid_def,
+            );
             (inset, ha, va, default_is_header)
         } else {
-            (
-                if is_semantic_table {
-                    SidesPtIr::default()
-                } else {
-                    SidesPtIr {
-                        top: 0.0,
-                        bottom: 0.0,
-                        left: 0.0,
-                        right: 2.0,
-                    }
-                },
-                HAlignIr::Left,
-                VAlignIr::Top,
-                default_is_header,
-            )
+            let inset = if is_semantic_table { SidesPtIr::default() } else { grid_def };
+            (inset, HAlignIr::Left, VAlignIr::Top, default_is_header)
         }
     }
 }

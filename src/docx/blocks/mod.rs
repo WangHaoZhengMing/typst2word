@@ -85,15 +85,37 @@ impl<'a> DocxBuilder<'a> {
                 items,
                 tight,
                 level,
+                spacing_pt,
+                indent_pt,
+                hanging_pt,
             } => {
-                self.render_list(items, *tight, *level, out);
+                self.render_list(
+                    items,
+                    *tight,
+                    *level,
+                    *spacing_pt,
+                    *indent_pt,
+                    *hanging_pt,
+                    out,
+                );
             }
             BlockNode::Enum {
                 items,
                 tight,
                 level,
+                spacing_pt,
+                indent_pt,
+                hanging_pt,
             } => {
-                self.render_enum(items, *tight, *level, out);
+                self.render_enum(
+                    items,
+                    *tight,
+                    *level,
+                    *spacing_pt,
+                    *indent_pt,
+                    *hanging_pt,
+                    out,
+                );
             }
             BlockNode::Terms { items, tight } => {
                 self.render_terms(items, *tight, out);

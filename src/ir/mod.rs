@@ -79,12 +79,24 @@ pub enum BlockNode {
         items: Vec<ListItemIr>,
         tight: bool,
         level: usize,
+        #[serde(default)]
+        spacing_pt: Option<f64>,
+        #[serde(default)]
+        indent_pt: f64,
+        #[serde(default)]
+        hanging_pt: f64,
     },
     /// Ordered numbered list (`+ item` or `1. item`).
     Enum {
         items: Vec<EnumItemIr>,
         tight: bool,
         level: usize,
+        #[serde(default)]
+        spacing_pt: Option<f64>,
+        #[serde(default)]
+        indent_pt: f64,
+        #[serde(default)]
+        hanging_pt: f64,
     },
     /// Definition / term list (`/ Term: Description`).
     Terms { items: Vec<TermItemIr>, tight: bool },

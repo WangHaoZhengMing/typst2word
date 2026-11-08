@@ -115,15 +115,23 @@ impl<'a> ExtractorContext<'a> {
     }
 
     pub(crate) fn sides_rel_length_to_pt(sides: &Smart<Sides<Option<Rel<Length>>>>) -> SidesPtIr {
+        Self::sides_rel_length_to_pt_with_default(sides, SidesPtIr::default())
+    }
+
+    pub(crate) fn sides_rel_length_to_pt_with_default(
+        sides: &Smart<Sides<Option<Rel<Length>>>>,
+        default: SidesPtIr,
+    ) -> SidesPtIr {
         let Smart::Custom(s) = sides else {
-            return SidesPtIr::default();
+            return default;
         };
-        let get = |opt: &Option<Rel<Length>>| opt.map_or(5.0, |r| r.abs.abs.to_pt().max(0.0));
+        let get =
+            |opt: &Option<Rel<Length>>, def: f64| opt.map_or(def, |r| r.abs.abs.to_pt().max(0.0));
         SidesPtIr {
-            top: get(&s.top),
-            bottom: get(&s.bottom),
-            left: get(&s.left),
-            right: get(&s.right),
+            top: get(&s.top, default.top),
+            bottom: get(&s.bottom, default.bottom),
+            left: get(&s.left, default.left),
+            right: get(&s.right, default.right),
         }
     }
 

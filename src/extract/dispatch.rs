@@ -420,11 +420,27 @@ impl<'a> ExtractorContext<'a> {
                         {
                             items.push(item);
                         } else {
+                            let chain = self.style_chain();
+                            let default_font_pt = Self::resolve_length_pt(
+                                chain.get(typst::text::TextElem::size).0,
+                                11.0,
+                            );
+                            let indent_pt = Self::resolve_length_pt(
+                                chain.get(typst::model::EnumElem::indent),
+                                default_font_pt,
+                            );
+                            let body_indent_pt = Self::resolve_length_pt(
+                                chain.get(typst::model::EnumElem::body_indent),
+                                default_font_pt,
+                            );
                             self.report.lists_count += 1;
                             blocks.push(BlockNode::Enum {
                                 items: vec![item],
                                 tight: true,
                                 level: list_level,
+                                spacing_pt: None,
+                                indent_pt,
+                                hanging_pt: (11.5 + body_indent_pt).max(16.0),
                             });
                         }
                     } else {
@@ -437,11 +453,27 @@ impl<'a> ExtractorContext<'a> {
                         {
                             items.push(item);
                         } else {
+                            let chain = self.style_chain();
+                            let default_font_pt = Self::resolve_length_pt(
+                                chain.get(typst::text::TextElem::size).0,
+                                11.0,
+                            );
+                            let indent_pt = Self::resolve_length_pt(
+                                chain.get(typst::model::ListElem::indent),
+                                default_font_pt,
+                            );
+                            let body_indent_pt = Self::resolve_length_pt(
+                                chain.get(typst::model::ListElem::body_indent),
+                                default_font_pt,
+                            );
                             self.report.lists_count += 1;
                             blocks.push(BlockNode::List {
                                 items: vec![item],
                                 tight: true,
                                 level: list_level,
+                                spacing_pt: None,
+                                indent_pt,
+                                hanging_pt: (6.0 + body_indent_pt).max(13.0),
                             });
                         }
                     }

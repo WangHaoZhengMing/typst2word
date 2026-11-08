@@ -47,8 +47,10 @@ impl<'a> DocxBuilder<'a> {
         out.push_str("</w:tblGrid>");
 
         // Rows
-        let keep_rows_together = !is_styled_container && table.rows.len() <= 15;
-        for row in &table.rows {
+        let num_rows = table.rows.len();
+        for (row_idx, row) in table.rows.iter().enumerate() {
+            let keep_rows_together =
+                !is_styled_container && num_rows <= 15 && row_idx + 1 < num_rows;
             if is_styled_container {
                 out.push_str("<w:tr><w:trPr>");
             } else {
