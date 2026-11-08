@@ -249,17 +249,34 @@ impl<'a> ExtractorContext<'a> {
         None
     }
 
-    pub(crate) fn has_explicit_pagebreak(content: &Content) -> bool {
-        if content.is::<PagebreakElem>() {
-            return true;
-        }
+    pub(crate) fn collect_pagebreak_following_texts(content: &Content, out: &mut Vec<String>) {
         if let Some(styled) = content.to_packed::<StyledElem>() {
-            return Self::has_explicit_pagebreak(&styled.child);
+            Self::collect_pagebreak_following_texts(&styled.child, out);
+        } else if let Some(seq) = content.to_packed::<SequenceElem>() {
+            for (i, child) in seq.children.iter().enumerate() {
+                if child.is::<PagebreakElem>() {
+                    let mut found_text = None;
+                    for next in &seq.children[i + 1..] {
+                        if next.is::<PagebreakElem>() {
+                            break;
+                        }
+                        let plain: String = next
+                            .plain_text()
+                            .chars()
+                            .filter(|c| !c.is_whitespace())
+                            .take(10)
+                            .collect();
+                        if !plain.is_empty() {
+                            found_text = Some(plain);
+                            break;
+                        }
+                    }
+                    out.push(found_text.unwrap_or_else(|| "__PAGEBREAK_ANY__".to_string()));
+                } else {
+                    Self::collect_pagebreak_following_texts(child, out);
+                }
+            }
         }
-        if let Some(seq) = content.to_packed::<SequenceElem>() {
-            return seq.children.iter().any(Self::has_explicit_pagebreak);
-        }
-        false
     }
 
     pub(crate) fn clean_redundant_pagebreaks(&self, blocks: &mut Vec<BlockNode>) {

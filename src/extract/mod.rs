@@ -28,7 +28,6 @@ use typst::layout::{GroupItem, Length, Point};
 
 use crate::compiler::compile::CompiledTypstDocument;
 use crate::compiler::world::TypstWorld;
-use crate::extract::frame_tree::TreeNode;
 use crate::ir::{BlockNode, ConversionReport, DocumentIr, HAlignIr};
 
 /// Extract a complete `DocumentIr` from a `CompiledTypstDocument` and `TypstWorld`.
@@ -208,28 +207,31 @@ impl<'a> ExtractorContext<'a> {
             }
         }
 
-        // 4. Build frame trees once per page so `logical_child_groups` are attached cleanly.
-        let mut page_trees: Vec<Vec<TreeNode>> =
-            Vec::with_capacity(self.compiled.document.pages().len());
-        for page in self.compiled.document.pages() {
-            page_trees.push(self.build_frame_tree(&page.frame, Point::zero()));
-        }
-
-        // 5. Extract document metadata and page setup (including header/footer from page 1).
+        // 4. Extract document metadata and page setup (including header/footer from page 1).
         let metadata = self.extract_metadata();
-        let first_page_nodes = page_trees.first().cloned().unwrap_or_default();
+        let first_page_nodes = self
+            .compiled
+            .document
+            .pages()
+            .first()
+            .map(|p| {
+                let saved_groups = self.logical_child_groups.clone();
+                let nodes = self.build_frame_tree(&p.frame, Point::zero());
+                self.logical_child_groups = saved_groups;
+                nodes
+            })
+            .unwrap_or_default();
         let page_setup = self.extract_page_setup(&first_page_nodes);
 
-        // 6. Combine page trees across all pages. Only insert hard `PageBreak` nodes between
-        //    pages if the source document explicitly used `#pagebreak()` (`PagebreakElem`).
-        let has_explicit_pb = Self::has_explicit_pagebreak(&self.compiled.evaluated_content);
-        let mut all_root_nodes: Vec<TreeNode> = Vec::new();
-        for (page_idx, page_nodes) in page_trees.into_iter().enumerate() {
-            if page_idx > 0 && has_explicit_pb {
-                all_root_nodes.push(TreeNode::PageBreak);
-            }
-            all_root_nodes.extend(page_nodes);
-        }
+        // 5. Build a continuous frame tree across all pages, keeping cross-page open tags
+        //    (`EnumElem`, `ListElem`, `ParElem`, etc.) intact and only inserting `PageBreak`
+        //    at explicit `#pagebreak()` (`PagebreakElem`) boundaries.
+        let mut pagebreak_targets = Vec::new();
+        Self::collect_pagebreak_following_texts(
+            &self.compiled.evaluated_content,
+            &mut pagebreak_targets,
+        );
+        let all_root_nodes = self.build_document_frame_tree(pagebreak_targets);
 
         let mut blocks = self.extract_blocks_from_nodes(&all_root_nodes, 0, HAlignIr::Left);
 

@@ -92,11 +92,89 @@ impl<'a> ExtractorContext<'a> {
     /// Build a hierarchical `Vec<TreeNode>` from `frame`, flattening soft untransformed
     /// line frames while keeping hard/transformed groups and pairing `Tag::Start` / `Tag::End`.
     pub(crate) fn build_frame_tree(&mut self, frame: &Frame, base_offset: Point) -> Vec<TreeNode> {
-        let mut flat_items: Vec<(Point, FrameItem)> = Vec::new();
-        Self::flatten_soft_groups(frame, base_offset, &mut flat_items);
-
         let mut root_nodes: Vec<TreeNode> = Vec::new();
         let mut stack: Vec<OpenElement> = Vec::new();
+        self.append_frame_items_to_tree(frame, base_offset, &mut root_nodes, &mut stack);
+        self.flush_open_stack(&mut root_nodes, &mut stack);
+        root_nodes
+    }
+
+    /// Build a continuous `Vec<TreeNode>` across all pages of the document, preserving
+    /// open tags (`EnumElem`, `ListElem`, `ParElem`, etc.) across natural page wraps and
+    /// only inserting `TreeNode::PageBreak` where an explicit `#pagebreak()` occurred.
+    pub(crate) fn build_document_frame_tree(
+        &mut self,
+        mut pagebreak_targets: Vec<String>,
+    ) -> Vec<TreeNode> {
+        let mut root_nodes: Vec<TreeNode> = Vec::new();
+        let mut stack: Vec<OpenElement> = Vec::new();
+        let pages = self.compiled.document.pages();
+
+        for (page_idx, page) in pages.iter().enumerate() {
+            if page_idx > 0 && !pagebreak_targets.is_empty() {
+                let page_head: String = Self::frame_body_plain_text(&page.frame)
+                    .chars()
+                    .filter(|c| !c.is_whitespace())
+                    .take(40)
+                    .collect();
+                if let Some(pos_idx) = pagebreak_targets
+                    .iter()
+                    .position(|t| t == "__PAGEBREAK_ANY__" || (!page_head.is_empty() && page_head.contains(t.as_str())))
+                {
+                    pagebreak_targets.remove(pos_idx);
+                    self.flush_open_stack(&mut root_nodes, &mut stack);
+                    root_nodes.push(TreeNode::PageBreak);
+                }
+            }
+            let base_offset = Point::new(
+                typst::layout::Abs::zero(),
+                typst::layout::Abs::pt(page_idx as f64 * 10000.0),
+            );
+            self.append_frame_items_to_tree(&page.frame, base_offset, &mut root_nodes, &mut stack);
+        }
+
+        self.flush_open_stack(&mut root_nodes, &mut stack);
+        root_nodes
+    }
+
+    pub(crate) fn frame_body_plain_text(frame: &Frame) -> String {
+        let mut s = String::new();
+        let mut in_artifact_depth = 0usize;
+        let mut flat_items = Vec::new();
+        Self::flatten_soft_groups(frame, Point::zero(), &mut flat_items);
+        for (_, item) in flat_items {
+            match item {
+                FrameItem::Tag(Tag::Start(elem, _)) => {
+                    if elem.is::<typst::pdf::ArtifactElem>() || elem.is::<typst::model::FootnoteEntry>() {
+                        in_artifact_depth += 1;
+                    }
+                }
+                FrameItem::Tag(Tag::End(..)) => {
+                    if in_artifact_depth > 0 {
+                        in_artifact_depth -= 1;
+                    }
+                }
+                FrameItem::Text(t) if in_artifact_depth == 0 => {
+                    s.push_str(&t.text);
+                }
+                FrameItem::Group(g) if in_artifact_depth == 0 && g.parent.is_none() => {
+                    s.push_str(&Self::frame_body_plain_text(&g.frame));
+                }
+                _ => {}
+            }
+        }
+        s
+    }
+
+    pub(crate) fn append_frame_items_to_tree(
+        &mut self,
+        frame: &Frame,
+        base_offset: Point,
+        root_nodes: &mut Vec<TreeNode>,
+        stack: &mut Vec<OpenElement>,
+    ) {
+        let mut flat_items: Vec<(Point, FrameItem)> = Vec::new();
+        Self::flatten_soft_groups(frame, base_offset, &mut flat_items);
 
         for (pos, item) in flat_items {
             match item {
@@ -128,7 +206,7 @@ impl<'a> ExtractorContext<'a> {
                                 pos: closed.pos,
                                 children: closed.children,
                             };
-                            Self::push_node(&mut root_nodes, &mut stack, node);
+                            Self::push_node(root_nodes, stack, node);
                         }
                     }
                 }
@@ -143,22 +221,22 @@ impl<'a> ExtractorContext<'a> {
                         pos,
                         children,
                     };
-                    Self::push_node(&mut root_nodes, &mut stack, node);
+                    Self::push_node(root_nodes, stack, node);
                 }
                 FrameItem::Text(text) => {
-                    Self::push_node(&mut root_nodes, &mut stack, TreeNode::Text { text, pos });
+                    Self::push_node(root_nodes, stack, TreeNode::Text { text, pos });
                 }
                 FrameItem::Shape(shape, span) => {
                     Self::push_node(
-                        &mut root_nodes,
-                        &mut stack,
+                        root_nodes,
+                        stack,
                         TreeNode::Shape { shape, span, pos },
                     );
                 }
                 FrameItem::Image(image, size, span) => {
                     Self::push_node(
-                        &mut root_nodes,
-                        &mut stack,
+                        root_nodes,
+                        stack,
                         TreeNode::Image {
                             image,
                             size,
@@ -169,15 +247,20 @@ impl<'a> ExtractorContext<'a> {
                 }
                 FrameItem::Link(dest, size) => {
                     Self::push_node(
-                        &mut root_nodes,
-                        &mut stack,
+                        root_nodes,
+                        stack,
                         TreeNode::Link { dest, size, pos },
                     );
                 }
             }
         }
+    }
 
-        // Close any remaining open tags at the end of the frame.
+    pub(crate) fn flush_open_stack(
+        &mut self,
+        root_nodes: &mut Vec<TreeNode>,
+        stack: &mut Vec<OpenElement>,
+    ) {
         while let Some(mut closed) = stack.pop() {
             if let Some(detached) = self.logical_child_groups.remove(&closed.loc) {
                 for (gpos, grp) in detached {
@@ -191,10 +274,8 @@ impl<'a> ExtractorContext<'a> {
                 pos: closed.pos,
                 children: closed.children,
             };
-            Self::push_node(&mut root_nodes, &mut stack, node);
+            Self::push_node(root_nodes, stack, node);
         }
-
-        root_nodes
     }
 
     pub(crate) fn flatten_soft_groups(
