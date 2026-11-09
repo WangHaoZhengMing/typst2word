@@ -108,9 +108,10 @@ impl<'a> DocxBuilder<'a> {
             ""
         };
         let _ = write!(out, r#"<w:pgSz w:w="{w_dxa}" w:h="{h_dxa}"{orient}/>"#);
-        // Subtract 1.5pt from `w:top` for Word's internal CJK font top-leading on the first line
-        // of each page, and 6pt from `w:bottom` for Word's empty CJK descender box on the last line.
-        let top_dxa = pt_to_dxa((ps.margin_top_pt - 1.5).max(18.0));
+        // Subtract 3.5pt from `w:top` to align Word's first-line `winAscent` (0.891em) top box
+        // with Typst's default `top-edge: "cap-height"` (0.692em) baseline on each page, and
+        // 6pt from `w:bottom` for Word's empty CJK descender box on the last line.
+        let top_dxa = pt_to_dxa((ps.margin_top_pt - 3.5).max(18.0));
         let bottom_dxa = pt_to_dxa((ps.margin_bottom_pt - 6.0).max(18.0));
         let _ = write!(
             out,
