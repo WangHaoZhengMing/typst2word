@@ -82,8 +82,20 @@ impl<'a> DocxBuilder<'a> {
                 out,
                 r#"<w:spacing w:before="{before_dxa}" w:after="{after_dxa}" w:line="{line_dxa}" w:lineRule="auto"/>"#
             );
-        } else if collapse_before {
-            out.push_str(r#"<w:spacing w:before="0"/>"#);
+        } else {
+            let line_dxa = Self::compute_line_spacing_dxa(content, None);
+            let before_dxa = if collapse_before {
+                0
+            } else if level == 1 {
+                180
+            } else {
+                160
+            };
+            let after_dxa = if compact_after { 48 } else { 80 };
+            let _ = write!(
+                out,
+                r#"<w:spacing w:before="{before_dxa}" w:after="{after_dxa}" w:line="{line_dxa}" w:lineRule="auto"/>"#
+            );
         }
         if align != HAlignIr::Left {
             Self::render_jc(align, out);
@@ -92,9 +104,24 @@ impl<'a> DocxBuilder<'a> {
 
         let bm_id = bookmark.map(|bm| self.emit_bookmark_start(bm, out));
         if let Some(num_prefix) = numbering {
+            let sep = if num_prefix.ends_with('、')
+                || num_prefix.ends_with('．')
+                || num_prefix.ends_with('）')
+            {
+                ""
+            } else {
+                " "
+            };
+            let first_font = content.iter().find_map(|inl| {
+                if let InlineNode::Text(r) = inl {
+                    r.font_family.clone()
+                } else {
+                    None
+                }
+            });
             let prefix_run = TextRunIr {
-                text: format!("{num_prefix} "),
-                font_family: Some("Libertinus Serif".to_string()),
+                text: format!("{num_prefix}{sep}"),
+                font_family: first_font.or_else(|| Some("Libertinus Serif".to_string())),
                 font_size_pt: Some(sz_pt),
                 bold: true,
                 ..Default::default()

@@ -32,18 +32,59 @@ impl<'a> DocxBuilder<'a> {
                 bookmark,
                 align,
             } = block
-                && matches!(blocks.get(idx + 1), Some(BlockNode::Paragraph { .. }))
             {
+                let collapse_before = idx == 0
+                    || matches!(
+                        blocks.get(idx.wrapping_sub(1)),
+                        Some(BlockNode::PageBreak | BlockNode::ColumnBreak)
+                    );
+                let compact_after = matches!(blocks.get(idx + 1), Some(BlockNode::Paragraph { .. }));
                 self.render_heading_inner(
                     *level,
                     numbering.as_deref(),
                     content,
                     bookmark.as_deref(),
                     *align,
-                    false,
-                    true,
+                    collapse_before,
+                    compact_after,
                     out,
                 );
+                continue;
+            }
+            if let BlockNode::Paragraph {
+                content,
+                style,
+                bookmark,
+            } = block
+                && style.space_after_pt <= 8.0
+                && let Some(BlockNode::Paragraph {
+                    content: next_content,
+                    ..
+                }) = blocks.get(idx + 1)
+            {
+                let cur_sz = Self::primary_font_size_pt(content);
+                let next_sz = Self::primary_font_size_pt(next_content);
+                if cur_sz <= 13.5 && next_sz >= cur_sz + 2.0 {
+                    let mut adj_style = style.clone();
+                    adj_style.space_after_pt =
+                        (adj_style.space_after_pt - (next_sz - cur_sz) * 1.2).max(0.0);
+                    self.render_paragraph(content, &adj_style, bookmark.as_deref(), out);
+                    continue;
+                }
+            }
+            if matches!(block, BlockNode::Figure { .. })
+                && matches!(
+                    blocks.get(idx + 1),
+                    Some(BlockNode::Paragraph { style, .. }) if style.keep_with_next
+                )
+            {
+                let mut fig_xml = String::new();
+                self.render_block(block, &mut fig_xml);
+                fig_xml = fig_xml.replace(
+                    r#"<w:pStyle w:val="Caption"/>"#,
+                    r#"<w:pStyle w:val="Caption"/><w:keepNext/>"#,
+                );
+                out.push_str(&fig_xml);
                 continue;
             }
             self.render_block(block, out);
@@ -58,6 +99,17 @@ impl<'a> DocxBuilder<'a> {
                 );
             }
         }
+    }
+
+    pub(crate) fn primary_font_size_pt(content: &[crate::ir::InlineNode]) -> f64 {
+        content
+            .iter()
+            .find_map(|inl| match inl {
+                crate::ir::InlineNode::Text(r) => r.font_size_pt,
+                crate::ir::InlineNode::EquationInline(eq) => eq.font_size_pt,
+                _ => None,
+            })
+            .unwrap_or(11.0)
     }
 
     pub(crate) fn is_table_backed_block(block: &BlockNode) -> bool {
