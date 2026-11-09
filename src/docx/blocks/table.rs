@@ -1,7 +1,10 @@
-//! `table` / `grid` -> `<w:tbl>` with spans, borders, fills and insets.
+//! `table` / `grid` -> `TableConstruct` -> `<w:tbl>` with spans, borders, fills and insets.
 
 use std::fmt::Write as _;
 
+use crate::construct::table::{
+    RowSplitPolicy, TableConstruct, TableWidthConstruct, solve_table_cell_paragraph_style,
+};
 use crate::docx::builder::DocxBuilder;
 use crate::ir::{BlockNode, DashPatternIr, StrokeIr, TableIr, VAlignIr, VMergeState};
 use crate::units::pt_to_dxa;
@@ -12,26 +15,22 @@ impl<'a> DocxBuilder<'a> {
     // Table & Grid Rendering
     // =========================================================================
     pub(crate) fn render_table(&mut self, table: &TableIr, out: &mut String) {
-        let is_styled_container = table.is_styled_container();
-        let is_semantic_table = table.is_semantic();
+        let construct = TableConstruct::solve(table);
+        let is_styled_container = construct.is_styled_container;
+        let is_semantic_table = construct.is_semantic_table;
+
         out.push_str("<w:tbl><w:tblPr>");
-        Self::render_table_jc(table.align, out);
-        if table.left_indent_pt > 0.5 && table.align == crate::ir::HAlignIr::Left {
-            let first_cell_left_inset = table
-                .rows
-                .first()
-                .and_then(|r| r.cells.first())
-                .filter(|c| c.borders.left.is_some())
-                .map(|c| c.inset.left)
-                .unwrap_or(0.0);
-            let ind_dxa = pt_to_dxa(table.left_indent_pt + first_cell_left_inset);
+        Self::render_table_jc(construct.align, out);
+        if let Some(ind_dxa) = construct.indent_dxa {
             let _ = write!(out, r#"<w:tblInd w:w="{ind_dxa}" w:type="dxa"/>"#);
         }
-        let total_w_dxa: i64 = table.col_widths_pt.iter().map(|&w| pt_to_dxa(w)).sum();
-        if total_w_dxa > 0 {
-            let _ = write!(out, r#"<w:tblW w:w="{total_w_dxa}" w:type="dxa"/>"#);
-        } else {
-            out.push_str(r#"<w:tblW w:w="5000" w:type="pct"/>"#);
+        match construct.width {
+            TableWidthConstruct::ExactDxa(total_w_dxa) => {
+                let _ = write!(out, r#"<w:tblW w:w="{total_w_dxa}" w:type="dxa"/>"#);
+            }
+            TableWidthConstruct::FullWidthPct5000 => {
+                out.push_str(r#"<w:tblW w:w="5000" w:type="pct"/>"#);
+            }
         }
         if let Some(summary) = &table.summary
             && !is_styled_container
@@ -48,48 +47,24 @@ impl<'a> DocxBuilder<'a> {
 
         // `<w:tblGrid>`
         out.push_str("<w:tblGrid>");
-        for &col_w in &table.col_widths_pt {
-            let dxa = pt_to_dxa(col_w).max(144);
+        for &dxa in &construct.grid_cols_dxa {
             let _ = write!(out, r#"<w:gridCol w:w="{dxa}"/>"#);
         }
         out.push_str("</w:tblGrid>");
 
         // Rows
-        let num_rows = table.rows.len();
         for (row_idx, row) in table.rows.iter().enumerate() {
-            let next_row_is_complex_layout = !is_semantic_table
-                && table.rows.get(row_idx + 1).is_some_and(|next_r| {
-                    next_r.cells.iter().any(|c| {
-                        c.blocks.len() > 1
-                            || c.blocks
-                                .iter()
-                                .any(|b| !matches!(b, BlockNode::Paragraph { .. }))
-                    })
-                });
-            let row_is_complex_layout = !is_semantic_table
-                && row.cells.iter().any(|c| {
-                    c.blocks.len() > 2
-                        || c.blocks
-                            .iter()
-                            .any(|b| matches!(b, BlockNode::Table(_) | BlockNode::Figure { .. }))
-                });
-            let keep_rows_together = !is_styled_container
-                && !next_row_is_complex_layout
-                && num_rows <= 15
-                && row_idx + 1 < num_rows;
-            if (is_styled_container && row.height_pt.is_none()) || row_is_complex_layout {
-                out.push_str("<w:tr><w:trPr>");
-            } else {
-                out.push_str("<w:tr><w:trPr><w:cantSplit/>");
+            let row_construct = construct.rows[row_idx];
+            let keep_rows_together = row_construct.keep_rows_together;
+            match row_construct.split_policy {
+                RowSplitPolicy::AllowSplit => out.push_str("<w:tr><w:trPr>"),
+                RowSplitPolicy::CantSplit => out.push_str("<w:tr><w:trPr><w:cantSplit/>"),
             }
-            if row.is_header {
+            if row_construct.is_header {
                 out.push_str("<w:tblHeader/>");
             }
-            if let Some(rh) = row.height_pt {
-                let h_dxa = pt_to_dxa(rh);
-                if h_dxa > 40 {
-                    let _ = write!(out, r#"<w:trHeight w:val="{h_dxa}" w:hRule="atLeast"/>"#);
-                }
+            if let Some(h_dxa) = row_construct.min_height_dxa {
+                let _ = write!(out, r#"<w:trHeight w:val="{h_dxa}" w:hRule="atLeast"/>"#);
             }
             out.push_str("</w:trPr>");
 
@@ -225,54 +200,25 @@ impl<'a> DocxBuilder<'a> {
                 bookmark,
             } = block
             {
-                let mut cell_style = style.clone();
-                if idx == 0 {
-                    cell_style.space_before_pt = 0.0;
-                } else if matches!(blocks.get(idx - 1), Some(BlockNode::Table(_))) {
-                    cell_style.space_before_pt = cell_style.space_before_pt.max(11.0);
-                }
-                if idx + 1 == len {
-                    cell_style.space_after_pt = 0.0;
-                } else if !is_styled_container {
-                    cell_style.space_after_pt = cell_style.space_after_pt.min(2.0);
-                } else {
-                    match blocks.get(idx + 1) {
-                        Some(
-                            BlockNode::List { tight: true, .. }
-                            | BlockNode::Enum { tight: true, .. },
-                        ) => {
-                            cell_style.space_after_pt = cell_style.space_after_pt.min(0.5);
-                        }
-                        Some(BlockNode::HorizontalRule { .. }) => {
-                            cell_style.space_after_pt = cell_style.space_after_pt.min(2.0);
-                        }
-                        _ => {}
-                    }
-                }
-                if !is_styled_container {
-                    let char_cnt: usize = content
-                        .iter()
-                        .map(|inl| match inl {
-                            crate::ir::InlineNode::Text(r) => r.text.chars().count(),
-                            _ => 1,
-                        })
-                        .sum();
-                    if is_semantic_table && char_cnt > 12 {
-                        if Self::content_has_cjk_chars(content) {
-                            cell_style.line_spacing_pt = Some(4.5);
-                        } else {
-                            cell_style.line_spacing_pt = cell_style.line_spacing_pt.or(Some(6.0));
-                        }
-                    } else {
-                        cell_style.line_spacing_pt = Some(2.0);
-                    }
-                }
-                let mut para_xml = String::new();
-                self.render_paragraph(content, &cell_style, bookmark.as_deref(), &mut para_xml);
-                if keep_next {
-                    para_xml = para_xml.replacen("<w:pPr>", "<w:pPr><w:keepNext/>", 1);
-                }
-                out.push_str(&para_xml);
+                let prev_block = (idx > 0).then(|| &blocks[idx - 1]);
+                let next_block = blocks.get(idx + 1);
+                let cell_style = solve_table_cell_paragraph_style(
+                    content,
+                    style,
+                    idx,
+                    len,
+                    prev_block,
+                    next_block,
+                    is_styled_container,
+                    is_semantic_table,
+                );
+                self.render_paragraph_with_keep_next(
+                    content,
+                    &cell_style,
+                    bookmark.as_deref(),
+                    keep_next,
+                    out,
+                );
             } else if !is_styled_container && idx + 1 == len {
                 match block {
                     BlockNode::List {
@@ -283,7 +229,6 @@ impl<'a> DocxBuilder<'a> {
                         indent_pt,
                         hanging_pt,
                     } => {
-                        let mut list_xml = String::new();
                         self.render_list_with_trailing_gap(
                             items,
                             *tight,
@@ -292,10 +237,9 @@ impl<'a> DocxBuilder<'a> {
                             *indent_pt,
                             *hanging_pt,
                             Some(0),
-                            &mut list_xml,
+                            Some(254),
+                            out,
                         );
-                        list_xml = list_xml.replace(r#"w:line="276""#, r#"w:line="254""#);
-                        out.push_str(&list_xml);
                     }
                     BlockNode::Enum {
                         items,
@@ -305,7 +249,6 @@ impl<'a> DocxBuilder<'a> {
                         indent_pt,
                         hanging_pt,
                     } => {
-                        let mut list_xml = String::new();
                         self.render_enum_with_trailing_gap(
                             items,
                             *tight,
@@ -314,10 +257,9 @@ impl<'a> DocxBuilder<'a> {
                             *indent_pt,
                             *hanging_pt,
                             Some(0),
-                            &mut list_xml,
+                            Some(254),
+                            out,
                         );
-                        list_xml = list_xml.replace(r#"w:line="276""#, r#"w:line="254""#);
-                        out.push_str(&list_xml);
                     }
                     _ => self.render_block(block, out),
                 }

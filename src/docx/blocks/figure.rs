@@ -1,9 +1,10 @@
-//! `figure` -> body blocks plus a `Caption` paragraph.
+//! `figure` -> `FigureConstruct` -> body blocks plus a `Caption` paragraph.
 
 use std::fmt::Write as _;
 
+use crate::construct::figure::{FigureConstruct, solve_indented_figure_table};
 use crate::docx::builder::DocxBuilder;
-use crate::ir::{BlockNode, CaptionPositionIr, HAlignIr, InlineNode};
+use crate::ir::{BlockNode, CaptionPositionIr, InlineNode};
 
 impl<'a> DocxBuilder<'a> {
     /// `BlockNode::Figure` -> body blocks plus a `Caption` paragraph.
@@ -29,19 +30,41 @@ impl<'a> DocxBuilder<'a> {
         caption_after_dxa: i64,
         out: &mut String,
     ) {
-        let body_indent_dxa = body
-            .iter()
-            .find_map(|b| match b {
-                BlockNode::Table(t) if t.left_indent_pt > 0.5 => {
-                    Some(crate::units::pt_to_dxa(t.left_indent_pt).max(0) as usize)
-                }
-                _ => None,
-            })
-            .unwrap_or(0);
-        let eff_indent = indent_left.max(body_indent_dxa);
-        if caption_pos.is_top() {
+        self.render_figure_with_layout_and_keep(
+            body,
+            caption,
+            caption_pos,
+            bookmark,
+            indent_left,
+            caption_after_dxa,
+            false,
+            out,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn render_figure_with_layout_and_keep(
+        &mut self,
+        body: &[BlockNode],
+        caption: Option<&[InlineNode]>,
+        caption_pos: CaptionPositionIr,
+        bookmark: Option<&str>,
+        indent_left: usize,
+        caption_after_dxa: i64,
+        caption_keep_with_next: bool,
+        out: &mut String,
+    ) {
+        let construct = FigureConstruct::solve(
+            body,
+            caption_pos,
+            indent_left,
+            caption_after_dxa,
+            caption_keep_with_next,
+        );
+        let eff_indent = construct.eff_indent_dxa;
+        if construct.caption_pos.is_top() {
             if let Some(cap) = caption {
-                self.render_caption_paragraph(cap, bookmark, eff_indent, caption_after_dxa, out);
+                self.render_caption_paragraph(cap, bookmark, &construct, out);
             }
             self.render_figure_body_indented(body, eff_indent, out);
         } else {
@@ -74,7 +97,7 @@ impl<'a> DocxBuilder<'a> {
                 out.push_str(&body_xml);
             }
             if let Some(cap) = caption {
-                self.render_caption_paragraph(cap, bookmark, eff_indent, caption_after_dxa, out);
+                self.render_caption_paragraph(cap, bookmark, &construct, out);
             }
         }
     }
@@ -89,26 +112,10 @@ impl<'a> DocxBuilder<'a> {
             self.render_blocks(body, out);
             return;
         }
-        let target_left_pt = indent_left as f64 / 20.0;
-        let avail_w_pt = ((self.content_width_dxa() as f64 / 20.0) - target_left_pt).max(80.0);
         for b in body {
             if let BlockNode::Table(tbl) = b {
-                let mut adjusted = tbl.clone();
-                adjusted.align = HAlignIr::Left;
-                let mut total_col_w: f64 = adjusted.col_widths_pt.iter().sum();
-                if total_col_w > avail_w_pt + 2.0 {
-                    let excess = total_col_w - avail_w_pt;
-                    if let Some(last_w) = adjusted.col_widths_pt.last_mut()
-                        && *last_w > excess + 40.0
-                    {
-                        *last_w -= excess;
-                        total_col_w = avail_w_pt;
-                    }
-                }
-                if adjusted.left_indent_pt <= 0.5 {
-                    adjusted.left_indent_pt =
-                        target_left_pt + ((avail_w_pt - total_col_w).max(0.0) * 0.5);
-                }
+                let adjusted =
+                    solve_indented_figure_table(tbl, indent_left, self.content_width_dxa());
                 self.render_table(&adjusted, out);
             } else {
                 let mut blk_xml = String::new();
@@ -124,16 +131,20 @@ impl<'a> DocxBuilder<'a> {
         &mut self,
         caption: &[InlineNode],
         bookmark: Option<&str>,
-        indent_left: usize,
-        after_dxa: i64,
+        construct: &FigureConstruct,
         out: &mut String,
     ) {
+        out.push_str(r#"<w:p><w:pPr><w:pStyle w:val="Caption"/>"#);
+        if construct.caption_keep_with_next {
+            out.push_str("<w:keepNext/>");
+        }
         let _ = write!(
             out,
-            r#"<w:p><w:pPr><w:pStyle w:val="Caption"/><w:jc w:val="center"/><w:spacing w:before="20" w:after="{after_dxa}"/>"#,
+            r#"<w:jc w:val="center"/><w:spacing w:before="{}" w:after="{}"/>"#,
+            construct.caption_before_dxa, construct.caption_after_dxa,
         );
-        if indent_left > 0 {
-            let _ = write!(out, r#"<w:ind w:left="{indent_left}"/>"#);
+        if construct.eff_indent_dxa > 0 {
+            let _ = write!(out, r#"<w:ind w:left="{}"/>"#, construct.eff_indent_dxa);
         }
         out.push_str("</w:pPr>");
         let bm_id = bookmark.map(|bm| self.emit_bookmark_start(bm, out));

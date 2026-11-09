@@ -23,6 +23,7 @@
 
 pub mod color;
 pub mod compiler;
+pub mod construct;
 pub mod docx;
 pub mod extract;
 pub mod ir;

@@ -8,6 +8,15 @@ use crate::extract::ExtractorContext;
 use crate::extract::frame_tree::TreeNode;
 use crate::ir::{BlockNode, EnumItemIr, HAlignIr, ListItemIr, TermItemIr};
 
+/// Shared intermediate item extracted from `PdfMarkerTagKind::ListItemLabel` + `ListItemBody`
+/// before specializing into `ListItemIr` (bullet list) or `EnumItemIr` (numbered list).
+struct RawExtractedListItem {
+    marker_text: String,
+    blocks: Vec<BlockNode>,
+    first_y: Option<(usize, f64, f64)>,
+    last_y: Option<(usize, f64, f64)>,
+}
+
 impl<'a> ExtractorContext<'a> {
     /// `ListElem` -> `BlockNode::List`.
     pub(crate) fn extract_list_block(
@@ -139,81 +148,14 @@ impl<'a> ExtractorContext<'a> {
         children: &[TreeNode],
         list_level: usize,
     ) -> (Vec<ListItemIr>, f64) {
-        let mut items = Vec::new();
-        let mut current_marker = "•".to_string();
-        let mut max_label_w_pt = 0.0_f64;
-
-        let mut flat_markers = Vec::new();
-        Self::collect_pdf_marker_elements(children, &mut flat_markers);
-
-        let mut item_spans: Vec<(Option<(usize, f64, f64)>, Option<(usize, f64, f64)>)> =
-            Vec::new();
-
-        for (kind, marker_children) in flat_markers {
-            match kind {
-                PdfMarkerTagKind::ListItemLabel => {
-                    let (_, _, w_pt, _) = Self::estimate_nodes_bbox(&marker_children);
-                    max_label_w_pt = max_label_w_pt.max(w_pt);
-                    let txt = Self::nodes_to_plain_text(&marker_children)
-                        .trim()
-                        .to_string();
-                    if !txt.is_empty() {
-                        current_marker = txt;
-                    }
-                }
-                PdfMarkerTagKind::ListItemBody => {
-                    let first_y = Self::nodes_first_page_top_y(&marker_children);
-                    let last_y = Self::nodes_last_page_bottom_y(&marker_children);
-                    let blocks = self.extract_blocks_from_nodes(
-                        &marker_children,
-                        list_level + 1,
-                        HAlignIr::Left,
-                    );
-                    items.push(ListItemIr {
-                        marker: current_marker.clone(),
-                        blocks,
-                    });
-                    item_spans.push((first_y, last_y));
-                }
-                _ => {}
-            }
-        }
-
-        for i in 0..items.len().saturating_sub(1) {
-            if let (Some((pa, bottom_a, _xa)), Some((pb, top_b, _xb))) =
-                (item_spans[i].1, item_spans[i + 1].0)
-            {
-                if pa == pb && top_b >= bottom_a - 2.0 {
-                    let gap_pt = top_b - bottom_a;
-                    if gap_pt > 48.0 && gap_pt < 500.0 {
-                        Self::add_extra_space_after_to_last_block(
-                            &mut items[i].blocks,
-                            (gap_pt - 10.0).max(0.0),
-                        );
-                    }
-                } else if pb == pa + 1
-                    && list_level == 0
-                    && self.active_columns.0 <= 1
-                    && items[i].blocks.len() <= 2
-                    && bottom_a > 100.0
-                    && bottom_a < 660.0
-                    && matches!(items[i].blocks.last(), Some(BlockNode::Paragraph { .. }))
-                    && matches!(
-                        items[i + 1].blocks.first(),
-                        Some(BlockNode::Paragraph { .. })
-                    )
-                {
-                    let gap_pt = (760.0 - bottom_a) + (top_b - 71.0).max(0.0);
-                    if gap_pt > 60.0 && gap_pt < 500.0 {
-                        Self::add_extra_space_after_to_last_block(
-                            &mut items[i].blocks,
-                            (gap_pt - 15.0).max(0.0),
-                        );
-                    }
-                }
-            }
-        }
-
+        let (raw_items, max_label_w_pt) = self.extract_raw_list_items(children, list_level, "•");
+        let items = raw_items
+            .into_iter()
+            .map(|raw| ListItemIr {
+                marker: raw.marker_text,
+                blocks: raw.blocks,
+            })
+            .collect();
         (items, max_label_w_pt)
     }
 
@@ -223,17 +165,41 @@ impl<'a> ExtractorContext<'a> {
         children: &[TreeNode],
         list_level: usize,
     ) -> (Vec<EnumItemIr>, f64) {
-        let mut items = Vec::new();
-        let mut current_marker = "1.".to_string();
         let start_num = en.start.get(StyleChain::default()).unwrap_or(1);
         let mut counter = start_num;
+        let (raw_items, max_label_w_pt) = self.extract_raw_list_items(children, list_level, "1.");
+        let items = raw_items
+            .into_iter()
+            .map(|raw| {
+                let parsed_num = raw
+                    .marker_text
+                    .trim_matches(|c: char| !c.is_ascii_digit())
+                    .parse::<u64>()
+                    .ok()
+                    .or(Some(counter));
+                counter += 1;
+                EnumItemIr {
+                    number: parsed_num,
+                    marker_text: raw.marker_text,
+                    blocks: raw.blocks,
+                }
+            })
+            .collect();
+        (items, max_label_w_pt)
+    }
+
+    fn extract_raw_list_items(
+        &mut self,
+        children: &[TreeNode],
+        list_level: usize,
+        default_marker: &str,
+    ) -> (Vec<RawExtractedListItem>, f64) {
+        let mut items = Vec::new();
+        let mut current_marker = default_marker.to_string();
         let mut max_label_w_pt = 0.0_f64;
 
         let mut flat_markers = Vec::new();
         Self::collect_pdf_marker_elements(children, &mut flat_markers);
-
-        let mut item_spans: Vec<(Option<(usize, f64, f64)>, Option<(usize, f64, f64)>)> =
-            Vec::new();
 
         for (kind, marker_children) in flat_markers {
             match kind {
@@ -255,18 +221,12 @@ impl<'a> ExtractorContext<'a> {
                         list_level + 1,
                         HAlignIr::Left,
                     );
-                    let parsed_num = current_marker
-                        .trim_matches(|c: char| !c.is_ascii_digit())
-                        .parse::<u64>()
-                        .ok()
-                        .or(Some(counter));
-                    items.push(EnumItemIr {
-                        number: parsed_num,
+                    items.push(RawExtractedListItem {
                         marker_text: current_marker.clone(),
                         blocks,
+                        first_y,
+                        last_y,
                     });
-                    item_spans.push((first_y, last_y));
-                    counter += 1;
                 }
                 _ => {}
             }
@@ -274,7 +234,7 @@ impl<'a> ExtractorContext<'a> {
 
         for i in 0..items.len().saturating_sub(1) {
             if let (Some((pa, bottom_a, _xa)), Some((pb, top_b, _xb))) =
-                (item_spans[i].1, item_spans[i + 1].0)
+                (items[i].last_y, items[i + 1].first_y)
             {
                 if pa == pb && top_b >= bottom_a - 2.0 {
                     let gap_pt = top_b - bottom_a;

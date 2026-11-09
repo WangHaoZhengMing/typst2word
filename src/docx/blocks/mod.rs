@@ -1,7 +1,7 @@
-//! Block-level rendering: `BlockNode` -> WordprocessingML.
+//! Block-level rendering: `BlockNode` -> Word Construct (`crate::construct`) -> WordprocessingML.
 //!
-//! `render_block` only dispatches; each Typst object family lives in its own file
-//! (mirroring `crate::extract::elements`).
+//! `render_block` dispatches each [`BlockNode`] to its dedicated object renderer, which
+//! constructs a solved Word object via `crate::construct::*` before serializing XML.
 
 mod bibliography;
 mod cetz;
@@ -19,6 +19,8 @@ mod shape;
 mod table;
 mod unsupported;
 
+use crate::construct::WordBlockObjectKind;
+use crate::construct::paragraph::ParagraphConstruct;
 use crate::docx::builder::DocxBuilder;
 use crate::ir::BlockNode;
 
@@ -56,42 +58,37 @@ impl<'a> DocxBuilder<'a> {
                 style,
                 bookmark,
             } = block
-                && style.space_after_pt <= 8.0
-                && let Some(BlockNode::Paragraph {
-                    content: next_content,
-                    ..
-                }) = blocks.get(idx + 1)
             {
-                let cur_sz = Self::primary_font_size_pt(content);
-                let next_sz = Self::primary_font_size_pt(next_content);
-                if cur_sz <= 13.5 && next_sz >= 15.0 && next_sz >= cur_sz + 2.0 {
-                    let mut adj_style = style.clone();
-                    adj_style.space_after_pt =
-                        (adj_style.space_after_pt - (next_sz - cur_sz) * 1.2).max(0.0);
-                    self.render_paragraph(content, &adj_style, bookmark.as_deref(), out);
-                    continue;
-                } else if cur_sz <= 14.5 && next_sz <= 14.5 && (next_sz - cur_sz).abs() >= 0.5 {
-                    let max_sz = cur_sz.max(next_sz);
-                    let mut adj_style = style.clone();
-                    adj_style.space_after_pt =
-                        (1.20 * max_sz - 0.65 * cur_sz - 0.229 * (next_sz - cur_sz)).max(1.5);
-                    self.render_paragraph(content, &adj_style, bookmark.as_deref(), out);
-                    continue;
-                }
+                let adj_style = ParagraphConstruct::solve_adjacent_paragraph_style(
+                    content,
+                    style,
+                    blocks.get(idx + 1),
+                );
+                self.render_paragraph(content, &adj_style, bookmark.as_deref(), out);
+                continue;
             }
-            if matches!(block, BlockNode::Figure { .. })
-                && matches!(
+            if let BlockNode::Figure {
+                body,
+                caption,
+                caption_pos,
+                bookmark,
+                ..
+            } = block
+            {
+                let next_keep = matches!(
                     blocks.get(idx + 1),
                     Some(BlockNode::Paragraph { style, .. }) if style.keep_with_next
-                )
-            {
-                let mut fig_xml = String::new();
-                self.render_block(block, &mut fig_xml);
-                fig_xml = fig_xml.replace(
-                    r#"<w:pStyle w:val="Caption"/>"#,
-                    r#"<w:pStyle w:val="Caption"/><w:keepNext/>"#,
                 );
-                out.push_str(&fig_xml);
+                self.render_figure_with_layout_and_keep(
+                    body,
+                    caption.as_deref(),
+                    *caption_pos,
+                    bookmark.as_deref(),
+                    0,
+                    60,
+                    next_keep,
+                    out,
+                );
                 continue;
             }
             self.render_block(block, out);
@@ -108,27 +105,8 @@ impl<'a> DocxBuilder<'a> {
         }
     }
 
-    pub(crate) fn primary_font_size_pt(content: &[crate::ir::InlineNode]) -> f64 {
-        content
-            .iter()
-            .find_map(|inl| match inl {
-                crate::ir::InlineNode::Text(r) => r.font_size_pt,
-                crate::ir::InlineNode::EquationInline(eq) => eq.font_size_pt,
-                _ => None,
-            })
-            .unwrap_or(11.0)
-    }
-
     pub(crate) fn is_table_backed_block(block: &BlockNode) -> bool {
-        matches!(block, BlockNode::Table(_) | BlockNode::UnsupportedBlock(_))
-            || matches!(
-                block,
-                BlockNode::EquationBlock(eq) if eq.numbering_text.is_some()
-            )
-            || matches!(
-                block,
-                BlockNode::CodeBlock { fill, stroke, .. } if fill.is_some() || stroke.is_some()
-            )
+        WordBlockObjectKind::classify(block).is_table_backed()
     }
 
     pub(crate) fn render_block(&mut self, block: &BlockNode, out: &mut String) {

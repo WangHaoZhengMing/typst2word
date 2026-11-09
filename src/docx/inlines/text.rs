@@ -1,7 +1,8 @@
-//! Styled text runs -> `<w:r>` with `<w:rPr>`.
+//! Styled text runs -> `TextRunConstruct` -> `<w:r>` with `<w:rPr>`.
 
 use std::fmt::Write as _;
 
+use crate::construct::text_run::{RunFontSizeConstruct, TextRunConstruct};
 use crate::docx::builder::DocxBuilder;
 use crate::ir::{DashPatternIr, ScriptKindIr, TextRunIr};
 use crate::xml::escape_xml;
@@ -10,22 +11,11 @@ pub(crate) fn render_text_run_xml(run: &TextRunIr, out: &mut String) {
     if run.text.is_empty() {
         return;
     }
+    let construct = TextRunConstruct::solve(run);
     out.push_str("<w:r><w:rPr>");
-    if let Some(fam) = &run.font_family {
+    if let Some(fam) = construct.font_family {
         let esc = escape_xml(fam);
-        let has_ea_symbol =
-            run.font_class.is_cjk_font() && run.text_script.has_east_asian_symbol();
-        let hint_attr = if has_ea_symbol {
-            r#" w:hint="eastAsia""#
-        } else {
-            ""
-        };
-        // IMPORTANT: Always record and emit the exact `font_family` extracted from Typst
-        // (`w:ascii`, `w:hAnsi`, `w:eastAsia`, `w:cs`) without substituting fallback fonts
-        // (e.g., never replace `"PingFang SC"` with `"Arial"` / `"Heiti SC"`, or `"Songti SC"`
-        // with `"Times New Roman"`). Even if Microsoft Word on macOS cannot index system-reserved
-        // fonts like `PingFangUI.ttc`, that is a host application limitation; the generated `.docx`
-        // must faithfully preserve the document's true font metadata.
+        let hint_attr = construct.east_asia_hint.as_xml_attr();
         let _ = write!(
             out,
             r#"<w:rFonts w:ascii="{esc}" w:hAnsi="{esc}" w:eastAsia="{esc}" w:cs="{esc}"{hint_attr}/>"#
@@ -56,8 +46,7 @@ pub(crate) fn render_text_run_xml(run: &TextRunIr, out: &mut String) {
     if let Some(color) = &run.color {
         let _ = write!(out, r#"<w:color w:val="{color}"/>"#);
     }
-    if let Some(bdr) = &run.border {
-        let sz = ((bdr.thickness_pt * 8.0).round() as u32).clamp(2, 96);
+    if let (Some(bdr), Some(sz)) = (&run.border, construct.border_sz_eighths_pt) {
         let val = DocxBuilder::dash_to_w_border_val(&bdr.dash);
         let _ = write!(
             out,
@@ -71,26 +60,23 @@ pub(crate) fn render_text_run_xml(run: &TextRunIr, out: &mut String) {
             r#"<w:shd w:val="clear" w:color="auto" w:fill="{hl}"/>"#
         );
     }
-    if let Some(sz_pt) = run.font_size_pt {
-        let is_consolas_fallback = run.is_code
-            && matches!(
-                run.font_family.as_deref(),
-                Some("Consolas" | "DejaVu Sans Mono")
-            )
-            && (sz_pt - 8.8).abs() < 0.15;
-        let half_pts = if is_consolas_fallback {
-            // DejaVu Sans Mono (1233/2048 em at 8.8pt = 5.298pt/char) mapped to
-            // Consolas (1126/2048 em): 19 half-points (9.5pt = 5.223pt/char) + 1 dxa
-            // (+0.05pt/char) matches Typst's inline raw advance width to within 0.025pt/char.
-            out.push_str(r#"<w:spacing w:val="1"/>"#);
-            19
-        } else {
-            ((sz_pt * 2.0).round() as u32).clamp(4, 288)
-        };
-        let _ = write!(
-            out,
-            r#"<w:sz w:val="{half_pts}"/><w:szCs w:val="{half_pts}"/>"#
-        );
+    match construct.font_size {
+        RunFontSizeConstruct::Inherited => {}
+        RunFontSizeConstruct::StandardHalfPts(half_pts) => {
+            let _ = write!(
+                out,
+                r#"<w:sz w:val="{half_pts}"/><w:szCs w:val="{half_pts}"/>"#
+            );
+        }
+        RunFontSizeConstruct::ConsolasInlineCodeCompensated {
+            half_pts,
+            char_spacing_dxa,
+        } => {
+            let _ = write!(
+                out,
+                r#"<w:spacing w:val="{char_spacing_dxa}"/><w:sz w:val="{half_pts}"/><w:szCs w:val="{half_pts}"/>"#
+            );
+        }
     }
     match run.script {
         ScriptKindIr::Sub => out.push_str(r#"<w:vertAlign w:val="subscript"/>"#),
