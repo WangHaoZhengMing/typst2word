@@ -6,3 +6,8 @@ shape.md
 pdfver.png
 /examples
 *.pdf
+*.docx
+__pycache__/
+/test/tools/pdf_inspector
+/test/*/*.report.json
+/test/test_summary.json
