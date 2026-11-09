@@ -25,15 +25,10 @@ impl<'a> ExtractorContext<'a> {
             )
             || family_lower.contains("italic")
             || family_lower.contains("oblique");
-        let is_mono = state.is_code
-            || info.flags.contains(typst::text::FontFlags::MONOSPACE)
-            || family_lower.contains("mono")
-            || family_lower.contains("consolas")
-            || family_lower.contains("courier")
-            || family_lower.contains("dejavu sans mono");
+        let is_dejavu_mono = family_lower.contains("dejavu sans mono");
 
         let color = paint_to_hex(&item.fill).filter(|hex| hex != "000000" || state.is_code);
-        let mapped_family = if is_mono {
+        let mapped_family = if is_dejavu_mono {
             "Consolas".to_string()
         } else {
             Self::normalize_word_font_family(&info.family)
@@ -102,6 +97,18 @@ impl<'a> ExtractorContext<'a> {
         }
     }
 
+    pub(crate) fn strip_trailing_soft_hyphen_on_line_wrap(existing: &mut [InlineNode]) -> bool {
+        if let Some(InlineNode::Text(last_run)) = existing.last_mut()
+            && last_run.text.ends_with('\u{ad}')
+        {
+            while last_run.text.ends_with('\u{ad}') {
+                last_run.text.pop();
+            }
+            return true;
+        }
+        false
+    }
+
     pub(crate) fn should_insert_line_join_space(existing: &[InlineNode], next_text: &str) -> bool {
         let Some(InlineNode::Text(last_run)) = existing.last() else {
             return false;
@@ -113,6 +120,10 @@ impl<'a> ExtractorContext<'a> {
             return false;
         };
         if last_ch.is_whitespace() || next_ch.is_whitespace() {
+            return false;
+        }
+        // Do not insert spaces after hyphens/slashes when wrapping compound words across lines.
+        if matches!(last_ch, '\u{ad}' | '-' | '\u{2010}' | '\u{2013}' | '\u{2014}' | '/') {
             return false;
         }
         // Do not insert spaces between CJK characters when wrapping lines.

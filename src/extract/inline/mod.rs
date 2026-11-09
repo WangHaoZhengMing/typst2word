@@ -88,15 +88,20 @@ impl<'a> ExtractorContext<'a> {
                         if (y_pt - prev_y).abs() > text.size.to_pt() * 0.55
                             && state.script == ScriptKindIr::Normal
                         {
-                            let accumulated_txt = Self::inlines_to_plain_text(out);
-                            let trimmed_acc = accumulated_txt.trim_end();
-                            let is_explicit_br = !trimmed_acc.is_empty()
+                            let accumulated_txt = Self::inlines_last_line_plain_text(out);
+                            let acc_no_ws: String = accumulated_txt
+                                .chars()
+                                .filter(|c| !c.is_whitespace())
+                                .collect();
+                            let is_explicit_br = !acc_no_ws.is_empty()
                                 && self
                                     .linebreak_preceding_texts
                                     .iter()
-                                    .any(|sfx| trimmed_acc.ends_with(sfx));
+                                    .any(|sfx| acc_no_ws.ends_with(sfx));
                             if is_explicit_br {
                                 out.push(InlineNode::LineBreak);
+                            } else if Self::strip_trailing_soft_hyphen_on_line_wrap(out) {
+                                // Word wrapped with a Typst soft hyphen (`\u{ad}`); re-join without space.
                             } else if Self::should_insert_line_join_space(out, &text.text) {
                                 out.push(InlineNode::Text(TextRunIr {
                                     text: " ".to_string(),
@@ -171,7 +176,16 @@ impl<'a> ExtractorContext<'a> {
                         continue;
                     }
 
-                    self.extract_inlines_from_nodes(children, out, state, last_y, last_x_end);
+                    let mut inner_y = None;
+                    let mut inner_x = None;
+                    self.extract_inlines_from_nodes(
+                        children,
+                        out,
+                        state,
+                        &mut inner_y,
+                        &mut inner_x,
+                    );
+                    *last_x_end = Some(pos.x.to_pt() + group.frame.size().x.to_pt());
                 }
                 TreeNode::Element {
                     elem,
@@ -309,5 +323,14 @@ impl<'a> ExtractorContext<'a> {
             }
         }
         s
+    }
+
+    pub(crate) fn inlines_last_line_plain_text(inlines: &[InlineNode]) -> String {
+        let start_idx = inlines
+            .iter()
+            .rposition(|inl| matches!(inl, InlineNode::LineBreak))
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        Self::inlines_to_plain_text(&inlines[start_idx..])
     }
 }
