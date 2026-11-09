@@ -96,8 +96,9 @@ pub(crate) fn render_text_run_xml(run: &TextRunIr, out: &mut String) {
             && (sz_pt - 8.8).abs() < 0.15;
         let half_pts = if is_consolas_fallback {
             // DejaVu Sans Mono (1233/2048 em at 8.8pt = 5.298pt/char) mapped to
-            // Consolas (1126/2048 em): 19 half-points (9.5pt = 5.223pt/char) matches
-            // Typst's inline raw advance width to within 0.075pt/char.
+            // Consolas (1126/2048 em): 19 half-points (9.5pt = 5.223pt/char) + 1 dxa
+            // (+0.05pt/char) matches Typst's inline raw advance width to within 0.025pt/char.
+            out.push_str(r#"<w:spacing w:val="1"/>"#);
             19
         } else {
             ((sz_pt * 2.0).round() as u32).clamp(4, 288)

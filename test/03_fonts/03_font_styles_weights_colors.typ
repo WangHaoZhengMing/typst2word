@@ -7,6 +7,7 @@
   margin: (top: 2.54cm, bottom: 2.54cm, left: 3.18cm, right: 3.18cm),
 )
 #set text(font: "Times New Roman", size: 11pt, lang: "en", hyphenate: false)
+#show raw: set text(font: "Courier New", size: 9pt)
 #set par(
   justify: true,
   linebreaks: "simple",
@@ -15,9 +16,9 @@
   spacing: 1.2em,
 )
 
-= 1. Weight and Posture Variations (Regular, Bold, Italic, Bold-Italic)
+= 1. Weight and Posture Variations (Regular, Bold, Italic)
 
-This paragraph mixes regular roman text with *boldface emphasis (`<w:b/>`)*, _italicized terminology (`<w:i/>`)_, and *_combined bold-italic phrases (`<w:b/><w:i/>`)_* within a single continuous flow. Because bold glyphs in Times New Roman have slightly wider horizontal advances than regular glyphs, accurate run-level font switching is essential to preserve identical line break positions.
+This paragraph mixes regular roman text with *boldface emphasis (`<w:b/>`)*, _italicized terminology (`<w:i/>`)_, and *_combined bold-italic phrases (`<w:b/><w:i/>`)_* within a single continuous flow. Because boldface glyphs in Times New Roman have measurably wider horizontal advances than regular glyphs, accurate run-level font switching is essential to preserve identical line break positions.
 
 = 2. Text Decorations: Underline, Strikethrough, and Highlight
 
@@ -25,7 +26,7 @@ Document revision workflows rely on inline text decorations: #underline[underlin
 
 = 3. RGB Fill Colors and Semantic Inline Styling
 
-Inline color runs support arbitrary RGB hex values: #text(fill: rgb("#c0392b"))[*crimson alert text (`#C0392B`)*], #text(fill: rgb("#1f618d"))[*navy reference text (`#1F618D`)*], #text(fill: rgb("#1e8449"))[*emerald status text (`#1E8449`)*], and #text(fill: rgb("#7d3c98"))[*violet annotation text (`#7D3C98`)*] embedded seamlessly inside standard black prose.
+Inline color runs support arbitrary RGB hex values: #text(fill: rgb("#c0392b"))[*crimson alert text (`#C0392B`)*], #text(fill: rgb("#1f618d"))[*navy reference text (`#1F618D`)*], #text(fill: rgb("#1e8449"))[*emerald status text (`#1E8449`)*], and #text(fill: rgb("#7d3c98"))[*violet annotation labels (`#7D3C98`)*] embedded seamlessly inside standard black prose.
 
 = 4. Superscripts, Subscripts, and Small Capitals
 
