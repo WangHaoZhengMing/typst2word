@@ -182,27 +182,6 @@ pub(crate) fn build_cetz_path_wsp(drawable: &CetzPathDrawableIr) -> String {
 
 pub(crate) fn build_cetz_label_wsp(label: &CetzLabelDrawableIr, canvas_height_pt: f64) -> String {
     let sp_id = next_drawing_id();
-    // Give the label textbox generous width so Word never wraps single-line labels,
-    // while clamping height so `off_y + cy` never overflows `canvas_height_pt` (`<wp:extent cy>`).
-    let w_pt = (label.width_pt * 2.0 + 48.0).max(72.0);
-    let top_pt = (label.y_pt - 2.0).max(0.0);
-    let max_avail_h_pt = (canvas_height_pt - top_pt).max(11.0);
-    let h_pt = if label.rotation_deg.abs() > 0.01 {
-        (label.height_pt + 14.0).max(28.0)
-    } else {
-        (label.height_pt + 2.0).clamp(11.0, max_avail_h_pt)
-    };
-    let off_x = pt_to_emu((label.x_pt - 2.0).max(0.0));
-    let off_y = pt_to_emu(top_pt);
-    let cx = pt_to_emu(w_pt);
-    let cy = pt_to_emu(h_pt);
-
-    let mut xfrm_attrs = String::new();
-    if label.rotation_deg.abs() > 0.01 {
-        let rot = (label.rotation_deg * 60000.0).round() as i64;
-        xfrm_attrs.push_str(&format!(r#" rot="{rot}""#));
-    }
-
     let nobreak_content: Vec<ir::InlineNode> = label
         .content
         .iter()
@@ -215,7 +194,36 @@ pub(crate) fn build_cetz_label_wsp(label: &CetzLabelDrawableIr, canvas_height_pt
             other => other.clone(),
         })
         .collect();
-    let para_xml = render_inline_nodes_as_txbx_para(&nobreak_content, HAlignIr::Left);
+    let para_xml = render_inline_nodes_as_txbx_para(&nobreak_content, HAlignIr::Left, None);
+    let y_shift_pt = if para_xml.contains("<m:oMath") {
+        if para_xml.contains("<m:sSub") {
+            3.5
+        } else {
+            2.6
+        }
+    } else {
+        1.2
+    };
+    // Give the label textbox generous width so Word never wraps single-line labels,
+    // while clamping height so `off_y + cy` never overflows `canvas_height_pt` (`<wp:extent cy>`).
+    let w_pt = (label.width_pt * 2.0 + 48.0).max(72.0);
+    let top_pt = (label.y_pt - y_shift_pt).max(0.0);
+    let max_avail_h_pt = (canvas_height_pt - top_pt).max(11.0);
+    let h_pt = if label.rotation_deg.abs() > 0.01 {
+        (label.height_pt + 14.0).max(28.0)
+    } else {
+        (label.height_pt + 2.0).clamp(11.0, max_avail_h_pt)
+    };
+    let off_x = pt_to_emu((label.x_pt - 0.5).max(0.0));
+    let off_y = pt_to_emu(top_pt);
+    let cx = pt_to_emu(w_pt);
+    let cy = pt_to_emu(h_pt);
+
+    let mut xfrm_attrs = String::new();
+    if label.rotation_deg.abs() > 0.01 {
+        let rot = (label.rotation_deg * 60000.0).round() as i64;
+        xfrm_attrs.push_str(&format!(r#" rot="{rot}""#));
+    }
 
     format!(
         concat!(

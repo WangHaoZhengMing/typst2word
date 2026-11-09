@@ -99,11 +99,10 @@ impl<'a> TextRunConstruct<'a> {
         // 不改变原字体（Do not alter or substitute the original font family extracted from Typst）：
         // 原文档使用什么字体（例如 Typst 内置的 `"DejaVu Sans Mono"` 或 `"Libertinus Serif"`），
         // 生成的 `.docx` `<w:rFonts>` 就严格原样输出该字体名称，绝不在转换器代码中私自篡改为 `"Consolas"` 等替代字体。
-        // 但是需要注意：由于 `DejaVu Sans Mono` 是编译进 Typst 二进制的内置字体、并未安装在 macOS 系统字体目录中，
-        // 若宿主机器未安装该字体，macOS 版 Microsoft Word 在导出 PDF 时甚至会忽略 `word/fontTable.xml` 中的
-        // `<w:altName w:val="Consolas"/>` 回退声明，直接将其回退为比例字体 `Helvetica`，从而产生字宽与断行差异。
-        // 因此若需在未安装 `DejaVu Sans Mono` 的环境中严格对比代码块/行内代码排版，应在 `.typ` 源文件侧显式声明
-        // 系统已安装的等宽字体（如 `#show raw: set text(font: "Courier New", size: 9pt)`）。
+        // 但是需要注意：由于 `DejaVu Sans Mono` 是编译进 Typst 二进制的内置字体、默认未安装在 macOS 系统字体目录中，
+        // 当宿主机器未安装该字体时，Microsoft Word 会根据 `word/fontTable.xml` 中的 `<w:altName w:val="Consolas"/>`
+        // 回退使用系统等宽字体 `Consolas`（字宽 `0.5498em` 略窄于 `DejaVu Sans Mono` 的 `0.602em`），因此上面通过
+        // `half_pts: 19` (`9.5pt`) + `char_spacing_dxa: 1` (`+0.05pt/char`) 将单字符步进从 `4.84pt` 补偿至 `5.32pt`（与 Typst 的 `5.30pt` 误差仅 `0.025pt/char`）。
         Self {
             font_family: run
                 .font_family

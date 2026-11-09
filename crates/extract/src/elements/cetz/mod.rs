@@ -148,7 +148,7 @@ impl<'a> ExtractorContext<'a> {
                 .fold(10.0_f64, f64::max);
             let max_py = paths
                 .iter()
-                .map(|p| p.y_pt + p.height_pt)
+                .map(|p| p.y_pt + p.height_pt + 1.0)
                 .fold(10.0_f64, f64::max);
             let max_lx = labels
                 .iter()

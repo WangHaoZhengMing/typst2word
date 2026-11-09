@@ -9,14 +9,18 @@ pub(crate) fn render_textbox_blocks(blocks: &[BlockNode]) -> String {
     for block in blocks {
         match block {
             BlockNode::Paragraph { content, style, .. } => {
-                out.push_str(&render_inline_nodes_as_txbx_para(content, style.align));
+                out.push_str(&render_inline_nodes_as_txbx_para(
+                    content,
+                    style.align,
+                    style.line_spacing_pt,
+                ));
             }
             BlockNode::Heading { content, align, .. } | BlockNode::Title { content, align } => {
-                out.push_str(&render_inline_nodes_as_txbx_para(content, *align));
+                out.push_str(&render_inline_nodes_as_txbx_para(content, *align, None));
             }
             BlockNode::EquationBlock(eq) => {
                 out.push_str(
-                    r#"<w:p><w:pPr><w:jc w:val="center"/><w:spacing w:before="0" w:after="0"/></w:pPr>"#,
+                    r#"<w:p><w:pPr><w:jc w:val="center"/><w:spacing w:before="110" w:after="0"/></w:pPr>"#,
                 );
                 render_equation_omml(eq, &mut out);
                 out.push_str("</w:p>");
@@ -41,6 +45,7 @@ pub(crate) fn render_textbox_blocks(blocks: &[BlockNode]) -> String {
                 out.push_str(&render_inline_nodes_as_txbx_para(
                     &[InlineNode::Text(run)],
                     HAlignIr::Left,
+                    None,
                 ));
             }
             _ => {}
@@ -52,14 +57,18 @@ pub(crate) fn render_textbox_blocks(blocks: &[BlockNode]) -> String {
     out
 }
 
-pub(crate) fn render_inline_nodes_as_txbx_para(inlines: &[InlineNode], align: HAlignIr) -> String {
+pub(crate) fn render_inline_nodes_as_txbx_para(
+    inlines: &[InlineNode],
+    align: HAlignIr,
+    line_spacing_pt: Option<f64>,
+) -> String {
     let jc = match align {
         HAlignIr::Left => "left",
         HAlignIr::Center => "center",
         HAlignIr::Right => "right",
         HAlignIr::Justify => "both",
     };
-    let line_dxa = word_construct::paragraph::compute_line_spacing_dxa(inlines, None);
+    let line_dxa = word_construct::paragraph::compute_line_spacing_dxa(inlines, line_spacing_pt);
     let mut runs_xml = String::new();
     render_inline_nodes_to_wml(inlines, &mut runs_xml);
     format!(

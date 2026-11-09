@@ -16,8 +16,8 @@ impl CetzCanvasConstruct {
     pub fn solve(canvas: &CetzCanvasIr) -> Self {
         Self {
             align: canvas.align,
-            before_dxa: 20,
-            after_dxa: 0,
+            before_dxa: 35,
+            after_dxa: 295,
             line_dxa: 240,
             mark_sz_half_pt: 4,
         }

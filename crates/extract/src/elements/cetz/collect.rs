@@ -129,11 +129,15 @@ impl<'a> ExtractorContext<'a> {
                             .any(|n| matches!(n, InlineNode::HorizontalSpace { .. }));
                         if !inlines.is_empty() && !has_horiz_jump {
                             let gsize = group.frame.size();
+                            let cap_top_adj =
+                                Self::estimate_label_cap_top_offset_pt(children, Point::zero())
+                                    .unwrap_or(0.0)
+                                    .min(0.0);
                             labels.push(CetzLabelDrawableIr {
                                 x_pt: abs_pos.x.to_pt(),
-                                y_pt: abs_pos.y.to_pt(),
+                                y_pt: (abs_pos.y.to_pt() + cap_top_adj).max(0.0),
                                 width_pt: gsize.x.to_pt().max(18.0),
-                                height_pt: gsize.y.to_pt().max(14.0),
+                                height_pt: (gsize.y.to_pt() - cap_top_adj).max(14.0),
                                 rotation_deg,
                                 content: inlines,
                             });
@@ -205,6 +209,46 @@ impl<'a> ExtractorContext<'a> {
                             content: vec![InlineNode::Text(run)],
                         });
                     }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn estimate_label_cap_top_offset_pt(nodes: &[TreeNode], offset: Point) -> Option<f64> {
+        let mut best: Option<(f64, f64)> = None;
+        Self::find_main_baseline_text(nodes, offset, &mut best);
+        best.map(|(sz_pt, base_y_pt)| base_y_pt - 0.69 * sz_pt)
+    }
+
+    fn find_main_baseline_text(
+        nodes: &[TreeNode],
+        offset: Point,
+        best: &mut Option<(f64, f64)>,
+    ) {
+        for node in nodes {
+            match node {
+                TreeNode::Text { text, pos } => {
+                    if text.text.trim().is_empty() {
+                        continue;
+                    }
+                    let sz_pt = text.size.to_pt();
+                    let base_y_pt = (offset + *pos).y.to_pt();
+                    if best.is_none_or(|(best_sz, _)| sz_pt > best_sz + 0.5) {
+                        *best = Some((sz_pt, base_y_pt));
+                    }
+                }
+                TreeNode::Group {
+                    group,
+                    pos,
+                    children,
+                } => {
+                    let next_off =
+                        offset + *pos + Point::new(group.transform.tx, group.transform.ty);
+                    Self::find_main_baseline_text(children, next_off, best);
+                }
+                TreeNode::Element { pos, children, .. } => {
+                    Self::find_main_baseline_text(children, offset + *pos, best);
                 }
                 _ => {}
             }
