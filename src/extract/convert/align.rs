@@ -55,6 +55,39 @@ impl<'a> ExtractorContext<'a> {
         };
 
         let span_width = (right_bound - left_bound).max(100.0);
+
+        // Multi-line per-line edge analysis: accurately distinguishes Right and Center
+        // alignment from Left/Justified even when the first line fills >85% of the column width.
+        let mut line_spans: Vec<(f64, f64, f64)> = Vec::new();
+        Self::collect_line_x_spans(nodes, typst::layout::Point::zero(), &mut line_spans);
+        line_spans.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        if line_spans.len() >= 2 {
+            let r0 = line_spans[0].2;
+            let l0 = line_spans[0].1;
+            let all_centered = line_spans.iter().all(|(_, lx, rx)| {
+                let lg = *lx - left_bound;
+                let rg = right_bound - *rx;
+                lg >= -2.0 && rg >= -2.0 && (lg - rg).abs() <= 4.0
+            }) && line_spans
+                .iter()
+                .any(|(_, lx, _)| *lx - left_bound > 8.0);
+            if all_centered {
+                return Some(HAlignIr::Center);
+            }
+
+            let all_right_flushed = (right_bound - r0).abs() <= 36.0
+                && line_spans.iter().all(|(_, _, rx)| (*rx - r0).abs() <= 2.5);
+            let ragged_left = line_spans
+                .last()
+                .is_some_and(|(_, lx, _)| *lx - left_bound > 10.0 && (*lx - l0).abs() > 2.5)
+                && (line_spans.len() < 3
+                    || (line_spans.last().unwrap().1 - line_spans[1].1).abs() > 2.5)
+                && (line_spans.len() > 2 || l0 - left_bound > 1.5);
+            if all_right_flushed && ragged_left {
+                return Some(HAlignIr::Right);
+            }
+        }
+
         let max_x = min_x + width;
         let left_gap = min_x - left_bound;
         let right_gap = right_bound - max_x;

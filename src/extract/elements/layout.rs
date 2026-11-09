@@ -41,7 +41,9 @@ impl<'a> ExtractorContext<'a> {
             for b in blocks {
                 match b {
                     BlockNode::Paragraph { style, .. } => {
-                        if style.left_indent_pt < group_left_offset {
+                        if matches!(style.align, HAlignIr::Left | HAlignIr::Justify)
+                            && style.left_indent_pt < group_left_offset
+                        {
                             style.left_indent_pt = group_left_offset;
                         }
                     }

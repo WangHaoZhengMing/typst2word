@@ -1,13 +1,13 @@
 //! `par` -> `BlockNode::Paragraph`.
 
-use typst::foundations::Packed;
+use typst::foundations::{Packed, Smart};
 use typst::introspection::Location;
 use typst::layout::Point;
-use typst::model::ParElem;
+use typst::model::{Linebreaks, ParElem};
 
 use crate::extract::ExtractorContext;
 use crate::extract::frame_tree::TreeNode;
-use crate::ir::{BlockNode, HAlignIr, InlineNode, ParagraphStyleIr};
+use crate::ir::{BlockNode, HAlignIr, InlineNode, LineBreakPolicy, ParagraphStyleIr};
 
 impl<'a> ExtractorContext<'a> {
     /// `ParElem` -> `BlockNode::Paragraph` (or a CeTZ canvas if the paragraph only wraps one).
@@ -54,11 +54,14 @@ impl<'a> ExtractorContext<'a> {
             .iter()
             .find_map(|inl| match inl {
                 InlineNode::Text(r) => r.font_size_pt,
+                InlineNode::EquationInline(eq) => eq.font_size_pt,
                 _ => None,
             })
             .unwrap_or(default_font_pt)
             .max(6.0);
 
+        let par_em_pt = base_font_pt.min(default_font_pt);
+        let line_leading_pt = Self::resolve_length_pt(par.leading.get(chain), par_em_pt);
         let leading_pt = Self::resolve_length_pt(par.leading.get(chain), default_font_pt);
         let spacing_pt = Self::resolve_length_pt(par.spacing.get(chain), default_font_pt);
         let plain_txt = Self::inlines_to_plain_text(&content);
@@ -75,16 +78,27 @@ impl<'a> ExtractorContext<'a> {
         // large display-sized single-line paragraphs where `w:line` is clamped to 1.0x).
         // When a paragraph is terminated by an explicit `linebreak()` (`\`) before a block/list,
         // Typst only applies `par.leading` (no `par.spacing`), so `space_after_pt` is `0.0`.
-        let space_after_pt = if ends_with_explicit_linebreak {
-            0.0
-        } else if base_font_pt > default_font_pt * 1.4 {
-            spacing_pt + 2.0
-        } else {
-            (spacing_pt - leading_pt).max(1.5)
-        };
+        let space_after_pt =
+            word_construct::WordParagraphConstruct::solve_initial_space_after_pt(
+                ends_with_explicit_linebreak,
+                base_font_pt,
+                default_font_pt,
+                spacing_pt,
+                leading_pt,
+            );
 
+        let fl_indent_cfg = par.first_line_indent.get(chain);
         let mut first_line_indent_pt =
-            Self::resolve_length_pt(par.first_line_indent.get(chain).amount(), base_font_pt);
+            Self::resolve_length_pt(fl_indent_cfg.amount(), base_font_pt);
+        if first_line_indent_pt > 0.5
+            && !fl_indent_cfg.all()
+            && !matches!(blocks.last(), Some(BlockNode::Paragraph { .. }))
+        {
+            let (vis_first, _) = Self::infer_paragraph_line_indents(children);
+            if vis_first <= 2.0 {
+                first_line_indent_pt = 0.0;
+            }
+        }
         let mut hanging_indent_pt =
             Self::resolve_length_pt(par.hanging_indent.get(chain), base_font_pt);
 
@@ -101,6 +115,7 @@ impl<'a> ExtractorContext<'a> {
         };
 
         let mut left_indent_pt = 0.0;
+        let mut right_indent_pt = 0.0;
         if matches!(align, HAlignIr::Left | HAlignIr::Justify)
             && first_line_indent_pt < 0.5
             && hanging_indent_pt < 0.5
@@ -118,15 +133,32 @@ impl<'a> ExtractorContext<'a> {
             {
                 left_indent_pt = vis_left;
             }
+            if list_level == 0 && align == HAlignIr::Justify && left_indent_pt > 2.0 {
+                let (_, _, width, _) = Self::estimate_nodes_bbox(children);
+                let col_w = self.current_column_width_pt();
+                let r_gap = col_w - left_indent_pt - width;
+                if (2.0..=48.0).contains(&r_gap) {
+                    right_indent_pt = r_gap;
+                }
+            }
         }
+
+        let line_break_policy = match par.linebreaks.get(chain) {
+            Smart::Custom(Linebreaks::Optimized) => LineBreakPolicy::typst_knuth_plass(),
+            Smart::Custom(Linebreaks::Simple) => LineBreakPolicy::word_first_fit(),
+            Smart::Auto if par.justify.get(chain) => LineBreakPolicy::typst_knuth_plass(),
+            Smart::Auto => LineBreakPolicy::word_first_fit(),
+        };
 
         let style = ParagraphStyleIr {
             align,
             first_line_indent_pt,
             hanging_indent_pt,
             left_indent_pt,
+            right_indent_pt,
             space_after_pt,
-            line_spacing_pt: Some(leading_pt),
+            line_spacing_pt: Some(line_leading_pt),
+            line_break_policy,
             ..Default::default()
         };
 
@@ -149,6 +181,8 @@ impl<'a> ExtractorContext<'a> {
         let x2 = line_starts[1].1;
         if x1 - x2 > 3.0 && x1 - x2 < 72.0 {
             (x1 - x2, 0.0)
+        } else if x2 - x1 > 3.0 && x2 - x1 < 72.0 {
+            (0.0, x2 - x1)
         } else {
             (0.0, 0.0)
         }
@@ -184,6 +218,46 @@ impl<'a> ExtractorContext<'a> {
                         continue;
                     }
                     Self::collect_line_left_edges(children, offset, lines);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    pub(crate) fn collect_line_x_spans(
+        nodes: &[TreeNode],
+        offset: Point,
+        lines: &mut Vec<(f64, f64, f64)>,
+    ) {
+        for node in nodes {
+            match node {
+                TreeNode::Text { text, pos } => {
+                    if text.text.trim().is_empty() {
+                        continue;
+                    }
+                    let x = (offset.x + pos.x).to_pt();
+                    let x_end = x + text.width().to_pt();
+                    let y = (offset.y + pos.y).to_pt();
+                    if let Some(existing) =
+                        lines.iter_mut().find(|(ly, _, _)| (*ly - y).abs() < 3.0)
+                    {
+                        existing.1 = existing.1.min(x);
+                        existing.2 = existing.2.max(x_end);
+                    } else {
+                        lines.push((y, x, x_end));
+                    }
+                }
+                TreeNode::Group { pos, children, .. } => {
+                    Self::collect_line_x_spans(children, offset + *pos, lines);
+                }
+                TreeNode::Element { elem, children, .. } => {
+                    if elem.is::<typst::math::EquationElem>()
+                        || elem.is::<typst::text::SubElem>()
+                        || elem.is::<typst::text::SuperElem>()
+                    {
+                        continue;
+                    }
+                    Self::collect_line_x_spans(children, offset, lines);
                 }
                 _ => {}
             }
