@@ -7,6 +7,7 @@ use ir::{BlockNode, DocumentIr, HAlignIr, ImageFormatIr, ImageIr};
 use ir::units::pt_to_dxa;
 
 pub(crate) struct MediaAsset {
+    pub(crate) part: String,
     pub(crate) rel_id: String,
     pub(crate) filename: String,
     #[allow(dead_code)]
@@ -15,6 +16,7 @@ pub(crate) struct MediaAsset {
 }
 
 pub(crate) struct HyperlinkRel {
+    pub(crate) part: String,
     pub(crate) rel_id: String,
     pub(crate) url: String,
 }
@@ -25,6 +27,7 @@ pub(crate) struct FootnoteRecord {
 }
 
 pub(crate) struct DocxWriter<'a> {
+    pub(crate) active_part: String,
     pub(crate) ir: &'a DocumentIr,
     pub(crate) next_rel_id: usize,
     pub(crate) next_drawing_id: u32,
@@ -44,6 +47,7 @@ impl<'a> DocxWriter<'a> {
     pub(crate) fn new(ir: &'a DocumentIr) -> Self {
         Self {
             ir,
+            active_part: "document".into(),
             // Reserve rId1..rId5 for styles, numbering, settings, footnotes, fontTable
             next_rel_id: 6,
             next_drawing_id: 1,
@@ -92,11 +96,12 @@ impl<'a> DocxWriter<'a> {
     }
 
     pub(crate) fn register_hyperlink(&mut self, url: &str) -> String {
-        if let Some(existing) = self.hyperlinks.iter().find(|h| h.url == url) {
+        if let Some(existing) = self.hyperlinks.iter().find(|h| h.url == url && h.part == self.active_part) {
             return existing.rel_id.clone();
         }
         let rel_id = self.alloc_rel_id();
         self.hyperlinks.push(HyperlinkRel {
+            part: self.active_part.clone(),
             rel_id: rel_id.clone(),
             url: url.to_string(),
         });
@@ -108,6 +113,7 @@ impl<'a> DocxWriter<'a> {
         let idx = self.media_assets.len() + 1;
         let filename = format!("image{}.{}", idx, img.format.extension());
         self.media_assets.push(MediaAsset {
+            part: self.active_part.clone(),
             rel_id: rel_id.clone(),
             filename,
             format: img.format,

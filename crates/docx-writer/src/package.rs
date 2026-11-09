@@ -21,22 +21,25 @@ impl<'a> DocxWriter<'a> {
 
         // Render main document body XML first so all media assets, hyperlinks, and footnotes are registered.
         let document_xml = self.render_document_xml();
+        self.active_part = "header1".into();
         let header_xml = if self.header_rel_id.is_some() {
             Some(self.render_header_or_footer_xml(&self.ir.page_setup.header.clone(), "hdr"))
         } else {
             None
         };
+        self.active_part = "footer1".into();
         let footer_xml = if self.footer_rel_id.is_some() {
             Some(self.render_header_or_footer_xml(&self.ir.page_setup.footer.clone(), "ftr"))
         } else {
             None
         };
+        self.active_part = "footnotes".into();
         let footnotes_xml = self.render_footnotes_xml();
         let font_table_xml = Self::render_font_table_xml();
         let styles_xml = self.render_styles_xml();
         let numbering_xml = self.render_numbering_xml();
         let settings_xml = self.render_settings_xml();
-        let doc_rels_xml = self.render_document_rels_xml();
+        let doc_rels_xml = self.render_part_rels_xml("document");
         let root_rels_xml = Self::render_root_rels_xml();
         let content_types_xml = self.render_content_types_xml();
         let core_props_xml = self.render_core_props_xml();
@@ -70,6 +73,11 @@ impl<'a> DocxWriter<'a> {
         }
         if let Some(fxml) = &footer_xml {
             Self::zip_write_str(&mut zip, "word/footer1.xml", fxml, options)?;
+        }
+
+        for part in ["header1", "footer1", "footnotes"] {
+            let rels = self.render_part_rels_xml(part);
+            Self::zip_write_str(&mut zip, &format!("word/_rels/{part}.xml.rels"), &rels, options)?;
         }
 
         for asset in &self.media_assets {
@@ -144,12 +152,12 @@ impl<'a> DocxWriter<'a> {
             .to_string()
     }
 
-    pub(crate) fn render_document_rels_xml(&self) -> String {
+    pub(crate) fn render_part_rels_xml(&self, part: &str) -> String {
         let mut out = String::new();
+        out.push_str(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">"#);
+        if part == "document" {
         out.push_str(
-            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+            r#"  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
   <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/>
   <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" Target="settings.xml"/>
   <Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footnotes" Target="footnotes.xml"/>
@@ -168,7 +176,8 @@ impl<'a> DocxWriter<'a> {
                 r#"<Relationship Id="{fid}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/>"#
             );
         }
-        for hl in &self.hyperlinks {
+        }
+        for hl in self.hyperlinks.iter().filter(|h| h.part == part) {
             let _ = write!(
                 out,
                 r#"<Relationship Id="{}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="{}" TargetMode="External"/>"#,
@@ -176,7 +185,7 @@ impl<'a> DocxWriter<'a> {
                 escape_xml(&hl.url)
             );
         }
-        for asset in &self.media_assets {
+        for asset in self.media_assets.iter().filter(|a| a.part == part) {
             let _ = write!(
                 out,
                 r#"<Relationship Id="{}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/{}"/>"#,
