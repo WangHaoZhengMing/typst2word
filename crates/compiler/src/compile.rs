@@ -103,6 +103,7 @@ fn should_locate_for_extraction(elem: &Content) -> bool {
         || elem.is::<MoveElem>()
         || elem.is::<RepeatElem>()
         || elem.is::<HideElem>()
+        || elem.is::<typst::text::LinebreakElem>()
         || elem.is::<ColbreakElem>()
         || elem.is::<ColumnsElem>()
 }

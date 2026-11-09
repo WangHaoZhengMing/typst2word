@@ -423,3 +423,23 @@ fn test_read_only_pdf_anchors_and_word_construct_policies() {
     assert!(doc_xml.contains("<w:keepLines/>"));
 }
 
+
+
+#[test]
+fn explicit_breaks_use_element_identity_not_repeated_text() {
+    use typst2word::ir::{InlineNode, ParagraphPdfMetricsIr};
+    let ir = typst2word::compile_str_to_ir("Same ending\\\n\nSame ending", None).unwrap();
+    let paragraphs: Vec<_> = ir.blocks.iter().filter_map(|b| {
+        if let BlockNode::Paragraph { content, style, .. } = b { Some((content, style)) } else { None }
+    }).collect();
+    assert_eq!(paragraphs.len(), 2);
+    assert!(matches!(paragraphs[0].0.last(), Some(InlineNode::LineBreak)));
+    assert!(!paragraphs[1].0.iter().any(|i| matches!(i, InlineNode::LineBreak)));
+    assert!(matches!(paragraphs[1].1.pdf_metrics, ParagraphPdfMetricsIr::Measured { ends_with_explicit_linebreak: false, .. }));
+    let ir = typst2word::compile_str_to_ir("#for i in range(2) [Same#linebreak()next#linebreak()#linebreak()last\n\n]", None).unwrap();
+    for b in &ir.blocks {
+        if let BlockNode::Paragraph { content, .. } = b {
+            assert_eq!(content.iter().filter(|i| matches!(i, InlineNode::LineBreak)).count(), 3);
+        }
+    }
+}

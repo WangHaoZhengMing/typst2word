@@ -163,10 +163,6 @@ impl<'a> ExtractorContext<'a> {
 
                     let (mut inset, halign, valign, is_header_cell, cell_blocks) =
                         if let Some((cell_elem, cnodes, _)) = cell_nodes_map.get(&(x, y)) {
-                            Self::collect_linebreak_preceding_texts(
-                                &resolved_cell.body,
-                                &mut self.linebreak_preceding_texts,
-                            );
                             let (mut ins, ha, va, ih) =
                                 Self::extract_cell_props(cell_elem, is_header, is_semantic_table);
                             let prev_inset = self.container_inset_pt;

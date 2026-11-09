@@ -70,13 +70,7 @@ impl<'a> ExtractorContext<'a> {
         let line_leading_pt = Self::resolve_length_pt(par.leading.get(chain), par_em_pt);
         let leading_pt = Self::resolve_length_pt(par.leading.get(chain), default_font_pt);
         let spacing_pt = Self::resolve_length_pt(par.spacing.get(chain), default_font_pt);
-        let plain_txt = Self::inlines_to_plain_text(&content);
-        let plain_no_ws: String = plain_txt.chars().filter(|c| !c.is_whitespace()).collect();
-        let ends_with_explicit_linebreak = !plain_no_ws.is_empty()
-            && self
-                .linebreak_preceding_texts
-                .iter()
-                .any(|sfx| plain_no_ws.ends_with(sfx));
+        let ends_with_explicit_linebreak = matches!(content.last(), Some(InlineNode::LineBreak));
 
         let fl_indent_cfg = par.first_line_indent.get(chain);
         let mut first_line_indent_pt =

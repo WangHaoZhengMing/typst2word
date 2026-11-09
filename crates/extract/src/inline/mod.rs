@@ -87,19 +87,7 @@ impl<'a> ExtractorContext<'a> {
                         if (y_pt - prev_y).abs() > text.size.to_pt() * 0.55
                             && state.script == ScriptKindIr::Normal
                         {
-                            let accumulated_txt = Self::inlines_last_line_plain_text(out);
-                            let acc_no_ws: String = accumulated_txt
-                                .chars()
-                                .filter(|c| !c.is_whitespace())
-                                .collect();
-                            let is_explicit_br = !acc_no_ws.is_empty()
-                                && self
-                                    .linebreak_preceding_texts
-                                    .iter()
-                                    .any(|sfx| acc_no_ws.ends_with(sfx));
-                            if is_explicit_br {
-                                out.push(InlineNode::LineBreak);
-                            } else if Self::strip_trailing_soft_hyphen_on_line_wrap(out) {
+                            if Self::strip_trailing_soft_hyphen_on_line_wrap(out) {
                                 // Word wrapped with a Typst soft hyphen (`\u{ad}`); re-join without space.
                             } else if Self::should_insert_line_join_space(out, &text.text) {
                                 out.push(InlineNode::Text(TextRunIr {
@@ -222,6 +210,13 @@ impl<'a> ExtractorContext<'a> {
             return;
         }
 
+        if elem.is::<typst::text::LinebreakElem>() {
+            out.push(InlineNode::LineBreak);
+            *last_y = None;
+            *last_x_end = None;
+            return;
+        }
+
         // 1. Inline formatting & code tags (`style.rs`).
         if self.try_extract_inline_style_element(elem, children, out, state, last_y, last_x_end) {
             return;
@@ -324,12 +319,4 @@ impl<'a> ExtractorContext<'a> {
         s
     }
 
-    pub(crate) fn inlines_last_line_plain_text(inlines: &[InlineNode]) -> String {
-        let start_idx = inlines
-            .iter()
-            .rposition(|inl| matches!(inl, InlineNode::LineBreak))
-            .map(|i| i + 1)
-            .unwrap_or(0);
-        Self::inlines_to_plain_text(&inlines[start_idx..])
-    }
 }

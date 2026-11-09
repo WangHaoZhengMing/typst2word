@@ -67,8 +67,6 @@ pub(crate) struct ExtractorContext<'a> {
     pub(crate) next_equation_number: usize,
     /// Set of locations already emitted as unsupported so we don't duplicate badges.
     pub(crate) seen_unsupported_locs: HashSet<Location>,
-    /// Trailing text snippets immediately preceding an explicit `LinebreakElem` (`\`) in source.
-    pub(crate) linebreak_preceding_texts: HashSet<String>,
     /// Left X coordinate (in pt) of the main page content area.
     pub(crate) content_left_pt: f64,
     /// Right X coordinate (in pt) of the main page content area.
@@ -91,11 +89,6 @@ impl<'a> ExtractorContext<'a> {
     pub(crate) fn new(compiled: &'a CompiledTypstDocument, world: &'a TypstWorld) -> Self {
         let mut doc_styles = Styles::new();
         Self::collect_document_styles(&compiled.evaluated_content, &mut doc_styles);
-        let mut linebreak_preceding_texts = HashSet::new();
-        Self::collect_linebreak_preceding_texts(
-            &compiled.evaluated_content,
-            &mut linebreak_preceding_texts,
-        );
         Self {
             compiled,
             world,
@@ -109,7 +102,6 @@ impl<'a> ExtractorContext<'a> {
             next_footnote_id: 1,
             next_equation_number: 1,
             seen_unsupported_locs: HashSet::new(),
-            linebreak_preceding_texts,
             content_left_pt: 70.866,
             content_right_pt: 595.276 - 70.866,
             page_columns: 1,
