@@ -1,9 +1,14 @@
+[workspace]
+members = [".", "crates/word-construct"]
+default-members = ["."]
+
 [package]
 name = "typst2word"
 version = "0.2.0"
 edition = "2024"
 
 [dependencies]
+word-construct = { path = "crates/word-construct" }
 chrono = "0.4.44"
 comemo = "0.5.1"
 dirs = "7.0.0"
