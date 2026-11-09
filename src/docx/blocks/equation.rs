@@ -3,7 +3,7 @@
 use std::fmt::Write as _;
 
 use crate::docx::builder::DocxBuilder;
-use crate::docx::math::render_math_omml;
+use crate::docx::math::render_equation_omml;
 use crate::ir::EquationIr;
 use crate::units::pt_to_dxa;
 use crate::xml::escape_xml;
@@ -69,7 +69,7 @@ impl<'a> DocxBuilder<'a> {
                 .as_ref()
                 .map(|bm| self.emit_bookmark_start(bm, out));
             out.push_str(r#"<m:oMathPara><m:oMathParaPr><m:jc m:val="center"/></m:oMathParaPr>"#);
-            render_math_omml(&eq.body, out);
+            render_equation_omml(eq, out);
             out.push_str("</m:oMathPara>");
             if let Some(id) = bm_id {
                 Self::emit_bookmark_end(id, out);
@@ -105,7 +105,7 @@ impl<'a> DocxBuilder<'a> {
             .as_ref()
             .map(|bm| self.emit_bookmark_start(bm, out));
         out.push_str(r#"<m:oMathPara><m:oMathParaPr><m:jc m:val="center"/></m:oMathParaPr>"#);
-        render_math_omml(&eq.body, out);
+        render_equation_omml(eq, out);
         out.push_str("</m:oMathPara>");
         if let Some(id) = bm_id {
             Self::emit_bookmark_end(id, out);

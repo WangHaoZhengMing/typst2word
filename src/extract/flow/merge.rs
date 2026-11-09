@@ -17,8 +17,8 @@ impl<'a> ExtractorContext<'a> {
         while i < blocks.len() {
             let can_merge = match (&blocks[i - 1], &blocks[i]) {
                 (BlockNode::Table(a), BlockNode::Table(b)) => {
-                    a.is_styled_container
-                        && b.is_styled_container
+                    a.is_styled_container()
+                        && b.is_styled_container()
                         && a.rows.len() == 1
                         && b.rows.len() == 1
                         && a.rows[0].cells.len() == 1

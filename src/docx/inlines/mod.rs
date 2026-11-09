@@ -31,7 +31,7 @@ impl<'a> DocxBuilder<'a> {
                 self.render_text_run(run, out);
             }
             InlineNode::EquationInline(eq) => {
-                crate::docx::math::render_math_omml(&eq.body, out);
+                crate::docx::math::render_equation_omml(eq, out);
             }
             InlineNode::ShapeInline(shape) => {
                 let run_xml = shape_to_drawingml_run(shape);
@@ -44,12 +44,8 @@ impl<'a> DocxBuilder<'a> {
             InlineNode::ImageInline(img) => {
                 self.render_image_run(img, out);
             }
-            InlineNode::Link {
-                url,
-                anchor,
-                content,
-            } => {
-                self.render_link(url.as_deref(), anchor.as_deref(), content, out);
+            InlineNode::Link { target, content } => {
+                self.render_link(target.as_ref(), content, out);
             }
             InlineNode::Ref { target, content } => {
                 self.render_ref(target, content, out);

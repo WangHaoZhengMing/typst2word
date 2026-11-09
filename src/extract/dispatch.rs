@@ -23,7 +23,7 @@ use typst::visualize::ImageElem;
 use crate::compiler::compile::is_cetz_span;
 use crate::extract::ExtractorContext;
 use crate::extract::frame_tree::TreeNode;
-use crate::ir::{BlockNode, HAlignIr, ShapeKindIr};
+use crate::ir::{BlockNode, HAlignIr, ShapeKindIr, TableKindIr};
 
 impl<'a> ExtractorContext<'a> {
     pub(crate) fn extract_block_from_node(
@@ -239,7 +239,7 @@ impl<'a> ExtractorContext<'a> {
         if let Some(table) = elem.to_packed::<TableElem>()
             && let Some(table_ir) = self.extract_table_or_grid(
                 table.grid.as_deref(),
-                true,
+                TableKindIr::SemanticTable,
                 table
                     .summary
                     .get_cloned(StyleChain::default())
@@ -256,7 +256,7 @@ impl<'a> ExtractorContext<'a> {
         if let Some(grid) = elem.to_packed::<GridElem>()
             && let Some(table_ir) = self.extract_table_or_grid(
                 grid.grid.as_deref(),
-                false,
+                TableKindIr::LayoutGrid,
                 None,
                 children,
                 list_level,

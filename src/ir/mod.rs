@@ -1,10 +1,9 @@
-//! Rich Semantic + Visual Intermediate Representation (`DocumentIr`) for `typst2word`.
+//! Rich Semantic + PDF Metrics Intermediate Representation (`DocumentIr`) for `typst2word`.
 //!
 //! Captures both high-level Typst semantics (headings, paragraphs, lists, enums,
 //! terms, tables/grids with spans/borders/fills, blockquotes, figures, footnotes,
-//! outlines, bibliographies, links, refs, citations, equations) and exact visual
-//! geometry (native shapes, CeTZ vector canvases, syntax-highlighted code blocks,
-//! typography, page setup) plus explicit unsupported-element markers.
+//! outlines, bibliographies, links, refs, citations, equations) and laid-out PDF
+//! geometry (`ir::pdf`) plus explicit unsupported-element markers.
 //!
 //! One file per Typst object family; everything is re-exported from here so
 //! `crate::ir::*` keeps working.
@@ -18,6 +17,7 @@ mod equation;
 mod image;
 mod list;
 mod outline;
+pub mod pdf;
 mod shape;
 mod style;
 mod table;
@@ -31,6 +31,7 @@ pub use equation::{EquationIr, MathFracStyleIr, MathNodeIr, MathRunIr, MathScrip
 pub use image::{ImageFormatIr, ImageIr};
 pub use list::{EnumItemIr, ListItemIr, TermItemIr};
 pub use outline::OutlineEntryIr;
+pub use pdf::{BlockPdfSpanIr, EquationPdfMetricsIr, InterBlockFlowIr};
 pub use shape::{CurveSegmentIr, ShapeIr, ShapeKindIr};
 pub use style::{
     BordersIr, ContextualSpacingPolicy, DashPatternIr, HAlignIr, KeepLinesPolicy,
@@ -89,6 +90,15 @@ impl CaptionPositionIr {
     pub const fn is_top(self) -> bool {
         matches!(self, Self::Top)
     }
+}
+
+/// Target destination of an inline hyperlink (`#link(...)`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LinkTargetIr {
+    /// External URI (`https://...`, `mailto:...`).
+    Url(String),
+    /// Intra-document bookmark anchor (`_typst_loc_...`).
+    Anchor(String),
 }
 
 /// Complete intermediate representation of a compiled Typst document.
@@ -169,8 +179,8 @@ pub enum BlockNode {
     Figure {
         body: Vec<BlockNode>,
         caption: Option<Vec<InlineNode>>,
-        caption_top: bool,
-        kind: String,
+        caption_pos: CaptionPositionIr,
+        kind: FigureKindIr,
         bookmark: Option<String>,
     },
     /// Display / block equation (`$ ... $`).
@@ -226,8 +236,7 @@ pub enum InlineNode {
     ImageInline(ImageIr),
     /// Hyperlink (`#link("https://...")[...]` or intra-document link).
     Link {
-        url: Option<String>,
-        anchor: Option<String>,
+        target: Option<LinkTargetIr>,
         content: Vec<InlineNode>,
     },
     /// Cross-reference (`@label` / `#ref(<label>)`).

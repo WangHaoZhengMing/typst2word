@@ -221,14 +221,14 @@ impl<'a> DocxBuilder<'a> {
             BlockNode::Figure {
                 body,
                 caption,
-                caption_top,
+                caption_pos,
                 kind: _,
                 bookmark,
             } => {
                 self.render_figure(
                     body,
                     caption.as_deref(),
-                    *caption_top,
+                    *caption_pos,
                     bookmark.as_deref(),
                     out,
                 );

@@ -3,33 +3,36 @@
 use std::fmt::Write as _;
 
 use crate::docx::builder::DocxBuilder;
-use crate::ir::{InlineNode, StrokeIr};
+use crate::ir::{InlineNode, LinkTargetIr, StrokeIr};
 use crate::xml::escape_xml;
 
 impl<'a> DocxBuilder<'a> {
     /// `InlineNode::Link` -> external (`r:id`) or internal (`w:anchor`) `<w:hyperlink>`.
     pub(crate) fn render_link(
         &mut self,
-        url: Option<&str>,
-        anchor: Option<&str>,
+        target: Option<&LinkTargetIr>,
         content: &[InlineNode],
         out: &mut String,
     ) {
-        if let Some(u) = url {
-            let r_id = self.register_hyperlink(u);
-            let _ = write!(out, r#"<w:hyperlink r:id="{r_id}" w:history="1">"#);
-            self.render_link_styled_inlines(content, out);
-            out.push_str("</w:hyperlink>");
-        } else if let Some(a) = anchor {
-            let _ = write!(
-                out,
-                r#"<w:hyperlink w:anchor="{}" w:history="1">"#,
-                escape_xml(a)
-            );
-            self.render_link_styled_inlines(content, out);
-            out.push_str("</w:hyperlink>");
-        } else {
-            self.render_inlines(content, out);
+        match target {
+            Some(LinkTargetIr::Url(u)) => {
+                let r_id = self.register_hyperlink(u);
+                let _ = write!(out, r#"<w:hyperlink r:id="{r_id}" w:history="1">"#);
+                self.render_link_styled_inlines(content, out);
+                out.push_str("</w:hyperlink>");
+            }
+            Some(LinkTargetIr::Anchor(a)) => {
+                let _ = write!(
+                    out,
+                    r#"<w:hyperlink w:anchor="{}" w:history="1">"#,
+                    escape_xml(a)
+                );
+                self.render_link_styled_inlines(content, out);
+                out.push_str("</w:hyperlink>");
+            }
+            None => {
+                self.render_inlines(content, out);
+            }
         }
     }
 

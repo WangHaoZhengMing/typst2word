@@ -6,7 +6,7 @@ use typst::model::{FigureCaption, FigureElem};
 
 use crate::extract::ExtractorContext;
 use crate::extract::frame_tree::TreeNode;
-use crate::ir::{BlockNode, HAlignIr};
+use crate::ir::{BlockNode, CaptionPositionIr, FigureKindIr, HAlignIr};
 
 impl<'a> ExtractorContext<'a> {
     pub(crate) fn extract_figure(
@@ -32,13 +32,16 @@ impl<'a> ExtractorContext<'a> {
         let caption_inlines =
             caption_nodes_opt.map(|cap_nodes| self.extract_inlines_flat(&cap_nodes));
         let body = self.extract_blocks_from_nodes(&body_nodes, list_level, HAlignIr::Center);
-        let kind = format!("{:?}", fig.kind.get_ref(StyleChain::default()));
+        let kind = FigureKindIr::from_typst_repr(&format!(
+            "{:?}",
+            fig.kind.get_ref(StyleChain::default())
+        ));
         let bookmark = self.bookmarks.get(&loc).cloned();
 
         BlockNode::Figure {
             body,
             caption: caption_inlines,
-            caption_top,
+            caption_pos: CaptionPositionIr::from_top_bool(caption_top),
             kind,
             bookmark,
         }

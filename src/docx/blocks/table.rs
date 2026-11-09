@@ -12,7 +12,8 @@ impl<'a> DocxBuilder<'a> {
     // Table & Grid Rendering
     // =========================================================================
     pub(crate) fn render_table(&mut self, table: &TableIr, out: &mut String) {
-        let is_styled_container = table.is_styled_container;
+        let is_styled_container = table.is_styled_container();
+        let is_semantic_table = table.is_semantic();
         out.push_str("<w:tbl><w:tblPr>");
         Self::render_table_jc(table.align, out);
         if table.left_indent_pt > 0.5 && table.align == crate::ir::HAlignIr::Left {
@@ -56,7 +57,7 @@ impl<'a> DocxBuilder<'a> {
         // Rows
         let num_rows = table.rows.len();
         for (row_idx, row) in table.rows.iter().enumerate() {
-            let next_row_is_complex_layout = !table.is_semantic_table
+            let next_row_is_complex_layout = !is_semantic_table
                 && table.rows.get(row_idx + 1).is_some_and(|next_r| {
                     next_r.cells.iter().any(|c| {
                         c.blocks.len() > 1
@@ -65,7 +66,7 @@ impl<'a> DocxBuilder<'a> {
                                 .any(|b| !matches!(b, BlockNode::Paragraph { .. }))
                     })
                 });
-            let row_is_complex_layout = !table.is_semantic_table
+            let row_is_complex_layout = !is_semantic_table
                 && row.cells.iter().any(|c| {
                     c.blocks.len() > 2
                         || c.blocks
@@ -145,7 +146,7 @@ impl<'a> DocxBuilder<'a> {
                         .any(|b| matches!(b, BlockNode::List { .. } | BlockNode::Enum { .. }));
                 let cell_role = word_construct::TableCellRole::from_flags(
                     is_styled_container,
-                    table.is_semantic_table,
+                    is_semantic_table,
                     cell_has_list,
                 );
                 let margins = word_construct::WordCellMarginsDxa::solve_for_role(
@@ -187,7 +188,7 @@ impl<'a> DocxBuilder<'a> {
                         &cell.blocks,
                         keep_rows_together,
                         is_styled_container,
-                        table.is_semantic_table,
+                        is_semantic_table,
                         &mut cell_xml,
                     );
                     if !cell_xml.contains("<w:p") || !cell_xml.ends_with("</w:p>") {

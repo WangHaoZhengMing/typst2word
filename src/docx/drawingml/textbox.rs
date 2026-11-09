@@ -1,7 +1,7 @@
 //! Shape / label body blocks -> `<w:txbxContent>` paragraphs and runs.
 
 use crate::docx::inlines::text::render_text_run_xml;
-use crate::docx::math::render_math_omml;
+use crate::docx::math::render_equation_omml;
 use crate::ir::{BlockNode, HAlignIr, InlineNode, TextRunIr};
 
 pub(crate) fn render_textbox_blocks(blocks: &[BlockNode]) -> String {
@@ -18,7 +18,7 @@ pub(crate) fn render_textbox_blocks(blocks: &[BlockNode]) -> String {
                 out.push_str(
                     r#"<w:p><w:pPr><w:jc w:val="center"/><w:spacing w:before="0" w:after="0"/></w:pPr>"#,
                 );
-                render_math_omml(&eq.body, &mut out);
+                render_equation_omml(eq, &mut out);
                 out.push_str("</w:p>");
             }
             BlockNode::List { items, .. } => {
@@ -74,7 +74,7 @@ pub(crate) fn render_inline_nodes_to_wml(inlines: &[InlineNode], out: &mut Strin
                 render_text_run_xml(run, out);
             }
             InlineNode::EquationInline(eq) => {
-                render_math_omml(&eq.body, out);
+                render_equation_omml(eq, out);
             }
             InlineNode::Link { content, .. }
             | InlineNode::Ref { content, .. }

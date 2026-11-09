@@ -8,7 +8,7 @@ use typst::model::{
 use crate::extract::ExtractorContext;
 use crate::extract::frame_tree::TreeNode;
 use crate::extract::inline::ActiveInlineState;
-use crate::ir::InlineNode;
+use crate::ir::{InlineNode, LinkTargetIr};
 
 impl<'a> ExtractorContext<'a> {
     pub(crate) fn try_extract_inline_link_or_ref(
@@ -59,16 +59,17 @@ impl<'a> ExtractorContext<'a> {
         // 3. Hyperlink (`LinkMarker`, `LinkElem`, `DirectLinkElem`).
         if elem.is::<LinkMarker>() || elem.is::<LinkElem>() || elem.is::<DirectLinkElem>() {
             let dest = Self::find_link_destination(elem, children);
-            let (url, anchor) = match dest {
-                Some(Destination::Url(u)) => (Some(u.to_string()), None),
-                Some(Destination::Location(target_loc)) => (
-                    None,
-                    self.bookmarks
+            let target = match dest {
+                Some(Destination::Url(u)) => Some(LinkTargetIr::Url(u.to_string())),
+                Some(Destination::Location(target_loc)) => {
+                    let anchor = self
+                        .bookmarks
                         .get(&target_loc)
                         .cloned()
-                        .or_else(|| Some(format!("_typst_loc_{:x}", target_loc.hash()))),
-                ),
-                Some(Destination::Position(_)) | None => (None, None),
+                        .unwrap_or_else(|| format!("_typst_loc_{:x}", target_loc.hash()));
+                    Some(LinkTargetIr::Anchor(anchor))
+                }
+                Some(Destination::Position(_)) | None => None,
             };
             let mut link_inlines = Vec::new();
             self.extract_inlines_from_nodes(children, &mut link_inlines, state, last_y, last_x_end);
@@ -80,8 +81,7 @@ impl<'a> ExtractorContext<'a> {
                 self.report.links_count += 1;
             }
             out.push(InlineNode::Link {
-                url,
-                anchor,
+                target,
                 content: clean_inlines,
             });
             return true;

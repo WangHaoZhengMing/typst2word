@@ -16,7 +16,7 @@ impl<'a> DocxBuilder<'a> {
     ) {
         let followed_by_grid_table = matches!(
             blocks.get(1),
-            Some(BlockNode::Table(t)) if !t.is_semantic_table
+            Some(BlockNode::Table(t)) if !t.is_semantic()
         );
         let followed_by_tight_list = matches!(
             blocks.get(1),
@@ -144,7 +144,7 @@ impl<'a> DocxBuilder<'a> {
                     let bottom_pad_pt = if is_last_block && ctx.item_gap_dxa > 0 && ctx.is_last_top
                     {
                         4.5
-                    } else if !is_last_block && !tbl.is_semantic_table {
+                    } else if !is_last_block && !tbl.is_semantic() {
                         5.5
                     } else {
                         0.0
@@ -212,7 +212,7 @@ impl<'a> DocxBuilder<'a> {
                 BlockNode::Figure {
                     body,
                     caption,
-                    caption_top,
+                    caption_pos,
                     bookmark,
                     ..
                 } => {
@@ -224,7 +224,7 @@ impl<'a> DocxBuilder<'a> {
                     self.render_figure_with_layout(
                         body,
                         caption.as_deref(),
-                        *caption_top,
+                        *caption_pos,
                         bookmark.as_deref(),
                         indent_left,
                         caption_after_dxa,
@@ -318,12 +318,12 @@ impl<'a> DocxBuilder<'a> {
     ) {
         let mut adjusted = tbl.clone();
         let target_left_pt = indent_left as f64 / 20.0;
-        if !adjusted.is_semantic_table && adjusted.align == HAlignIr::Center {
+        if !adjusted.is_semantic() && adjusted.align == HAlignIr::Center {
             let avail_w_pt = ((self.content_width_dxa() as f64 / 20.0) - target_left_pt).max(100.0);
             let total_col_w: f64 = adjusted.col_widths_pt.iter().sum();
             adjusted.align = HAlignIr::Left;
             adjusted.left_indent_pt = target_left_pt + ((avail_w_pt - total_col_w).max(0.0) * 0.5);
-        } else if !adjusted.is_semantic_table && adjusted.align == HAlignIr::Left {
+        } else if !adjusted.is_semantic() && adjusted.align == HAlignIr::Left {
             adjusted.left_indent_pt = target_left_pt;
             let avail_w_pt = ((self.content_width_dxa() as f64 / 20.0) - target_left_pt).max(100.0);
             let total_col_w: f64 = adjusted.col_widths_pt.iter().sum();

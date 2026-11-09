@@ -14,7 +14,7 @@ use crate::color::paint_to_hex;
 use crate::extract::ExtractorContext;
 use crate::extract::frame_tree::TreeNode;
 use crate::ir::{
-    HAlignIr, SidesPtIr, TableCellIr, TableIr, TableRowIr, VAlignIr, VMergeState,
+    HAlignIr, SidesPtIr, TableCellIr, TableIr, TableKindIr, TableRowIr, VAlignIr, VMergeState,
 };
 
 pub(super) type CellNodeMap = HashMap<(usize, usize), (Content, Vec<TreeNode>, Size)>;
@@ -23,12 +23,13 @@ impl<'a> ExtractorContext<'a> {
     pub(crate) fn extract_table_or_grid(
         &mut self,
         cell_grid: Option<&CellGrid>,
-        is_semantic_table: bool,
+        kind: TableKindIr,
         summary: Option<String>,
         children: &[TreeNode],
         list_level: usize,
         inherited_align: HAlignIr,
     ) -> Option<TableIr> {
+        let is_semantic_table = kind.is_semantic();
         let grid = cell_grid?;
         let num_cols = grid.non_gutter_column_count();
         let num_rows = grid.non_gutter_row_count();
@@ -108,8 +109,7 @@ impl<'a> ExtractorContext<'a> {
         };
 
         Some(TableIr {
-            is_semantic_table,
-            is_styled_container: false,
+            kind,
             col_widths_pt: dims.col_widths_pt,
             row_heights_pt: dims.row_heights_pt,
             header_rows,

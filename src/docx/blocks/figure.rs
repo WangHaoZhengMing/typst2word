@@ -3,7 +3,7 @@
 use std::fmt::Write as _;
 
 use crate::docx::builder::DocxBuilder;
-use crate::ir::{BlockNode, HAlignIr, InlineNode};
+use crate::ir::{BlockNode, CaptionPositionIr, HAlignIr, InlineNode};
 
 impl<'a> DocxBuilder<'a> {
     /// `BlockNode::Figure` -> body blocks plus a `Caption` paragraph.
@@ -11,11 +11,11 @@ impl<'a> DocxBuilder<'a> {
         &mut self,
         body: &[BlockNode],
         caption: Option<&[InlineNode]>,
-        caption_top: bool,
+        caption_pos: CaptionPositionIr,
         bookmark: Option<&str>,
         out: &mut String,
     ) {
-        self.render_figure_with_layout(body, caption, caption_top, bookmark, 0, 60, out);
+        self.render_figure_with_layout(body, caption, caption_pos, bookmark, 0, 60, out);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -23,7 +23,7 @@ impl<'a> DocxBuilder<'a> {
         &mut self,
         body: &[BlockNode],
         caption: Option<&[InlineNode]>,
-        caption_top: bool,
+        caption_pos: CaptionPositionIr,
         bookmark: Option<&str>,
         indent_left: usize,
         caption_after_dxa: i64,
@@ -39,7 +39,7 @@ impl<'a> DocxBuilder<'a> {
             })
             .unwrap_or(0);
         let eff_indent = indent_left.max(body_indent_dxa);
-        if caption_top {
+        if caption_pos.is_top() {
             if let Some(cap) = caption {
                 self.render_caption_paragraph(cap, bookmark, eff_indent, caption_after_dxa, out);
             }

@@ -1,4 +1,4 @@
-//! `equation` -> `EquationIr` (OMML via `crate::math` + 2D calibration via `word_construct::WordEquationBox`).
+//! `equation` -> `EquationIr` (pure Typst math AST + `EquationPdfMetricsIr`).
 
 use typst::foundations::Packed;
 use typst::introspection::Location;
@@ -10,7 +10,7 @@ use typst::pdf::{PdfMarkerTag, PdfMarkerTagKind};
 use crate::extract::ExtractorContext;
 use crate::extract::frame_tree::TreeNode;
 use crate::extract::math::extract_equation_math_nodes;
-use crate::ir::{EquationIr, MathNodeIr};
+use crate::ir::{EquationIr, EquationPdfMetricsIr};
 
 struct EquationTypography {
     context_font_size_pt: f64,
@@ -36,38 +36,33 @@ impl<'a> ExtractorContext<'a> {
             typo.max_glyph_pt.unwrap_or(typo.context_font_size_pt),
         );
 
-        let mut body = extract_equation_math_nodes(
+        let body = extract_equation_math_nodes(
             eq,
             chain,
             Some(typo.context_font_size_pt),
             typo.math_font,
             typo.cjk_font,
         );
-        let ast_metrics = MathNodeIr::analyze_slice(&body, is_block);
         let max_available_width_pt =
             Some((self.current_column_width_pt() - self.container_inset_pt).max(60.0));
 
-        let eq_box = word_construct::WordEquationBox::solve(word_construct::EquationBoxInput {
-            is_block,
-            typst_width_pt: measured_bbox.map(|(w, _)| w),
-            typst_height_pt: measured_bbox.map(|(_, h)| h),
-            typst_max_glyph_pt: typo.max_glyph_pt,
-            typst_min_glyph_pt: typo.min_glyph_pt,
-            context_font_size_pt: typo.context_font_size_pt,
+        let pdf_metrics = EquationPdfMetricsIr::from_bbox(
+            measured_bbox,
+            typo.context_font_size_pt,
+            typo.max_glyph_pt,
+            typo.min_glyph_pt,
             max_available_width_pt,
-            row_count: ast_metrics.row_count,
-            max_fraction_depth: ast_metrics.max_fraction_depth,
-            has_tall_construct: ast_metrics.has_tall_construct,
-            all_glyphs_in_fraction_or_script: ast_metrics.all_glyphs_in_fraction_or_script,
-            expected_em_width: ast_metrics.expected_em_width,
-        });
-
-        MathNodeIr::apply_calibrated_box(
-            &mut body,
-            eq_box.run_font_size_pt,
-            eq_box.fraction_font_size_pt,
-            eq_box.width_scale_pct,
         );
+
+        let base_font_pt = match (typo.max_glyph_pt, is_block) {
+            (Some(max_g), false)
+                if (max_g / typo.context_font_size_pt.max(6.0) - 0.70).abs() < 0.09 =>
+            {
+                typo.context_font_size_pt
+            }
+            (Some(max_g), _) => max_g,
+            (None, _) => typo.context_font_size_pt,
+        };
 
         let source_text = self
             .compiled
@@ -106,10 +101,8 @@ impl<'a> ExtractorContext<'a> {
             source_text,
             numbering_text,
             bookmark,
-            font_size_pt: Some(eq_box.run_font_size_pt),
-            width_pt: Some(eq_box.width_pt),
-            height_pt: Some(eq_box.height_pt),
-            width_scale_pct: eq_box.width_scale_pct,
+            font_size_pt: Some((base_font_pt * 2.0).round() / 2.0),
+            pdf_metrics,
         }
     }
 

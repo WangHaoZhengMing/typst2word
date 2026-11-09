@@ -12,7 +12,7 @@ use crate::extract::ExtractorContext;
 use crate::extract::frame_tree::TreeNode;
 use crate::ir::{
     BlockNode, BordersIr, DashPatternIr, HAlignIr, ShapeIr, ShapeKindIr, SidesPtIr, StrokeIr,
-    TableCellIr, TableIr, TableRowIr, VAlignIr,
+    TableCellIr, TableIr, TableKindIr, TableRowIr, VAlignIr,
 };
 
 impl<'a> ExtractorContext<'a> {
@@ -192,8 +192,7 @@ impl<'a> ExtractorContext<'a> {
                 BordersIr::splat(stroke)
             };
             return Some(BlockNode::Table(TableIr {
-                is_semantic_table: false,
-                is_styled_container: true,
+                kind: TableKindIr::StyledContainer,
                 col_widths_pt: vec![width_pt],
                 row_heights_pt: vec![0.0],
                 header_rows: 0,

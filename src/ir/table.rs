@@ -1,17 +1,43 @@
-//! Tables and grids (`table` / `grid`).
+//! Tables and grids (`table` / `grid` / styled container blocks).
 
 use serde::{Deserialize, Serialize};
 
 use super::{BlockNode, BordersIr, ColorHex, HAlignIr, SidesPtIr, VAlignIr};
 
+/// High-level semantic classification of a `TableIr`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum TableKindIr {
+    /// Explicit `#table(...)` with semantic borders and cell insets.
+    #[default]
+    SemanticTable,
+    /// Borderless layout `#grid(...)`.
+    LayoutGrid,
+    /// Bordered/filled `#block(...)` container modeled as a breakable 1x1 table.
+    StyledContainer,
+}
+
+impl TableKindIr {
+    #[inline]
+    pub const fn is_semantic(self) -> bool {
+        matches!(self, Self::SemanticTable)
+    }
+
+    #[inline]
+    pub const fn is_layout_grid(self) -> bool {
+        matches!(self, Self::LayoutGrid)
+    }
+
+    #[inline]
+    pub const fn is_styled_container(self) -> bool {
+        matches!(self, Self::StyledContainer)
+    }
+}
+
 /// Table or Grid intermediate representation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TableIr {
-    pub is_semantic_table: bool,
-    /// True when this table represents a bordered/filled `#block(...)` container
-    /// (rather than an explicit `#table` or `#grid`).
     #[serde(default)]
-    pub is_styled_container: bool,
+    pub kind: TableKindIr,
     pub col_widths_pt: Vec<f64>,
     pub row_heights_pt: Vec<f64>,
     pub header_rows: usize,
@@ -20,6 +46,23 @@ pub struct TableIr {
     #[serde(default)]
     pub left_indent_pt: f64,
     pub summary: Option<String>,
+}
+
+impl TableIr {
+    #[inline]
+    pub const fn is_semantic(&self) -> bool {
+        self.kind.is_semantic()
+    }
+
+    #[inline]
+    pub const fn is_layout_grid(&self) -> bool {
+        self.kind.is_layout_grid()
+    }
+
+    #[inline]
+    pub const fn is_styled_container(&self) -> bool {
+        self.kind.is_styled_container()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -47,32 +90,6 @@ pub struct TableCellIr {
     pub valign: VAlignIr,
     pub is_header_cell: bool,
     pub blocks: Vec<BlockNode>,
-}
-
-/// High-level semantic classification of a `TableIr`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub enum TableKindIr {
-    /// Explicit `#table(...)` with semantic borders and cell insets.
-    #[default]
-    SemanticTable,
-    /// Borderless layout `#grid(...)`.
-    LayoutGrid,
-    /// Bordered/filled `#block(...)` container modeled as a breakable 1x1 table.
-    StyledContainer,
-}
-
-impl TableIr {
-    /// Return the domain `TableKindIr` enum for this table.
-    #[inline]
-    pub const fn kind(&self) -> TableKindIr {
-        if self.is_styled_container {
-            TableKindIr::StyledContainer
-        } else if self.is_semantic_table {
-            TableKindIr::SemanticTable
-        } else {
-            TableKindIr::LayoutGrid
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
