@@ -8,13 +8,16 @@ impl<'a> DocxBuilder<'a> {
 <w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math">
   <w:zoom w:percent="100"/>
   <w:defaultTabStop w:val="720"/>
-  <w:characterSpacingControl w:val="compressPunctuation"/>
+  <w:characterSpacingControl w:val="doNotCompress"/>
   <w:autoSpaceDE w:val="1"/>
   <w:autoSpaceDN w:val="1"/>
   <w:doNotExpandShiftReturn/>
   <w:compat>
+    <w:useFELayout/>
     <w:noColumnBalance/>
+    <w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="15"/>
   </w:compat>
+  <w:themeFontLang w:val="en-US" w:eastAsia="zh-CN" w:bidi="ar-SA"/>
   <m:mathPr>
     <m:mathFont m:val="Cambria Math"/>
     <m:brkBin m:val="before"/>

@@ -13,10 +13,12 @@ impl<'a> DocxBuilder<'a> {
         <w:kern w:val="2"/>
         <w:sz w:val="22"/>
         <w:szCs w:val="22"/>
+        <w:lang w:val="en-US" w:eastAsia="zh-CN" w:bidi="ar-SA"/>
       </w:rPr>
     </w:rPrDefault>
     <w:pPrDefault>
       <w:pPr>
+        <w:overflowPunct w:val="1"/>
         <w:spacing w:after="120" w:line="246" w:lineRule="auto"/>
       </w:pPr>
     </w:pPrDefault>

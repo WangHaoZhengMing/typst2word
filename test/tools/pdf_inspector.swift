@@ -187,7 +187,7 @@ func extractLinesFromPage(_ page: PDFPage, pageHeight: Double) -> [LineRecord] {
         let maxX = xSorted.map { Double($0.rect.maxX) }.max() ?? minX
         let minY = xSorted.map { Double($0.rect.minY) }.min() ?? 0.0
         let maxY = xSorted.map { Double($0.rect.maxY) }.max() ?? minY
-        let yBaseline = pageHeight - minY
+        let yBaseline = pageHeight - 0.5 * (minY + maxY)
         let (ft, lt) = extractTokens(norm)
         out.append(LineRecord(
             lineIndex: idx,

@@ -87,7 +87,7 @@ impl<'a> DocxBuilder<'a> {
             let before_dxa = if collapse_before {
                 0
             } else if level == 1 {
-                240
+                if line_dxa < 200 { 212 } else { 240 }
             } else {
                 160
             };

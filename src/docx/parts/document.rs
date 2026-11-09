@@ -3,7 +3,7 @@
 use std::fmt::Write as _;
 
 use crate::docx::builder::DocxBuilder;
-use crate::ir::BlockNode;
+use crate::ir::{BlockNode, InlineNode};
 use crate::units::pt_to_dxa;
 
 impl<'a> DocxBuilder<'a> {
@@ -82,6 +82,37 @@ impl<'a> DocxBuilder<'a> {
         self.render_sect_pr_inner(ps.columns, 36.0, self.has_scoped_columns, out);
     }
 
+    pub(crate) fn first_block_uses_cjk_font(&self) -> bool {
+        let inlines = match self.ir.blocks.first() {
+            Some(BlockNode::Heading { content, .. }) => Some(content.as_slice()),
+            Some(BlockNode::Paragraph { content, .. }) => Some(content.as_slice()),
+            Some(BlockNode::Title { content, .. }) => Some(content.as_slice()),
+            _ => None,
+        };
+        let Some(inlines) = inlines else {
+            return false;
+        };
+        inlines.iter().any(|inl| {
+            if let InlineNode::Text(r) = inl
+                && let Some(fam) = &r.font_family
+            {
+                let fl = fam.to_ascii_lowercase();
+                fl.contains("song")
+                    || fl.contains("hei")
+                    || fl.contains("kai")
+                    || fl.contains("fang")
+                    || fl.contains("pingfang")
+                    || fl.contains("sim")
+                    || fl.contains("yahei")
+                    || fl.contains("宋体")
+                    || fl.contains("黑体")
+                    || fl.contains("楷体")
+            } else {
+                false
+            }
+        })
+    }
+
     pub(crate) fn render_sect_pr_inner(
         &self,
         cols: usize,
@@ -108,10 +139,15 @@ impl<'a> DocxBuilder<'a> {
             ""
         };
         let _ = write!(out, r#"<w:pgSz w:w="{w_dxa}" w:h="{h_dxa}"{orient}/>"#);
-        // Subtract 3.5pt from `w:top` to align Word's first-line `winAscent` (0.891em) top box
-        // with Typst's default `top-edge: "cap-height"` (0.692em) baseline on each page, and
-        // 6pt from `w:bottom` for Word's empty CJK descender box on the last line.
-        let top_dxa = pt_to_dxa((ps.margin_top_pt - 3.5).max(18.0));
+        // Subtract 3.5pt (Western) or 7.2pt (CJK higher winAscent) from `w:top` to align Word's
+        // first-line `winAscent` top box with Typst's default `top-edge: "cap-height"` baseline,
+        // and 6pt from `w:bottom` for Word's empty CJK descender box on the last line.
+        let top_offset_pt = if self.first_block_uses_cjk_font() {
+            5.0
+        } else {
+            3.5
+        };
+        let top_dxa = pt_to_dxa((ps.margin_top_pt - top_offset_pt).max(18.0));
         let bottom_dxa = pt_to_dxa((ps.margin_bottom_pt - 6.0).max(18.0));
         let _ = write!(
             out,
