@@ -4,7 +4,7 @@
 //! (including inline code `DejaVu Sans Mono` -> `Consolas` advance-width compensation)
 //! from pipeline-annotated [`TextRunIr`].
 
-use ir::TextRunIr;
+use ir::{ScriptKindIr, TextRunIr};
 
 /// Exhaustive East Asian font hint policy for `<w:rFonts>`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,7 +74,19 @@ impl<'a> TextRunConstruct<'a> {
                         char_spacing_dxa: 1,
                     }
                 } else {
-                    RunFontSizeConstruct::StandardHalfPts(((sz_pt * 2.0).round() as u32).clamp(4, 288))
+                    // Typst's `SubElem` / `SuperElem` pre-scales `item.size` by the font's OS/2
+                    // `ySubscriptYSize` / `ySuperscriptYSize` ratio (`1331/2048 = 0.65`), and
+                    // Word's `<w:vertAlign w:val="subscript|superscript"/>` scales `<w:sz>` down
+                    // again and truncates to its internal `0.24pt` (`1/300 in`) grid (`w:sz="22"`
+                    // -> `29 * 0.24pt = 6.96pt`, whereas `w:sz="23"` -> `30 * 0.24pt = 7.20pt`,
+                    // matching Typst's `7.15pt` within `0.05pt`).
+                    let unscaled_pt = match run.script {
+                        ScriptKindIr::Normal => sz_pt,
+                        ScriptKindIr::Sub | ScriptKindIr::Super => sz_pt / 0.635,
+                    };
+                    RunFontSizeConstruct::StandardHalfPts(
+                        ((unscaled_pt * 2.0).round() as u32).clamp(4, 288),
+                    )
                 }
             }
         };
@@ -84,6 +96,14 @@ impl<'a> TextRunConstruct<'a> {
             .as_ref()
             .map(|bdr| ((bdr.thickness_pt * 8.0).round() as u32).clamp(2, 96));
 
+        // 不改变原字体（Do not alter or substitute the original font family extracted from Typst）：
+        // 原文档使用什么字体（例如 Typst 内置的 `"DejaVu Sans Mono"` 或 `"Libertinus Serif"`），
+        // 生成的 `.docx` `<w:rFonts>` 就严格原样输出该字体名称，绝不在转换器代码中私自篡改为 `"Consolas"` 等替代字体。
+        // 但是需要注意：由于 `DejaVu Sans Mono` 是编译进 Typst 二进制的内置字体、并未安装在 macOS 系统字体目录中，
+        // 若宿主机器未安装该字体，macOS 版 Microsoft Word 在导出 PDF 时甚至会忽略 `word/fontTable.xml` 中的
+        // `<w:altName w:val="Consolas"/>` 回退声明，直接将其回退为比例字体 `Helvetica`，从而产生字宽与断行差异。
+        // 因此若需在未安装 `DejaVu Sans Mono` 的环境中严格对比代码块/行内代码排版，应在 `.typ` 源文件侧显式声明
+        // 系统已安装的等宽字体（如 `#show raw: set text(font: "Courier New", size: 9pt)`）。
         Self {
             font_family: run
                 .font_family
