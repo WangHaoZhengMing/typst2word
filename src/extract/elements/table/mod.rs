@@ -29,7 +29,7 @@ impl<'a> ExtractorContext<'a> {
         list_level: usize,
         inherited_align: HAlignIr,
     ) -> Option<TableIr> {
-        let is_semantic_table = kind.is_semantic();
+        let is_semantic_table = kind == TableKindIr::SemanticTable;
         let grid = cell_grid?;
         let num_cols = grid.non_gutter_column_count();
         let num_rows = grid.non_gutter_row_count();

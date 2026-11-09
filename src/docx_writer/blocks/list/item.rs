@@ -3,9 +3,12 @@
 use std::fmt::Write as _;
 
 use crate::construct::list::{ListItemConstruct, ListMarkerConstruct};
+use crate::construct::paragraph::{
+    compute_line_spacing_dxa, is_only_inline_equation, paragraph_mark_rpr_sz_half_pt,
+};
 use crate::construct::table::solve_list_item_child_table;
 use crate::docx_writer::writer::DocxWriter;
-use crate::ir::{BlockNode, InlineNode, ParagraphStyleIr, TableIr};
+use crate::ir::{BlockNode, InlineNode, ParagraphStyleIr, TableIr, TableKindIr};
 use crate::xml::escape_xml;
 
 impl<'a> DocxWriter<'a> {
@@ -17,7 +20,7 @@ impl<'a> DocxWriter<'a> {
     ) {
         let followed_by_grid_table = matches!(
             blocks.get(1),
-            Some(BlockNode::Table(t)) if !t.is_semantic()
+            Some(BlockNode::Table(t)) if t.kind != TableKindIr::SemanticTable
         );
         let item_layout = ctx.solve_item_layout();
         let after_dxa = item_layout.first_after_dxa;
@@ -112,7 +115,7 @@ impl<'a> DocxWriter<'a> {
                     let bottom_pad_pt = if is_last_block && ctx.item_gap_dxa > 0 && ctx.is_last_top
                     {
                         4.5
-                    } else if !is_last_block && !tbl.is_semantic() {
+                    } else if !is_last_block && tbl.kind != TableKindIr::SemanticTable {
                         5.5
                     } else {
                         0.0
@@ -221,12 +224,15 @@ impl<'a> DocxWriter<'a> {
         keep_with_next: bool,
         out: &mut String,
     ) {
-        let raw_line_dxa = Self::compute_line_spacing_dxa(content, style.line_spacing_pt);
+        let raw_line_dxa = compute_line_spacing_dxa(content, style.line_spacing_pt);
         let line_dxa = match (ctx.line_dxa_override, raw_line_dxa) {
             (Some(override_dxa), 276) => override_dxa,
             _ => raw_line_dxa,
         };
-        let tabs_xml = if Self::has_large_horizontal_space(content) {
+        let has_wide_space = content
+            .iter()
+            .any(|inl| matches!(inl, InlineNode::HorizontalSpace { width_pt } if *width_pt >= 36.0));
+        let tabs_xml = if has_wide_space {
             format!(
                 r#"<w:tabs><w:tab w:val="num" w:pos="{indent_left}"/><w:tab w:val="right" w:pos="{}"/></w:tabs>"#,
                 self.content_width_dxa()
@@ -241,6 +247,7 @@ impl<'a> DocxWriter<'a> {
         };
         let before_dxa = ctx.before_dxa;
         let num_id = ctx.num_id;
+        let mark_rpr_sz = paragraph_mark_rpr_sz_half_pt(content);
 
         out.push_str("<w:p><w:pPr>");
         match ctx.marker {
@@ -249,7 +256,12 @@ impl<'a> DocxWriter<'a> {
                     out,
                     r#"{keep_next_xml}<w:spacing w:before="{before_dxa}" w:after="{after_dxa}" w:line="{line_dxa}" w:lineRule="auto"/><w:ind w:left="{indent_left}" w:hanging="{hanging_dxa}"/>{tabs_xml}"#
                 );
-                Self::render_paragraph_mark_rpr(content, out);
+                if let Some(sz_val) = mark_rpr_sz {
+                    let _ = write!(
+                        out,
+                        r#"<w:rPr><w:sz w:val="{sz_val}"/><w:szCs w:val="{sz_val}"/></w:rPr>"#
+                    );
+                }
                 out.push_str("</w:pPr>");
                 let bm_id = bookmark.map(|bm| self.emit_bookmark_start(bm, out));
                 let _ = write!(
@@ -268,11 +280,16 @@ impl<'a> DocxWriter<'a> {
                     out,
                     r#"{keep_next_xml}<w:numPr><w:ilvl w:val="{num_ilvl}"/><w:numId w:val="{num_id}"/></w:numPr>{tabs_xml}<w:spacing w:before="{before_dxa}" w:after="{after_dxa}" w:line="{line_dxa}" w:lineRule="auto"/><w:ind w:left="{indent_left}" w:hanging="{hanging_dxa}"/>"#
                 );
-                Self::render_paragraph_mark_rpr(content, out);
+                if let Some(sz_val) = mark_rpr_sz {
+                    let _ = write!(
+                        out,
+                        r#"<w:rPr><w:sz w:val="{sz_val}"/><w:szCs w:val="{sz_val}"/></w:rPr>"#
+                    );
+                }
                 out.push_str("</w:pPr>");
                 let bm_id = bookmark.map(|bm| self.emit_bookmark_start(bm, out));
                 self.render_inlines(content, out);
-                if Self::is_only_inline_equation(content) {
+                if is_only_inline_equation(content) {
                     out.push_str("<w:r><w:t>&#8203;</w:t></w:r>");
                 }
                 if let Some(id) = bm_id {

@@ -80,18 +80,6 @@ pub enum CaptionPositionIr {
     Bottom,
 }
 
-impl CaptionPositionIr {
-    #[inline]
-    pub const fn from_top_bool(is_top: bool) -> Self {
-        if is_top { Self::Top } else { Self::Bottom }
-    }
-
-    #[inline]
-    pub const fn is_top(self) -> bool {
-        matches!(self, Self::Top)
-    }
-}
-
 /// Target destination of an inline hyperlink (`#link(...)`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LinkTargetIr {

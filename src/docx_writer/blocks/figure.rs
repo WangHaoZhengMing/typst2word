@@ -62,15 +62,18 @@ impl<'a> DocxWriter<'a> {
             caption_keep_with_next,
         );
         let eff_indent = construct.eff_indent_dxa;
-        if construct.caption_pos.is_top() {
-            if let Some(cap) = caption {
-                self.render_caption_paragraph(cap, bookmark, &construct, out);
+        match construct.caption_pos {
+            CaptionPositionIr::Top => {
+                if let Some(cap) = caption {
+                    self.render_caption_paragraph(cap, bookmark, &construct, out);
+                }
+                self.render_figure_body(body, eff_indent, false, out);
             }
-            self.render_figure_body(body, eff_indent, false, out);
-        } else {
-            self.render_figure_body(body, eff_indent, caption.is_some(), out);
-            if let Some(cap) = caption {
-                self.render_caption_paragraph(cap, bookmark, &construct, out);
+            CaptionPositionIr::Bottom => {
+                self.render_figure_body(body, eff_indent, caption.is_some(), out);
+                if let Some(cap) = caption {
+                    self.render_caption_paragraph(cap, bookmark, &construct, out);
+                }
             }
         }
     }

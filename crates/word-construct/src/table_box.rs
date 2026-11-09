@@ -1,19 +1,7 @@
-//! Microsoft Word Table & Cell Construct (`WordTableConstruct`).
+//! Microsoft Word Table & Cell Construct (`WordCellMarginsDxa`).
 //!
 //! Models `<w:tblPr>`, `<w:tblLayout w:type="fixed"/>`, `<w:tblGrid>`, `<w:gridCol>`,
 //! `<w:tcPr>`, `<w:tcW>`, and `<w:tcMar>`.
-//!
-//! ## How Word's Table Layout Engine Works
-//! 1. **`w:tblLayout`**:
-//!    By default, if `<w:tblLayout>` is omitted, Word uses `autofit` mode and dynamically
-//!    resizes columns based on its own text-wrapping heuristics, ignoring `<w:gridCol>` and
-//!    `<w:tcW>`! Setting `<w:tblLayout w:type="fixed"/>` forces Word to honor the exact
-//!    column widths specified in `<w:gridCol>` and `<w:tcW>`.
-//! 2. **Cell Width vs Content Width**:
-//!    In Word, `<w:tcW w:w="W_col" w:type="dxa"/>` includes the left and right cell margins
-//!    (`<w:tcMar>` $M_L + M_R$) plus border clearance. For a cell's text of measured width
-//!    $W_{\text{text}}$ not to wrap prematurely in Word, the column width must satisfy:
-//!    $$W_{\text{col}} \ge W_{\text{text}} + M_L + M_R + \Delta_{\text{wrap}}$$
 
 use serde::{Deserialize, Serialize};
 
@@ -31,24 +19,6 @@ pub enum TableCellRole {
 }
 
 impl TableCellRole {
-    /// Classify a cell's role from boolean table/cell flags.
-    #[inline]
-    pub const fn from_flags(
-        is_styled_container: bool,
-        is_semantic_table: bool,
-        cell_has_list: bool,
-    ) -> Self {
-        match (is_styled_container, is_semantic_table) {
-            (true, _) => Self::StyledContainer,
-            (false, true) => Self::SemanticTable {
-                has_list: cell_has_list,
-            },
-            (false, false) => Self::LayoutGrid {
-                has_list: cell_has_list,
-            },
-        }
-    }
-
     /// Vertical leading trim (`pt`) subtracted from `inset_top_pt` to compensate for Word's
     /// built-in line-box internal leading.
     #[inline]
@@ -101,7 +71,7 @@ pub struct WordCellMarginsDxa {
 impl WordCellMarginsDxa {
     /// Declaratively solve `<w:tcMar>` from Typst's `inset` (in `pt`) and a [`TableCellRole`].
     #[inline]
-    pub fn solve_for_role(
+    pub fn solve(
         inset_top_pt: f64,
         inset_bottom_pt: f64,
         inset_left_pt: f64,
@@ -119,27 +89,5 @@ impl WordCellMarginsDxa {
             left_dxa: pt_to_dxa(left_pt),
             right_dxa: pt_to_dxa(right_pt),
         }
-    }
-
-    /// Solve `<w:tcMar>` from Typst's `inset` (in `pt`) and boolean cell flags.
-    #[inline]
-    pub fn solve(
-        inset_top_pt: f64,
-        inset_bottom_pt: f64,
-        inset_left_pt: f64,
-        inset_right_pt: f64,
-        is_styled_container: bool,
-        is_semantic_table: bool,
-        cell_has_list: bool,
-    ) -> Self {
-        let role =
-            TableCellRole::from_flags(is_styled_container, is_semantic_table, cell_has_list);
-        Self::solve_for_role(
-            inset_top_pt,
-            inset_bottom_pt,
-            inset_left_pt,
-            inset_right_pt,
-            role,
-        )
     }
 }

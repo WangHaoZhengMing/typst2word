@@ -64,68 +64,6 @@ impl EquationPdfMetricsIr {
             },
         }
     }
-
-    #[inline]
-    pub const fn context_font_size_pt(self) -> f64 {
-        match self {
-            Self::Unmeasured {
-                context_font_size_pt,
-                ..
-            }
-            | Self::Measured {
-                context_font_size_pt,
-                ..
-            } => context_font_size_pt,
-        }
-    }
-
-    #[inline]
-    pub const fn max_glyph_pt(self) -> Option<f64> {
-        match self {
-            Self::Unmeasured { max_glyph_pt, .. } | Self::Measured { max_glyph_pt, .. } => {
-                max_glyph_pt
-            }
-        }
-    }
-
-    #[inline]
-    pub const fn min_glyph_pt(self) -> Option<f64> {
-        match self {
-            Self::Unmeasured { min_glyph_pt, .. } | Self::Measured { min_glyph_pt, .. } => {
-                min_glyph_pt
-            }
-        }
-    }
-
-    #[inline]
-    pub const fn max_available_width_pt(self) -> Option<f64> {
-        match self {
-            Self::Unmeasured {
-                max_available_width_pt,
-                ..
-            }
-            | Self::Measured {
-                max_available_width_pt,
-                ..
-            } => max_available_width_pt,
-        }
-    }
-
-    #[inline]
-    pub const fn width_pt(self) -> Option<f64> {
-        match self {
-            Self::Measured { width_pt, .. } => Some(width_pt),
-            Self::Unmeasured { .. } => None,
-        }
-    }
-
-    #[inline]
-    pub const fn height_pt(self) -> Option<f64> {
-        match self {
-            Self::Measured { height_pt, .. } => Some(height_pt),
-            Self::Unmeasured { .. } => None,
-        }
-    }
 }
 
 /// PDF page and vertical Y-span measurement of a laid-out block element.

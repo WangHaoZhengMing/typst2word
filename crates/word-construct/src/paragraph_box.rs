@@ -36,7 +36,7 @@ pub enum ParagraphScaleProfile {
     ExplicitLinebreakTerminated,
     /// Large display-sized paragraph (`base_font_pt > default_font_pt * 1.4`, e.g. `19.8pt` title).
     DisplayTitle,
-    /// Medium heading/subtitle scale (`base_font_pt >= default_font_pt * 1.2`).
+    /// Medium heading/subtitle scale (`base_font_pt >= default_font_pt * 1.35`).
     SubHeading,
     /// Normal body paragraph.
     BodyText,
@@ -72,17 +72,6 @@ pub enum NextBlockSpacingContext {
     Other,
 }
 
-impl NextBlockSpacingContext {
-    #[inline]
-    pub const fn from_flags(next_is_tight_list: bool, next_is_paragraph: bool) -> Self {
-        match (next_is_tight_list, next_is_paragraph) {
-            (true, _) => Self::TightList,
-            (false, true) => Self::Paragraph,
-            (false, false) => Self::Other,
-        }
-    }
-}
-
 /// Complete spatial construct for a Word `<w:pPr>` paragraph box.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct WordParagraphConstruct {
@@ -113,9 +102,6 @@ impl WordParagraphConstruct {
             default_font_pt,
         ) {
             ParagraphScaleProfile::ExplicitLinebreakTerminated => 0.0,
-            // Large display-sized paragraphs (e.g. 1.8em = 19.8pt title lines):
-            // Word's 1.0x (`w:line="240"`) line box has built-in bottom leading of `~0.28 * S`,
-            // while Typst's inter-paragraph gap is `1.2 * S_default` + display ascent difference.
             ParagraphScaleProfile::DisplayTitle => spacing_pt + 2.0,
             ParagraphScaleProfile::SubHeading => (spacing_pt - 3.0).max(2.0),
             ParagraphScaleProfile::BodyText => (spacing_pt - leading_pt).max(1.5),
@@ -124,7 +110,7 @@ impl WordParagraphConstruct {
 
     /// Declaratively solve the required `space_after_pt` on block $A$ when followed on the same
     /// page/column by block $B$ (`next_context`) with measured Typst box gap `gap_pt = top_b - bottom_a`.
-    pub fn solve_inter_block_gap_for_context(
+    pub fn solve_inter_block_gap(
         gap_pt: f64,
         font_size_a_pt: f64,
         font_size_b_pt: f64,
@@ -142,10 +128,6 @@ impl WordParagraphConstruct {
             (NextBlockSpacingContext::Paragraph, a_large, b_large, g)
                 if (a_large || b_large) && g > 10.0 && g < 60.0 =>
             {
-                // Causal baseline-to-baseline equation between paragraph A (size S_A) and paragraph B (size S_B):
-                //   y_B - y_A = (0.320 + 1.380 * (M_A - 1)) * S_A + A_i + 1.060 * S_B
-                //             = 0.200 * S_A + gap_pt + 0.800 * S_B
-                // => A_i = gap_pt - (0.120 + 1.380 * (M_A - 1)) * S_A - 0.260 * S_B
                 let m_a = match a_large {
                     true => 1.0,
                     false => 285.0 / 240.0,
@@ -163,23 +145,6 @@ impl WordParagraphConstruct {
             }
             _ => InterBlockGapAction::KeepDefault,
         }
-    }
-
-    /// Legacy boolean-flag entry point delegating to [`Self::solve_inter_block_gap_for_context`].
-    #[inline]
-    pub fn solve_inter_block_gap_adjustment(
-        gap_pt: f64,
-        font_size_a_pt: f64,
-        font_size_b_pt: f64,
-        next_is_tight_list: bool,
-        next_is_paragraph: bool,
-    ) -> InterBlockGapAction {
-        Self::solve_inter_block_gap_for_context(
-            gap_pt,
-            font_size_a_pt,
-            font_size_b_pt,
-            NextBlockSpacingContext::from_flags(next_is_tight_list, next_is_paragraph),
-        )
     }
 }
 

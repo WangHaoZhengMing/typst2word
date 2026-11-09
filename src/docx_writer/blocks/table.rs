@@ -3,17 +3,17 @@
 use std::fmt::Write as _;
 
 use crate::construct::table::{
-    RowSplitPolicy, TableConstruct, TableWidthConstruct, solve_table_cell_paragraph_style,
+    RowSplitPolicy, TableConstruct, TableWidthConstruct, resolve_table_cell_role,
+    solve_table_cell_paragraph_style,
 };
 use crate::docx_writer::writer::DocxWriter;
-use crate::ir::{BlockNode, DashPatternIr, StrokeIr, TableIr, VAlignIr, VMergeState};
+use crate::ir::{
+    BlockNode, DashPatternIr, StrokeIr, TableIr, TableKindIr, VAlignIr, VMergeState,
+};
 use crate::units::pt_to_dxa;
 use crate::xml::escape_xml;
 
 impl<'a> DocxWriter<'a> {
-    // =========================================================================
-    // Table & Grid Rendering
-    // =========================================================================
     pub(crate) fn render_table(&mut self, table: &TableIr, out: &mut String) {
         self.render_table_with_keep_all_rows(table, false, out);
     }
@@ -25,8 +25,7 @@ impl<'a> DocxWriter<'a> {
         out: &mut String,
     ) {
         let construct = TableConstruct::solve(table);
-        let is_styled_container = construct.is_styled_container;
-        let is_semantic_table = construct.is_semantic_table;
+        let table_kind = construct.kind;
 
         out.push_str("<w:tbl><w:tblPr>");
         Self::render_table_jc(construct.align, out);
@@ -42,7 +41,7 @@ impl<'a> DocxWriter<'a> {
             }
         }
         if let Some(summary) = &table.summary
-            && !is_styled_container
+            && table_kind != TableKindIr::StyledContainer
         {
             let _ = write!(
                 out,
@@ -121,19 +120,9 @@ impl<'a> DocxWriter<'a> {
                     );
                 }
 
-                // Cell padding / margins (subtract Word's built-in ~2.2pt font box vertical leading
-                // from top/bottom cell padding so row heights match Typst's `inset` visually).
-                let cell_has_list = !is_styled_container
-                    && cell
-                        .blocks
-                        .iter()
-                        .any(|b| matches!(b, BlockNode::List { .. } | BlockNode::Enum { .. }));
-                let cell_role = word_construct::TableCellRole::from_flags(
-                    is_styled_container,
-                    is_semantic_table,
-                    cell_has_list,
-                );
-                let margins = word_construct::WordCellMarginsDxa::solve_for_role(
+                // Cell padding / margins
+                let cell_role = resolve_table_cell_role(table_kind, &cell.blocks);
+                let margins = word_construct::WordCellMarginsDxa::solve(
                     cell.inset.top,
                     cell.inset.bottom,
                     cell.inset.left,
@@ -171,8 +160,7 @@ impl<'a> DocxWriter<'a> {
                     self.render_table_cell_blocks(
                         &cell.blocks,
                         keep_rows_together,
-                        is_styled_container,
-                        is_semantic_table,
+                        table_kind,
                         &mut cell_xml,
                     );
                     if !cell_xml.contains("<w:p") || !cell_xml.ends_with("</w:p>") {
@@ -197,8 +185,7 @@ impl<'a> DocxWriter<'a> {
         &mut self,
         blocks: &[BlockNode],
         keep_next: bool,
-        is_styled_container: bool,
-        is_semantic_table: bool,
+        table_kind: TableKindIr,
         out: &mut String,
     ) {
         let len = blocks.len();
@@ -218,8 +205,7 @@ impl<'a> DocxWriter<'a> {
                     len,
                     prev_block,
                     next_block,
-                    is_styled_container,
-                    is_semantic_table,
+                    table_kind,
                 );
                 self.render_paragraph_with_keep_next(
                     content,
@@ -228,7 +214,7 @@ impl<'a> DocxWriter<'a> {
                     keep_next,
                     out,
                 );
-            } else if !is_styled_container && idx + 1 == len {
+            } else if table_kind != TableKindIr::StyledContainer && idx + 1 == len {
                 match block {
                     BlockNode::List {
                         items,

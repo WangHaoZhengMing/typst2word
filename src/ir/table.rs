@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{BlockNode, BordersIr, ColorHex, HAlignIr, SidesPtIr, VAlignIr};
 
-/// High-level semantic classification of a `TableIr`.
+/// Exhaustive semantic classification of a `TableIr`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum TableKindIr {
     /// Explicit `#table(...)` with semantic borders and cell insets.
@@ -14,23 +14,6 @@ pub enum TableKindIr {
     LayoutGrid,
     /// Bordered/filled `#block(...)` container modeled as a breakable 1x1 table.
     StyledContainer,
-}
-
-impl TableKindIr {
-    #[inline]
-    pub const fn is_semantic(self) -> bool {
-        matches!(self, Self::SemanticTable)
-    }
-
-    #[inline]
-    pub const fn is_layout_grid(self) -> bool {
-        matches!(self, Self::LayoutGrid)
-    }
-
-    #[inline]
-    pub const fn is_styled_container(self) -> bool {
-        matches!(self, Self::StyledContainer)
-    }
 }
 
 /// Table or Grid intermediate representation.
@@ -46,23 +29,6 @@ pub struct TableIr {
     #[serde(default)]
     pub left_indent_pt: f64,
     pub summary: Option<String>,
-}
-
-impl TableIr {
-    #[inline]
-    pub const fn is_semantic(&self) -> bool {
-        self.kind.is_semantic()
-    }
-
-    #[inline]
-    pub const fn is_layout_grid(&self) -> bool {
-        self.kind.is_layout_grid()
-    }
-
-    #[inline]
-    pub const fn is_styled_container(&self) -> bool {
-        self.kind.is_styled_container()
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

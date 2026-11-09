@@ -51,7 +51,7 @@ pub fn resolve_paragraph_style_spacing(style: &mut ParagraphStyleIr) {
         InterBlockFlowIr::Standard => {}
         InterBlockFlowIr::BeforeTightList { gap_pt } => {
             if let InterBlockGapAction::ZeroSpaceAfter =
-                WordParagraphConstruct::solve_inter_block_gap_for_context(
+                WordParagraphConstruct::solve_inter_block_gap(
                     gap_pt,
                     11.0,
                     11.0,
@@ -67,7 +67,7 @@ pub fn resolve_paragraph_style_spacing(style: &mut ParagraphStyleIr) {
             next_font_pt,
         } => {
             if let InterBlockGapAction::SetExactSpaceAfter(target_pt) =
-                WordParagraphConstruct::solve_inter_block_gap_for_context(
+                WordParagraphConstruct::solve_inter_block_gap(
                     gap_pt,
                     prev_font_pt,
                     next_font_pt,
@@ -83,7 +83,7 @@ pub fn resolve_paragraph_style_spacing(style: &mut ParagraphStyleIr) {
             next_font_pt,
         } => {
             if let InterBlockGapAction::SetExactSpaceAfter(target_pt) =
-                WordParagraphConstruct::solve_inter_block_gap_for_context(
+                WordParagraphConstruct::solve_inter_block_gap(
                     gap_pt,
                     prev_font_pt,
                     next_font_pt,

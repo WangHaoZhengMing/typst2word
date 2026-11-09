@@ -4,9 +4,7 @@ mod item;
 
 use std::fmt::Write as _;
 
-use crate::construct::list::{
-    ListSequenceSource, is_standard_decimal_marker, solve_list_sequence_construct,
-};
+use crate::construct::list::{ListSequenceSource, solve_list_sequence_construct};
 use crate::docx_writer::writer::DocxWriter;
 use crate::ir::{BlockNode, EnumItemIr, InlineNode, ListItemIr, TermItemIr, TextRunIr};
 
@@ -149,10 +147,5 @@ impl<'a> DocxWriter<'a> {
                 self.render_blocks(&item.description, out);
             }
         }
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn is_standard_decimal_marker(marker: &str) -> bool {
-        is_standard_decimal_marker(marker)
     }
 }

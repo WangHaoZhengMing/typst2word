@@ -207,7 +207,7 @@ mod tests {
 
     #[test]
     fn test_single_block_list_item_preserves_explicit_space_after() {
-        let layout = WordListItemLayout::solve_from_input(ListItemLayoutInput {
+        let layout = WordListItemLayout::solve(ListItemLayoutInput {
             ilvl: 0,
             tight: false,
             indent_pt: 14.17,
@@ -263,12 +263,11 @@ mod tests {
 
     #[test]
     fn test_inter_block_gap_before_large_display_paragraph() {
-        let action = WordParagraphConstruct::solve_inter_block_gap_adjustment(
+        let action = WordParagraphConstruct::solve_inter_block_gap(
             19.5,
             11.0,
             19.8,
-            false,
-            true,
+            NextBlockSpacingContext::Paragraph,
         );
         match action {
             InterBlockGapAction::SetExactSpaceAfter(pt) => {

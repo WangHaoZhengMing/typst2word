@@ -4,8 +4,10 @@
 //! `<w:tcMar>` cell padding via [`word_construct::WordCellMarginsDxa`], cell-internal
 //! paragraph style overrides, and child table width/indent adjustments inside list items.
 
+use word_construct::TableCellRole;
+
 use crate::construct::paragraph::content_has_cjk_chars;
-use crate::ir::{BlockNode, HAlignIr, InlineNode, ParagraphStyleIr, TableIr};
+use crate::ir::{BlockNode, HAlignIr, InlineNode, ParagraphStyleIr, TableIr, TableKindIr};
 use crate::units::pt_to_dxa;
 
 /// Exhaustive table width specification for `<w:tblW>`.
@@ -38,8 +40,7 @@ pub struct TableRowConstruct {
 /// Solved top-level construct for a `<w:tbl>` element.
 #[derive(Debug, Clone)]
 pub struct TableConstruct {
-    pub is_styled_container: bool,
-    pub is_semantic_table: bool,
+    pub kind: TableKindIr,
     pub align: HAlignIr,
     pub indent_dxa: Option<i64>,
     pub width: TableWidthConstruct,
@@ -49,8 +50,7 @@ pub struct TableConstruct {
 
 impl TableConstruct {
     pub fn solve(table: &TableIr) -> Self {
-        let is_styled_container = table.is_styled_container();
-        let is_semantic_table = table.is_semantic();
+        let kind = table.kind;
 
         let indent_dxa = (table.left_indent_pt > 0.5 && table.align == HAlignIr::Left).then(|| {
             let first_cell_left_inset = table
@@ -82,7 +82,7 @@ impl TableConstruct {
             .iter()
             .enumerate()
             .map(|(row_idx, row)| {
-                let next_row_is_complex_layout = !is_semantic_table
+                let next_row_is_complex_layout = kind != TableKindIr::SemanticTable
                     && table.rows.get(row_idx + 1).is_some_and(|next_r| {
                         next_r.cells.iter().any(|c| {
                             c.blocks.len() > 1
@@ -91,23 +91,24 @@ impl TableConstruct {
                                     .any(|b| !matches!(b, BlockNode::Paragraph { .. }))
                         })
                     });
-                let row_is_complex_layout = !is_semantic_table
+                let row_is_complex_layout = kind != TableKindIr::SemanticTable
                     && row.cells.iter().any(|c| {
                         c.blocks.len() > 2
                             || c.blocks.iter().any(|b| {
                                 matches!(b, BlockNode::Table(_) | BlockNode::Figure { .. })
                             })
                     });
-                let keep_rows_together = !is_styled_container
+                let keep_rows_together = kind != TableKindIr::StyledContainer
                     && !next_row_is_complex_layout
                     && num_rows <= 15
                     && row_idx + 1 < num_rows;
-                let split_policy =
-                    if (is_styled_container && row.height_pt.is_none()) || row_is_complex_layout {
-                        RowSplitPolicy::AllowSplit
-                    } else {
-                        RowSplitPolicy::CantSplit
-                    };
+                let split_policy = if (kind == TableKindIr::StyledContainer && row.height_pt.is_none())
+                    || row_is_complex_layout
+                {
+                    RowSplitPolicy::AllowSplit
+                } else {
+                    RowSplitPolicy::CantSplit
+                };
                 let min_height_dxa = row
                     .height_pt
                     .map(pt_to_dxa)
@@ -123,8 +124,7 @@ impl TableConstruct {
             .collect();
 
         Self {
-            is_styled_container,
-            is_semantic_table,
+            kind,
             align: table.align,
             indent_dxa,
             width,
@@ -134,8 +134,25 @@ impl TableConstruct {
     }
 }
 
+/// Map [`TableKindIr`] and cell content to [`TableCellRole`].
+#[inline]
+pub fn resolve_table_cell_role(kind: TableKindIr, cell_blocks: &[BlockNode]) -> TableCellRole {
+    match kind {
+        TableKindIr::StyledContainer => TableCellRole::StyledContainer,
+        TableKindIr::SemanticTable => TableCellRole::SemanticTable {
+            has_list: cell_blocks
+                .iter()
+                .any(|b| matches!(b, BlockNode::List { .. } | BlockNode::Enum { .. })),
+        },
+        TableKindIr::LayoutGrid => TableCellRole::LayoutGrid {
+            has_list: cell_blocks
+                .iter()
+                .any(|b| matches!(b, BlockNode::List { .. } | BlockNode::Enum { .. })),
+        },
+    }
+}
+
 /// Solve `<w:pPr>` style adjustments for a `Paragraph` at `idx` inside a table cell's `blocks` slice.
-#[allow(clippy::too_many_arguments)]
 pub fn solve_table_cell_paragraph_style(
     content: &[InlineNode],
     style: &ParagraphStyleIr,
@@ -143,8 +160,7 @@ pub fn solve_table_cell_paragraph_style(
     len: usize,
     prev_block: Option<&BlockNode>,
     next_block: Option<&BlockNode>,
-    is_styled_container: bool,
-    is_semantic_table: bool,
+    table_kind: TableKindIr,
 ) -> ParagraphStyleIr {
     let mut cell_style = style.clone();
     if idx == 0 {
@@ -154,7 +170,7 @@ pub fn solve_table_cell_paragraph_style(
     }
     if idx + 1 == len {
         cell_style.space_after_pt = 0.0;
-    } else if !is_styled_container {
+    } else if table_kind != TableKindIr::StyledContainer {
         cell_style.space_after_pt = cell_style.space_after_pt.min(2.0);
     } else {
         match next_block {
@@ -167,21 +183,27 @@ pub fn solve_table_cell_paragraph_style(
             _ => {}
         }
     }
-    if !is_styled_container {
-        let char_cnt: usize = content
-            .iter()
-            .map(|inl| match inl {
-                InlineNode::Text(r) => r.text.chars().count(),
-                _ => 1,
-            })
-            .sum();
-        if is_semantic_table && char_cnt > 12 {
-            if content_has_cjk_chars(content) {
-                cell_style.line_spacing_pt = Some(4.5);
+    match table_kind {
+        TableKindIr::StyledContainer => {}
+        TableKindIr::SemanticTable => {
+            let char_cnt: usize = content
+                .iter()
+                .map(|inl| match inl {
+                    InlineNode::Text(r) => r.text.chars().count(),
+                    _ => 1,
+                })
+                .sum();
+            if char_cnt > 12 {
+                if content_has_cjk_chars(content) {
+                    cell_style.line_spacing_pt = Some(4.5);
+                } else {
+                    cell_style.line_spacing_pt = cell_style.line_spacing_pt.or(Some(6.0));
+                }
             } else {
-                cell_style.line_spacing_pt = cell_style.line_spacing_pt.or(Some(6.0));
+                cell_style.line_spacing_pt = Some(2.0);
             }
-        } else {
+        }
+        TableKindIr::LayoutGrid => {
             cell_style.line_spacing_pt = Some(2.0);
         }
     }
@@ -197,12 +219,12 @@ pub fn solve_list_item_child_table(
 ) -> TableIr {
     let mut adjusted = tbl.clone();
     let target_left_pt = indent_left_dxa as f64 / 20.0;
-    if !adjusted.is_semantic() && adjusted.align == HAlignIr::Center {
+    if adjusted.kind != TableKindIr::SemanticTable && adjusted.align == HAlignIr::Center {
         let avail_w_pt = ((content_width_dxa as f64 / 20.0) - target_left_pt).max(100.0);
         let total_col_w: f64 = adjusted.col_widths_pt.iter().sum();
         adjusted.align = HAlignIr::Left;
         adjusted.left_indent_pt = target_left_pt + ((avail_w_pt - total_col_w).max(0.0) * 0.5);
-    } else if !adjusted.is_semantic() && adjusted.align == HAlignIr::Left {
+    } else if adjusted.kind != TableKindIr::SemanticTable && adjusted.align == HAlignIr::Left {
         adjusted.left_indent_pt = target_left_pt;
         let avail_w_pt = ((content_width_dxa as f64 / 20.0) - target_left_pt).max(100.0);
         let total_col_w: f64 = adjusted.col_widths_pt.iter().sum();

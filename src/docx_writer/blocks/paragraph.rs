@@ -2,10 +2,7 @@
 
 use std::fmt::Write as _;
 
-use crate::construct::paragraph::{
-    ParagraphConstruct, ParagraphIndentationConstruct, compute_line_spacing_dxa,
-    is_only_inline_equation, paragraph_mark_rpr_sz_half_pt,
-};
+use crate::construct::paragraph::{ParagraphConstruct, ParagraphIndentationConstruct};
 use crate::docx_writer::writer::DocxWriter;
 use crate::ir::{InlineNode, ParagraphStyleIr};
 
@@ -101,25 +98,5 @@ impl<'a> DocxWriter<'a> {
             Self::emit_bookmark_end(id, out);
         }
         out.push_str("</w:p>");
-    }
-
-    pub(crate) fn is_only_inline_equation(content: &[InlineNode]) -> bool {
-        is_only_inline_equation(content)
-    }
-
-    pub(crate) fn render_paragraph_mark_rpr(content: &[InlineNode], out: &mut String) {
-        if let Some(sz_val) = paragraph_mark_rpr_sz_half_pt(content) {
-            let _ = write!(
-                out,
-                r#"<w:rPr><w:sz w:val="{sz_val}"/><w:szCs w:val="{sz_val}"/></w:rPr>"#
-            );
-        }
-    }
-
-    pub(crate) fn compute_line_spacing_dxa(
-        content: &[InlineNode],
-        line_spacing_pt: Option<f64>,
-    ) -> i64 {
-        compute_line_spacing_dxa(content, line_spacing_pt)
     }
 }

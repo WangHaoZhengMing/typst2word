@@ -3,7 +3,7 @@
 
 use std::fmt::Write as _;
 
-use crate::ir::{BlockNode, DocumentIr, HAlignIr, ImageFormatIr, ImageIr, InlineNode};
+use crate::ir::{BlockNode, DocumentIr, HAlignIr, ImageFormatIr, ImageIr};
 use crate::units::pt_to_dxa;
 
 pub(crate) struct MediaAsset {
@@ -83,12 +83,6 @@ impl<'a> DocxWriter<'a> {
             full_w_pt
         };
         pt_to_dxa(w_pt)
-    }
-
-    pub(crate) fn has_large_horizontal_space(inlines: &[InlineNode]) -> bool {
-        inlines
-            .iter()
-            .any(|inl| matches!(inl, InlineNode::HorizontalSpace { width_pt } if *width_pt >= 36.0))
     }
 
     pub(crate) fn alloc_rel_id(&mut self) -> String {

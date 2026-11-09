@@ -4,7 +4,9 @@
 //! exhaustive enums (`ListSequenceSource`, `ListMarkerConstruct`) and solves per-item
 //! indentation, hanging markers, and vertical spacing via [`word_construct::WordListItemLayout`].
 
-use crate::ir::{BlockNode, EnumItemIr, ListItemIr};
+use word_construct::{EnumMarkerWidthKind, FollowingBlockKind, ListItemLayoutInput, WordListItemLayout};
+
+use crate::ir::{BlockNode, EnumItemIr, ListItemIr, TableKindIr};
 use crate::units::pt_to_dxa;
 
 /// Type-safe representation of a list/enum item's marker style in Word.
@@ -35,7 +37,7 @@ pub struct ListItemConstruct<'a> {
     pub num_id: usize,
     pub ilvl: usize,
     pub marker: ListMarkerConstruct<'a>,
-    pub is_single_digit_enum_item: bool,
+    pub marker_width: EnumMarkerWidthKind,
     pub tight: bool,
     pub item_gap_dxa: i64,
     pub item_end_after_dxa: i64,
@@ -48,38 +50,32 @@ pub struct ListItemConstruct<'a> {
 }
 
 impl<'a> ListItemConstruct<'a> {
-    /// Solve [`word_construct::WordListItemLayout`] for this item's block slice.
-    pub fn solve_item_layout(&self) -> word_construct::WordListItemLayout {
+    /// Solve [`WordListItemLayout`] for this item's block slice.
+    pub fn solve_item_layout(&self) -> WordListItemLayout {
         let blocks = self.blocks;
-        let followed_by_grid_table = matches!(
-            blocks.get(1),
-            Some(BlockNode::Table(t)) if !t.is_semantic()
-        );
-        let followed_by_tight_list = matches!(
-            blocks.get(1),
-            Some(BlockNode::List { tight: true, .. } | BlockNode::Enum { tight: true, .. })
-        );
-        let followed_by_paragraph = matches!(blocks.get(1), Some(BlockNode::Paragraph { .. }));
         let (first_para_space_after_pt, first_para_line_spacing_pt) = match blocks.first() {
             Some(BlockNode::Paragraph { style, .. }) => {
                 (Some(style.space_after_pt), style.line_spacing_pt)
             }
             _ => (None, None),
         };
-        let following_block = word_construct::FollowingBlockKind::from_flags(
-            blocks.len(),
-            followed_by_grid_table,
-            followed_by_tight_list,
-            followed_by_paragraph,
-        );
-        word_construct::WordListItemLayout::solve_from_input(word_construct::ListItemLayoutInput {
+        let following_block = match blocks.get(1) {
+            None => FollowingBlockKind::None,
+            Some(BlockNode::Table(t)) if t.kind != TableKindIr::SemanticTable => {
+                FollowingBlockKind::GridTable
+            }
+            Some(BlockNode::List { tight: true, .. } | BlockNode::Enum { tight: true, .. }) => {
+                FollowingBlockKind::TightList
+            }
+            Some(BlockNode::Paragraph { .. }) => FollowingBlockKind::Paragraph,
+            Some(_) => FollowingBlockKind::Other,
+        };
+        WordListItemLayout::solve(ListItemLayoutInput {
             ilvl: self.ilvl,
             tight: self.tight,
             indent_pt: self.indent_pt,
             hanging_pt: self.hanging_pt,
-            marker_width: word_construct::EnumMarkerWidthKind::from_bool(
-                self.is_single_digit_enum_item,
-            ),
+            marker_width: self.marker_width,
             item_gap_dxa: self.item_gap_dxa,
             item_end_after_dxa: self.item_end_after_dxa,
             before_dxa: self.before_dxa,
@@ -115,8 +111,12 @@ pub fn solve_list_sequence_construct<'a>(
                 .map(|(idx, item)| {
                     let is_last_in_list = idx + 1 == num_items;
                     let is_last_top = level == 0 && is_last_in_list;
-                    let item_end_after_dxa =
-                        resolve_item_end_after_dxa(is_last_in_list, is_last_top, item_gap_dxa, trailing_after_dxa);
+                    let item_end_after_dxa = resolve_item_end_after_dxa(
+                        is_last_in_list,
+                        is_last_top,
+                        item_gap_dxa,
+                        trailing_after_dxa,
+                    );
                     let prev_ended_with_table =
                         idx > 0 && matches!(items[idx - 1].blocks.last(), Some(BlockNode::Table(_)));
                     let before_dxa = if prev_ended_with_table && item_gap_dxa > 0 {
@@ -134,7 +134,7 @@ pub fn solve_list_sequence_construct<'a>(
                         num_id: 1,
                         ilvl,
                         marker,
-                        is_single_digit_enum_item: false,
+                        marker_width: EnumMarkerWidthKind::Standard,
                         tight,
                         item_gap_dxa,
                         item_end_after_dxa,
@@ -160,8 +160,12 @@ pub fn solve_list_sequence_construct<'a>(
                 .map(|(idx, item)| {
                     let is_last_in_list = idx + 1 == num_items;
                     let is_last_top = level == 0 && is_last_in_list;
-                    let item_end_after_dxa =
-                        resolve_item_end_after_dxa(is_last_in_list, is_last_top, item_gap_dxa, trailing_after_dxa);
+                    let item_end_after_dxa = resolve_item_end_after_dxa(
+                        is_last_in_list,
+                        is_last_top,
+                        item_gap_dxa,
+                        trailing_after_dxa,
+                    );
                     let prev_ended_with_table =
                         idx > 0 && matches!(items[idx - 1].blocks.last(), Some(BlockNode::Table(_)));
                     let before_dxa = if prev_ended_with_table && item_gap_dxa > 0 {
@@ -171,18 +175,22 @@ pub fn solve_list_sequence_construct<'a>(
                     } else {
                         0
                     };
-                    let marker = if is_standard_decimal_marker(&item.marker_text) {
+                    let is_std_decimal = is_standard_decimal_marker(&item.marker_text);
+                    let marker = if is_std_decimal {
                         ListMarkerConstruct::NumberedLevel(ilvl)
                     } else {
                         ListMarkerConstruct::CustomPrefix(item.marker_text.as_str())
                     };
-                    let is_single_digit_enum_item = item.marker_text.trim().len() == 2
-                        && is_standard_decimal_marker(&item.marker_text);
+                    let marker_width = if is_std_decimal && item.marker_text.trim().len() == 2 {
+                        EnumMarkerWidthKind::SingleDigitDecimal
+                    } else {
+                        EnumMarkerWidthKind::Standard
+                    };
                     ListItemConstruct {
                         num_id,
                         ilvl,
                         marker,
-                        is_single_digit_enum_item,
+                        marker_width,
                         tight,
                         item_gap_dxa,
                         item_end_after_dxa,

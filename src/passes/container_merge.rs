@@ -2,7 +2,7 @@
 //! Merges cross-page / cross-column split styled containers (`TableKindIr::StyledContainer`),
 //! stitches split lists/enums across container boundaries, and cleans redundant `PageBreak` blocks.
 
-use crate::ir::{BlockNode, DocumentIr, TableRowIr};
+use crate::ir::{BlockNode, DocumentIr, TableKindIr, TableRowIr};
 use crate::passes::visit_document_block_lists_mut;
 
 /// Run Pass 4 (`ContainerAndPageBreakMerge`) on `doc`.
@@ -18,8 +18,8 @@ pub fn merge_split_styled_containers(blocks: &mut Vec<BlockNode>) {
     while i < blocks.len() {
         let can_merge = match (&blocks[i - 1], &blocks[i]) {
             (BlockNode::Table(a), BlockNode::Table(b)) => {
-                a.is_styled_container()
-                    && b.is_styled_container()
+                a.kind == TableKindIr::StyledContainer
+                    && b.kind == TableKindIr::StyledContainer
                     && a.rows.len() == 1
                     && b.rows.len() == 1
                     && a.rows[0].cells.len() == 1

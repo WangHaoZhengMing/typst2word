@@ -4,7 +4,7 @@
 //! [`word_construct::WordEquationBox`] and solves the block equation container construct
 //! ([`EquationBlockConstruct`]: centered display paragraph vs 3-column borderless numbered row).
 
-use crate::ir::{EquationIr, MathFracStyleIr, MathNodeIr};
+use crate::ir::{EquationIr, EquationPdfMetricsIr, MathFracStyleIr, MathNodeIr};
 use crate::units::pt_to_dxa;
 
 /// Exhaustive block equation container construct in WordprocessingML.
@@ -71,15 +71,51 @@ pub struct MathAstStructure {
 /// Solve [`word_construct::WordEquationBox`] for an [`EquationIr`] from its `EquationPdfMetricsIr` and AST structure.
 pub fn solve_word_equation_box(eq: &EquationIr) -> word_construct::WordEquationBox {
     let ast_metrics = analyze_math_slice(&eq.body, eq.is_block);
-    let pdf = eq.pdf_metrics;
+    let (
+        typst_width_pt,
+        typst_height_pt,
+        typst_max_glyph_pt,
+        typst_min_glyph_pt,
+        context_font_size_pt,
+        max_available_width_pt,
+    ) = match eq.pdf_metrics {
+        EquationPdfMetricsIr::Unmeasured {
+            context_font_size_pt,
+            max_glyph_pt,
+            min_glyph_pt,
+            max_available_width_pt,
+        } => (
+            None,
+            None,
+            max_glyph_pt,
+            min_glyph_pt,
+            context_font_size_pt,
+            max_available_width_pt,
+        ),
+        EquationPdfMetricsIr::Measured {
+            context_font_size_pt,
+            width_pt,
+            height_pt,
+            max_glyph_pt,
+            min_glyph_pt,
+            max_available_width_pt,
+        } => (
+            Some(width_pt),
+            Some(height_pt),
+            max_glyph_pt,
+            min_glyph_pt,
+            context_font_size_pt,
+            max_available_width_pt,
+        ),
+    };
     word_construct::WordEquationBox::solve(word_construct::EquationBoxInput {
         is_block: eq.is_block,
-        typst_width_pt: pdf.width_pt(),
-        typst_height_pt: pdf.height_pt(),
-        typst_max_glyph_pt: pdf.max_glyph_pt(),
-        typst_min_glyph_pt: pdf.min_glyph_pt(),
-        context_font_size_pt: pdf.context_font_size_pt(),
-        max_available_width_pt: pdf.max_available_width_pt(),
+        typst_width_pt,
+        typst_height_pt,
+        typst_max_glyph_pt,
+        typst_min_glyph_pt,
+        context_font_size_pt,
+        max_available_width_pt,
         row_count: ast_metrics.row_count,
         max_fraction_depth: ast_metrics.max_fraction_depth,
         has_tall_construct: ast_metrics.has_tall_construct,

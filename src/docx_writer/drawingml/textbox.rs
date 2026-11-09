@@ -59,7 +59,7 @@ pub(crate) fn render_inline_nodes_as_txbx_para(inlines: &[InlineNode], align: HA
         HAlignIr::Right => "right",
         HAlignIr::Justify => "both",
     };
-    let line_dxa = crate::docx_writer::writer::DocxWriter::compute_line_spacing_dxa(inlines, None);
+    let line_dxa = crate::construct::paragraph::compute_line_spacing_dxa(inlines, None);
     let mut runs_xml = String::new();
     render_inline_nodes_to_wml(inlines, &mut runs_xml);
     format!(

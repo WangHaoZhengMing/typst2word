@@ -18,14 +18,14 @@ impl<'a> ExtractorContext<'a> {
     ) -> BlockNode {
         let mut body_nodes = Vec::new();
         let mut caption_nodes_opt = None;
-        let mut caption_top = false;
+        let mut caption_pos = CaptionPositionIr::Bottom;
         let mut saw_body = false;
 
         Self::split_figure_body_and_caption(
             children,
             &mut body_nodes,
             &mut caption_nodes_opt,
-            &mut caption_top,
+            &mut caption_pos,
             &mut saw_body,
         );
 
@@ -41,7 +41,7 @@ impl<'a> ExtractorContext<'a> {
         BlockNode::Figure {
             body,
             caption: caption_inlines,
-            caption_pos: CaptionPositionIr::from_top_bool(caption_top),
+            caption_pos,
             kind,
             bookmark,
         }
@@ -51,7 +51,7 @@ impl<'a> ExtractorContext<'a> {
         nodes: &[TreeNode],
         body_out: &mut Vec<TreeNode>,
         caption_out: &mut Option<Vec<TreeNode>>,
-        caption_top: &mut bool,
+        caption_pos: &mut CaptionPositionIr,
         saw_body: &mut bool,
     ) {
         for node in nodes {
@@ -64,7 +64,7 @@ impl<'a> ExtractorContext<'a> {
                 } => {
                     if elem.is::<FigureCaption>() {
                         if !*saw_body {
-                            *caption_top = true;
+                            *caption_pos = CaptionPositionIr::Top;
                         }
                         *caption_out = Some(children.clone());
                     } else if elem.is::<FigureElem>() {
@@ -76,7 +76,7 @@ impl<'a> ExtractorContext<'a> {
                             children,
                             &mut filtered_children,
                             caption_out,
-                            caption_top,
+                            caption_pos,
                             saw_body,
                         );
                         *saw_body = true;
@@ -98,7 +98,7 @@ impl<'a> ExtractorContext<'a> {
                         children,
                         &mut filtered_children,
                         caption_out,
-                        caption_top,
+                        caption_pos,
                         saw_body,
                     );
                     if !filtered_children.is_empty() {

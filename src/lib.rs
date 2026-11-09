@@ -4,20 +4,14 @@
 //! 1. [`compiler`]: Self-contained Typst 0.15.1 compiler & query engine (`TypstWorld`,
 //!    `CUSTOM_ROUTINES`, `CompiledTypstDocument`) that preserves pre-layout `Content`
 //!    semantics, introspection `Introspector` queries, and laid-out `PagedDocument`
-//!    `Frame` tags (`Tag::Start` / `Tag::End`) including custom realization locations
-//!    for native shapes, transforms, and HTML elements.
-//! 2. [`ir`]: Unified Semantic + Visual Intermediate Representation (`DocumentIr`).
-//! 3. [`extract`]: Combines introspection queries, `CellGrid` table metadata, and
-//!    laid-out `Frame` trees to extract headings, paragraphs, inline styles, lists,
-//!    enums, terms, tables/grids, quotes, syntax-highlighted code blocks, figures,
-//!    outlines, bibliographies, footnotes, hyperlinks, cross-references, native shapes,
-//!    OMML math equations, CeTZ vector drawings, and unsupported element placeholders.
-//! 4. [`math`]: Converts Typst Math `Content` AST into native Word Office Math (`<m:oMath>`).
-//! 5. [`docx`]: Packages `DocumentIr` into a standards-compliant `.docx` archive, including
-//!    native DrawingML shapes and CeTZ canvases (`<wps:wsp>` and `<wpg:wgp>`).
-//!
-//! Each Typst object family has a mirrored file on both sides of the IR, e.g.
-//! `extract/elements/table.rs` -> `ir/table.rs` -> `docx/blocks/table.rs`.
+//!    `Frame` tags (`Tag::Start` / `Tag::End`).
+//! 2. [`ir`]: Exhaustive enum-driven Semantic + PDF Metrics Intermediate Representation (`DocumentIr`).
+//! 3. [`extract`]: Pure Typst semantic & PDF physical layout extractor (zero Word-specific logic).
+//! 4. [`passes`]: 5-stage sequential pre-processing pipeline (`FontRecognition`, `InlineCoalescing`,
+//!    `LanguageAndScriptRecognition`, `ContainerAndPageBreakMerge`, `InterBlockFlowAndSpacing`).
+//! 5. [`construct`]: Per-object Word Construct builders (`paragraph`, `heading`, `list`, `table`,
+//!    `equation`, `figure`, `code`, `text_run`, `shape`, `cetz`) encapsulating all Word layout math.
+//! 6. [`docx_writer`]: Pure OpenXML & ZIP package writer (`DocxWriter`).
 //!
 //! Shared helpers: [`xml`] (escaping), [`units`] (pt -> dxa / EMU), [`color`] (paint -> hex).
 
@@ -25,7 +19,6 @@ pub mod color;
 pub mod compiler;
 pub mod construct;
 pub mod docx_writer;
-pub use docx_writer as docx;
 pub mod extract;
 pub mod ir;
 pub mod passes;
