@@ -12,27 +12,29 @@ use crate::xml::escape_xml;
 
 impl<'a> DocxWriter<'a> {
     pub(crate) fn build(&mut self) -> Result<Vec<u8>, String> {
-        if !self.ir.page_setup.header.is_empty() {
-            self.header_rel_id = Some(self.alloc_rel_id());
+        let setups: Vec<_> = std::iter::once(self.ir.page_setup.clone())
+            .chain(self.ir.sections.iter().map(|s| s.page_setup.clone())).collect();
+        for setup in &setups {
+            // An explicit empty part prevents inheriting the previous section's furniture.
+            let header = if setups.len() > 1 || !setup.header.is_empty() { Some(self.alloc_rel_id()) } else { None };
+            let footer = if setups.len() > 1 || !setup.footer.is_empty() { Some(self.alloc_rel_id()) } else { None };
+            self.section_furniture.push((header, footer));
         }
-        if !self.ir.page_setup.footer.is_empty() {
-            self.footer_rel_id = Some(self.alloc_rel_id());
-        }
-
-        // Render main document body XML first so all media assets, hyperlinks, and footnotes are registered.
         let document_xml = self.render_document_xml();
-        self.active_part = "header1".into();
-        let header_xml = if self.header_rel_id.is_some() {
-            Some(self.render_header_or_footer_xml(&self.ir.page_setup.header.clone(), "hdr"))
-        } else {
-            None
-        };
-        self.active_part = "footer1".into();
-        let footer_xml = if self.footer_rel_id.is_some() {
-            Some(self.render_header_or_footer_xml(&self.ir.page_setup.footer.clone(), "ftr"))
-        } else {
-            None
-        };
+        let mut furniture_xml = Vec::new();
+        for (index, setup) in setups.iter().enumerate() {
+            self.current_setup = setup.clone();
+            for (tag, blocks, present) in [
+                ("hdr", &setup.header, self.section_furniture[index].0.is_some()),
+                ("ftr", &setup.footer, self.section_furniture[index].1.is_some()),
+            ] {
+                if present {
+                    let part = format!("{}{}", if tag == "hdr" { "header" } else { "footer" }, index + 1);
+                    self.active_part = part.clone();
+                    furniture_xml.push((part, self.render_header_or_footer_xml(blocks, tag)));
+                }
+            }
+        }
         self.active_part = "footnotes".into();
         let footnotes_xml = self.render_footnotes_xml();
         let font_table_xml = Self::render_font_table_xml();
@@ -68,14 +70,10 @@ impl<'a> DocxWriter<'a> {
         Self::zip_write_str(&mut zip, "word/footnotes.xml", &footnotes_xml, options)?;
         Self::zip_write_str(&mut zip, "word/fontTable.xml", &font_table_xml, options)?;
 
-        if let Some(hxml) = &header_xml {
-            Self::zip_write_str(&mut zip, "word/header1.xml", hxml, options)?;
+        for (part, xml) in &furniture_xml {
+            Self::zip_write_str(&mut zip, &format!("word/{part}.xml"), xml, options)?;
         }
-        if let Some(fxml) = &footer_xml {
-            Self::zip_write_str(&mut zip, "word/footer1.xml", fxml, options)?;
-        }
-
-        for part in ["header1", "footer1", "footnotes"] {
+        for part in furniture_xml.iter().map(|(part, _)| part.as_str()).chain(std::iter::once("footnotes")) {
             let rels = self.render_part_rels_xml(part);
             Self::zip_write_str(&mut zip, &format!("word/_rels/{part}.xml.rels"), &rels, options)?;
         }
@@ -128,15 +126,12 @@ impl<'a> DocxWriter<'a> {
   <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
   <Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>"#,
         );
-        if self.header_rel_id.is_some() {
-            out.push_str(
-                r#"<Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/>"#,
-            );
-        }
-        if self.footer_rel_id.is_some() {
-            out.push_str(
-                r#"<Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>"#,
-            );
+        for (index, (header, footer)) in self.section_furniture.iter().enumerate() {
+            for (kind, present) in [("header", header.is_some()), ("footer", footer.is_some())] {
+                if present {
+                    let _ = write!(out, r#"<Override PartName="/word/{kind}{}.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.{kind}+xml"/>"#, index + 1);
+                }
+            }
         }
         out.push_str("</Types>");
         out
@@ -164,17 +159,12 @@ impl<'a> DocxWriter<'a> {
   <Relationship Id="rId5" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/fontTable" Target="fontTable.xml"/>"#,
         );
 
-        if let Some(hid) = &self.header_rel_id {
-            let _ = write!(
-                out,
-                r#"<Relationship Id="{hid}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/>"#
-            );
-        }
-        if let Some(fid) = &self.footer_rel_id {
-            let _ = write!(
-                out,
-                r#"<Relationship Id="{fid}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/>"#
-            );
+        for (index, (header, footer)) in self.section_furniture.iter().enumerate() {
+            for (kind, id) in [("header", header), ("footer", footer)] {
+                if let Some(id) = id {
+                    let _ = write!(out, r#"<Relationship Id="{id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/{kind}" Target="{kind}{}.xml"/>"#, index + 1);
+                }
+            }
         }
         }
         for hl in self.hyperlinks.iter().filter(|h| h.part == part) {

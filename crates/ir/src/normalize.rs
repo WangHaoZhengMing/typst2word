@@ -13,6 +13,7 @@ pub fn normalize_document_ir(doc: &mut DocumentIr) {
     visit_document_inline_lists_mut(doc, &mut coalesce_adjacent_text_runs);
     visit_document_block_lists_mut(doc, &mut merge_split_styled_containers);
     clean_redundant_pagebreaks(&mut doc.blocks);
+    for section in &mut doc.sections { clean_redundant_pagebreaks(&mut section.blocks); }
 }
 
 /// Merge adjacent `InlineNode::Text` runs that share identical formatting and font family.
@@ -174,6 +175,11 @@ where
     visit_block_list_mut(&mut doc.page_setup.header, f);
     visit_block_list_mut(&mut doc.page_setup.footer, f);
     visit_block_list_mut(&mut doc.blocks, f);
+    for section in &mut doc.sections {
+        visit_block_list_mut(&mut section.page_setup.header, f);
+        visit_block_list_mut(&mut section.page_setup.footer, f);
+        visit_block_list_mut(&mut section.blocks, f);
+    }
 }
 
 /// Recursively visit a single `Vec<BlockNode>` and all nested `Vec<BlockNode>` lists inside it.

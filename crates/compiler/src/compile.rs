@@ -201,7 +201,27 @@ fn custom_realize<'a>(
         content
     };
 
-    typst_realize::realize(kind, engine, locator, arenas, target_content, styles)
+    let is_document = matches!(kind, RealizationKind::Document { .. });
+    let pairs = typst_realize::realize(kind, engine, locator, arenas, target_content, styles)?;
+    if !is_document { return Ok(pairs); }
+    // Keep resolved page styles alongside root flow items. These zero-size tags
+    // survive layout without changing line breaking, including generated content.
+    use typst::introspection::{Tag, TagElem, TagFlags};
+    let mut tagged = Vec::new();
+    for (item, chain) in pairs {
+        if !item.is::<TagElem>() && !item.is::<typst::layout::PagebreakElem>() {
+            let mut marker = StyledElem::new(Content::empty(), chain.to_map()).pack();
+            marker.set_label(Label::new(typst_utils::PicoStr::intern("__typst2word_page_styles")).expect("nonempty internal label"));
+            let key = typst_utils::hash128(&(item, &marker));
+            let loc = locator.next_location(engine, key, item.span());
+            marker.set_location(loc);
+            let flags = TagFlags { introspectable: false, tagged: true };
+            tagged.push((&*arenas.content.alloc(TagElem::packed(Tag::Start(marker, flags))), chain));
+            tagged.push((&*arenas.content.alloc(TagElem::packed(Tag::End(loc, key, flags))), chain));
+        }
+        tagged.push((item, chain));
+    }
+    Ok(tagged)
 }
 
 /// Complete compilation result from the Typst backend, holding:

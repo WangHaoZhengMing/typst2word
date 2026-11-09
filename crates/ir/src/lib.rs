@@ -115,6 +115,9 @@ pub enum LinkTargetIr {
 /// Complete intermediate representation of a compiled Typst document.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DocumentIr {
+    /// Subsequent sections; `page_setup` and `blocks` retain the first section.
+    #[serde(default)]
+    pub sections: Vec<DocumentSectionIr>,
     pub metadata: MetadataIr,
     pub page_setup: PageSetupIr,
     pub blocks: Vec<BlockNode>,
@@ -122,6 +125,13 @@ pub struct DocumentIr {
     /// Read-only verification line anchors extracted from reference layout (never read by generator).
     #[serde(default)]
     pub anchors: Vec<AnchorLineIr>,
+}
+
+/// A new page section with independent furniture and page geometry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DocumentSectionIr {
+    pub page_setup: PageSetupIr,
+    pub blocks: Vec<BlockNode>,
 }
 
 /// Block-level document node.

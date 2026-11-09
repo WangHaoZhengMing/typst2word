@@ -131,13 +131,14 @@ impl<'a> ExtractorContext<'a> {
     pub(crate) fn build_document_frame_tree(
         &mut self,
         mut pagebreak_targets: Vec<String>,
+        page_range: std::ops::Range<usize>,
     ) -> Vec<TreeNode> {
         let mut root_nodes: Vec<TreeNode> = Vec::new();
         let mut stack: Vec<OpenElement> = Vec::new();
         let pages = self.compiled.document.pages();
 
-        for (page_idx, page) in pages.iter().enumerate() {
-            if page_idx > 0 && !pagebreak_targets.is_empty() {
+        for (page_idx, page) in pages.iter().enumerate().take(page_range.end).skip(page_range.start) {
+            if page_idx > page_range.start && !pagebreak_targets.is_empty() {
                 let page_head: String = Self::frame_body_plain_text(&page.frame)
                     .chars()
                     .filter(|c| !c.is_whitespace())

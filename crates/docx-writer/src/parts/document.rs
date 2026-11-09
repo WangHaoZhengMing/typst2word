@@ -38,17 +38,30 @@ impl<'a> DocxWriter<'a> {
         out.push_str(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#);
         let _ = write!(out, "<w:document {}>", Self::xml_namespaces());
 
-        if let Some(bg_hex) = &self.ir.page_setup.fill {
+        if let Some(bg_hex) = &self.current_setup.fill {
             let _ = write!(out, r#"<w:background w:color="{bg_hex}"/><w:body>"#);
         } else {
             out.push_str("<w:body>");
         }
 
-        let blocks = self.ir.blocks.clone();
-        self.render_blocks(&blocks, &mut out);
-
-        // Emit `<w:sectPr>` for page setup.
-        self.render_sect_pr(&mut out);
+        let sections: Vec<_> = std::iter::once((self.ir.page_setup.clone(), self.ir.blocks.clone()))
+            .chain(self.ir.sections.iter().map(|s| (s.page_setup.clone(), s.blocks.clone()))).collect();
+        for (index, (setup, blocks)) in sections.iter().enumerate() {
+            self.current_setup = setup.clone();
+            self.current_blocks = blocks.clone();
+            self.header_rel_id = self.section_furniture[index].0.clone();
+            self.footer_rel_id = self.section_furniture[index].1.clone();
+            self.active_columns = (setup.columns, 18.0);
+            self.has_scoped_columns = false;
+            self.render_blocks(blocks, &mut out);
+            if index + 1 < sections.len() {
+                out.push_str("<w:p><w:pPr>");
+                self.render_sect_pr(&mut out);
+                out.push_str("</w:pPr></w:p>");
+            } else {
+                self.render_sect_pr(&mut out);
+            }
+        }
 
         out.push_str("</w:body></w:document>");
         out
@@ -63,17 +76,18 @@ impl<'a> DocxWriter<'a> {
         out.push_str(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#);
         let _ = write!(out, "<w:{tag} {}>", Self::xml_namespaces());
         self.render_blocks(blocks, &mut out);
+        if blocks.is_empty() { out.push_str("<w:p/>"); }
         let _ = write!(out, "</w:{tag}>");
         out
     }
 
     pub(crate) fn render_sect_pr(&self, out: &mut String) {
-        let ps = &self.ir.page_setup;
+        let ps = &self.current_setup;
         self.render_sect_pr_inner(ps.columns, 36.0, self.has_scoped_columns, out);
     }
 
     pub(crate) fn first_block_uses_cjk_font(&self) -> bool {
-        let inlines = match self.ir.blocks.first() {
+        let inlines = match self.current_blocks.first() {
             Some(BlockNode::Heading { content, .. }) => Some(content.as_slice()),
             Some(BlockNode::Paragraph { content, .. }) => Some(content.as_slice()),
             Some(BlockNode::Title { content, .. }) => Some(content.as_slice()),
@@ -110,7 +124,7 @@ impl<'a> DocxWriter<'a> {
         is_continuous: bool,
         out: &mut String,
     ) {
-        let ps = &self.ir.page_setup;
+        let ps = &self.current_setup;
         out.push_str("<w:sectPr>");
         if let Some(hid) = &self.header_rel_id {
             let _ = write!(out, r#"<w:headerReference w:type="default" r:id="{hid}"/>"#);

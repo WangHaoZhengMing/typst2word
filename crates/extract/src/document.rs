@@ -3,7 +3,7 @@
 
 use typst::foundations::{Content, SequenceElem, Smart, StyleChain, StyledElem};
 use typst::layout::{PageElem, PagebreakElem};
-use typst::model::{Document, FootnoteEntry};
+use typst::model::Document;
 use typst::pdf::{ArtifactElem, ArtifactKind};
 
 use crate::color::paint_to_hex;
@@ -14,6 +14,20 @@ use ir::{
 };
 
 impl<'a> ExtractorContext<'a> {
+    pub(crate) fn page_styles(nodes: &[TreeNode]) -> Option<typst::foundations::Styles> {
+        for node in nodes {
+            if let TreeNode::Element { elem, children, .. } = node {
+                if elem.label().is_some_and(|l| l.resolve().as_str() == "__typst2word_page_styles") {
+                    if let Some(styled) = elem.to_packed::<StyledElem>() { return Some(styled.styles.clone()); }
+                }
+                if let Some(styles) = Self::page_styles(children) { return Some(styles); }
+            } else if let TreeNode::Group { children, .. } = node {
+                if let Some(styles) = Self::page_styles(children) { return Some(styles); }
+            }
+        }
+        None
+    }
+
     pub(crate) fn extract_metadata(&self) -> MetadataIr {
         let info = self.compiled.document.info();
         MetadataIr {
@@ -24,9 +38,10 @@ impl<'a> ExtractorContext<'a> {
         }
     }
 
-    pub(crate) fn extract_page_setup(&mut self, page_nodes: &[TreeNode]) -> PageSetupIr {
+    pub(crate) fn extract_page_setup(&mut self, page_index: usize, page_nodes: &[TreeNode]) -> PageSetupIr {
+        self.current_page_index = page_index;
         let mut setup = PageSetupIr::default();
-        if let Some(first_page) = self.compiled.document.pages().first() {
+        if let Some(first_page) = self.compiled.document.pages().get(page_index) {
             let size = first_page.frame.size();
             setup.width_pt = size.x.to_pt();
             setup.height_pt = size.y.to_pt();
@@ -39,12 +54,7 @@ impl<'a> ExtractorContext<'a> {
             // Check if the document uses page-level columns (`#set page(columns: N)`).
             // Scoped `#columns(N)[...]` (`ColumnsElem`) is extracted as `BlockNode::Columns`
             // so that 1-column pages are not forced into multi-column layout.
-            if let Some(cols) = Self::find_columns_in_content(
-                &self.compiled.evaluated_content,
-                StyleChain::default(),
-            ) {
-                setup.columns = cols;
-            }
+            setup.columns = self.style_chain().get(PageElem::columns).get();
             self.page_columns = setup.columns;
             if setup.columns > 1 {
                 self.active_columns = (setup.columns, 18.0);
@@ -62,7 +72,7 @@ impl<'a> ExtractorContext<'a> {
                 match side {
                     Some(Smart::Custom(rel)) => {
                         let abs_pt = Self::resolve_length_pt(rel.abs, base_font_pt);
-                        Some((abs_pt + rel.rel.get() * axis_pt).max(14.0))
+                        Some((abs_pt + rel.rel.get() * axis_pt).max(0.0))
                     }
                     _ => None,
                 }
@@ -78,14 +88,10 @@ impl<'a> ExtractorContext<'a> {
                 Smart::Auto => (None, None, None, None),
             };
 
-            let inferred_left = Self::find_first_content_origin(page_nodes)
-                .map(|(lx, _)| lx)
-                .filter(|&lx| {
-                    (lx - default_margin_pt).abs() > 4.0 && lx > 14.0 && lx < setup.width_pt * 0.35
-                });
-
-            setup.margin_left_pt = cfg_left.or(inferred_left).unwrap_or(default_margin_pt);
-            setup.margin_right_pt = cfg_right.or(inferred_left).unwrap_or(default_margin_pt);
+            // Page styles now survive realization; glyph positions can be
+            // indented/aligned and must not be treated as page margins.
+            setup.margin_left_pt = cfg_left.unwrap_or(default_margin_pt);
+            setup.margin_right_pt = cfg_right.unwrap_or(default_margin_pt);
             setup.margin_top_pt = cfg_top.unwrap_or(default_margin_pt);
             setup.margin_bottom_pt = cfg_bottom.unwrap_or(default_margin_pt);
 
@@ -158,25 +164,6 @@ impl<'a> ExtractorContext<'a> {
         None
     }
 
-    pub(crate) fn find_columns_in_content(content: &Content, styles: StyleChain) -> Option<usize> {
-        if let Some(styled) = content.to_packed::<StyledElem>() {
-            let chained = styles.chain(&styled.styles);
-            let page_cols = chained.get(PageElem::columns).get();
-            if page_cols > 1 {
-                return Some(page_cols);
-            }
-            return Self::find_columns_in_content(&styled.child, chained);
-        }
-        if let Some(seq) = content.to_packed::<SequenceElem>() {
-            for child in &seq.children {
-                if let Some(c) = Self::find_columns_in_content(child, styles) {
-                    return Some(c);
-                }
-            }
-        }
-        None
-    }
-
     pub(crate) fn collect_header_footer_artifacts(
         &mut self,
         node: &TreeNode,
@@ -213,41 +200,6 @@ impl<'a> ExtractorContext<'a> {
             }
             _ => {}
         }
-    }
-
-    pub(crate) fn find_first_content_origin(nodes: &[TreeNode]) -> Option<(f64, f64)> {
-        for node in nodes {
-            match node {
-                TreeNode::Element {
-                    elem,
-                    pos,
-                    children,
-                    ..
-                } => {
-                    if elem.is::<ArtifactElem>() || elem.is::<FootnoteEntry>() {
-                        continue;
-                    }
-                    if pos.x.to_pt() > 0.0 && pos.y.to_pt() > 0.0 {
-                        return Some((pos.x.to_pt(), pos.y.to_pt()));
-                    }
-                    if let Some(found) = Self::find_first_content_origin(children) {
-                        return Some(found);
-                    }
-                }
-                TreeNode::Group { pos, children, .. } => {
-                    if let Some((cx, cy)) = Self::find_first_content_origin(children) {
-                        return Some((pos.x.to_pt() + cx, pos.y.to_pt() + cy));
-                    }
-                }
-                TreeNode::Text { pos, .. } => {
-                    if pos.x.to_pt() > 0.0 && pos.y.to_pt() > 0.0 {
-                        return Some((pos.x.to_pt(), pos.y.to_pt()));
-                    }
-                }
-                _ => {}
-            }
-        }
-        None
     }
 
     pub(crate) fn flatten_content_leaves<'b>(content: &'b Content, out: &mut Vec<&'b Content>) {

@@ -10,7 +10,8 @@ impl<'a> DocxWriter<'a> {
         fn inlines_have_cjk(inlines: &[InlineNode]) -> bool {
             inlines.iter().any(|inl| match inl {
                 InlineNode::Text(r) => r.text_script.has_cjk() || r.font_class.is_cjk_font(),
-                InlineNode::Link { content, .. }
+                InlineNode::Field { content, .. }
+                | InlineNode::Link { content, .. }
                 | InlineNode::Ref { content, .. }
                 | InlineNode::Citation { content, .. } => inlines_have_cjk(content),
                 InlineNode::Footnote { content, .. } => blocks_have_cjk(content),
@@ -63,6 +64,7 @@ impl<'a> DocxWriter<'a> {
         blocks_have_cjk(&self.ir.blocks)
             || blocks_have_cjk(&self.ir.page_setup.header)
             || blocks_have_cjk(&self.ir.page_setup.footer)
+            || self.ir.sections.iter().any(|s| blocks_have_cjk(&s.blocks) || blocks_have_cjk(&s.page_setup.header) || blocks_have_cjk(&s.page_setup.footer))
     }
 
     /// Whether the document contains CeTZ canvases (`<wpg:wgp>` WordprocessingGroup),

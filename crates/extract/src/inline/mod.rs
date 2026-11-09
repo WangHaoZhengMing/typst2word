@@ -222,7 +222,7 @@ impl<'a> ExtractorContext<'a> {
             // reflection. Compare the raw native element hash (no span/location)
             // with the page-numbering element constructed by Typst's page layouter.
             use typst::introspection::{Counter, CounterKey, CounterDisplayElem};
-            if let Some(typst::model::Numbering::Pattern(pattern)) = self.compiled.document.pages().first().and_then(|p| p.numbering.clone()) {
+            if let Some(typst::model::Numbering::Pattern(pattern)) = self.compiled.document.pages().get(self.current_page_index).and_then(|p| p.numbering.clone()) {
                 let both = pattern.pieces() >= 2;
                 let expected = CounterDisplayElem::new(Counter::new(CounterKey::Page), typst::foundations::Smart::Custom(typst::model::Numbering::Pattern(pattern.clone())), both);
                 if typst_utils::hash128(&**counter) == typst_utils::hash128(&expected) {

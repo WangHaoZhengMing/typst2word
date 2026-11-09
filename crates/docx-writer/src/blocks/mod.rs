@@ -252,7 +252,7 @@ impl<'a> DocxWriter<'a> {
                     r#"<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="20" w:lineRule="exact"/><w:rPr><w:sz w:val="2"/><w:szCs w:val="2"/></w:rPr>"#,
                 );
                 self.render_sect_pr_inner(
-                    self.ir.page_setup.columns.max(1),
+                    self.current_setup.columns.max(1),
                     36.0,
                     self.has_scoped_columns,
                     out,

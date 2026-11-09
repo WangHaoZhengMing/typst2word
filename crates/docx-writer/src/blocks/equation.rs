@@ -21,9 +21,9 @@ impl<'a> DocxWriter<'a> {
         indent_left_dxa: usize,
         out: &mut String,
     ) {
-        let page_content_w_pt = self.ir.page_setup.width_pt
-            - self.ir.page_setup.margin_left_pt
-            - self.ir.page_setup.margin_right_pt;
+        let page_content_w_pt = self.current_setup.width_pt
+            - self.current_setup.margin_left_pt
+            - self.current_setup.margin_right_pt;
         let construct = EquationBlockConstruct::solve(
             eq,
             page_content_w_pt,

@@ -672,6 +672,7 @@ dependencies = [
  "ecow",
  "ir",
  "roxmltree 0.21.2",
+ "serde_json",
  "typst",
  "typst-html",
  "typst-layout",

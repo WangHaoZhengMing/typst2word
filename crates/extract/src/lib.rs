@@ -50,6 +50,7 @@ pub(crate) struct ExtractorContext<'a> {
     pub(crate) compiled: &'a CompiledTypstDocument,
     pub(crate) world: &'a TypstWorld,
     pub(crate) doc_styles: Styles,
+    pub(crate) current_page_index: usize,
     pub(crate) report: ConversionReport,
     /// Map from element `Location` to bookmark anchor name (`_typst_loc_<hash>`).
     pub(crate) bookmarks: HashMap<Location, String>,
@@ -93,6 +94,7 @@ impl<'a> ExtractorContext<'a> {
             compiled,
             world,
             doc_styles,
+            current_page_index: 0,
             report: ConversionReport::default(),
             bookmarks: HashMap::new(),
             label_bookmarks: HashMap::new(),
@@ -174,34 +176,52 @@ impl<'a> ExtractorContext<'a> {
 
         // 4. Extract document metadata and page setup (including header/footer from page 1).
         let metadata = self.extract_metadata();
-        let first_page_nodes = self
-            .compiled
-            .document
-            .pages()
-            .first()
-            .map(|p| {
-                let saved_groups = self.logical_child_groups.clone();
-                let nodes = self.build_frame_tree(&p.frame, Point::zero());
-                self.logical_child_groups = saved_groups;
-                nodes
-            })
-            .unwrap_or_default();
-        let page_setup = self.extract_page_setup(&first_page_nodes);
-
-        // 5. Build a continuous frame tree across all pages, keeping cross-page open tags
-        //    (`EnumElem`, `ListElem`, `ParElem`, etc.) intact and only inserting `PageBreak`
-        //    at explicit `#pagebreak()` (`PagebreakElem`) boundaries.
+        let mut page_setups = Vec::new();
+        let mut page_styles = Vec::new();
+        let saved_groups = self.logical_child_groups.clone();
+        for index in 0..self.compiled.document.pages().len() {
+            self.logical_child_groups = saved_groups.clone();
+            let frame = self.compiled.document.pages()[index].frame.clone();
+            let nodes = self.build_frame_tree(&frame, Point::zero());
+            if let Some(styles) = Self::page_styles(&nodes) { self.doc_styles = styles; }
+            page_styles.push(self.doc_styles.clone());
+            page_setups.push(self.extract_page_setup(index, &nodes));
+        }
+        self.logical_child_groups = saved_groups;
+        self.pending_split_group = None;
         let mut pagebreak_targets = Vec::new();
-        Self::collect_pagebreak_following_texts(
-            &self.compiled.evaluated_content,
-            &mut pagebreak_targets,
-        );
-        let all_root_nodes = self.build_document_frame_tree(pagebreak_targets);
-
-        let blocks = self.extract_blocks_from_nodes(&all_root_nodes, 0, HAlignIr::Left);
+        Self::collect_pagebreak_following_texts(&self.compiled.evaluated_content, &mut pagebreak_targets);
+        let mut ranges = Vec::new();
+        let mut start = 0;
+        for index in 1..page_setups.len() {
+            // Furniture is semantic IR (including dynamic fields), so repeated
+            // page numbers do not split otherwise identical pages into sections.
+            if serde_json::to_value(&page_setups[index]).ok() != serde_json::to_value(&page_setups[start]).ok() {
+                ranges.push(start..index);
+                start = index;
+            }
+        }
+        ranges.push(start..page_setups.len());
+        let mut sections = Vec::new();
+        for range in ranges {
+            self.current_page_index = range.start;
+            let setup = page_setups.get(range.start).cloned().unwrap_or_default();
+            if let Some(styles) = page_styles.get(range.start) { self.doc_styles = styles.clone(); }
+            self.content_left_pt = setup.margin_left_pt;
+            self.content_right_pt = setup.width_pt - setup.margin_right_pt;
+            self.page_columns = setup.columns;
+            self.active_columns = (setup.columns, 18.0);
+            let nodes = self.build_document_frame_tree(pagebreak_targets.clone(), range);
+            let blocks = self.extract_blocks_from_nodes(&nodes, 0, HAlignIr::Left);
+            sections.push(ir::DocumentSectionIr { page_setup: setup, blocks });
+        }
+        let first = sections.remove(0);
+        let page_setup = first.page_setup;
+        let blocks = first.blocks;
         let anchors = self.extract_page_line_anchors();
 
         DocumentIr {
+            sections,
             metadata,
             page_setup,
             blocks,

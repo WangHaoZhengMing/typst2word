@@ -21,9 +21,9 @@ impl<'a> DocxWriter<'a> {
             self.render_inlines(t, out);
             out.push_str("</w:p>");
         }
-        let content_w_pt = (self.ir.page_setup.width_pt
-            - self.ir.page_setup.margin_left_pt
-            - self.ir.page_setup.margin_right_pt)
+        let content_w_pt = (self.current_setup.width_pt
+            - self.current_setup.margin_left_pt
+            - self.current_setup.margin_right_pt)
             .max(360.0);
         let tab_pos = pt_to_dxa(content_w_pt);
         let num_entries = entries.len();

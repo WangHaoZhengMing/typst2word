@@ -27,6 +27,9 @@ pub(crate) struct FootnoteRecord {
 }
 
 pub(crate) struct DocxWriter<'a> {
+    pub(crate) current_setup: ir::PageSetupIr,
+    pub(crate) current_blocks: Vec<BlockNode>,
+    pub(crate) section_furniture: Vec<(Option<String>, Option<String>)>,
     pub(crate) active_part: String,
     pub(crate) ir: &'a DocumentIr,
     pub(crate) next_rel_id: usize,
@@ -46,6 +49,9 @@ pub(crate) struct DocxWriter<'a> {
 impl<'a> DocxWriter<'a> {
     pub(crate) fn new(ir: &'a DocumentIr) -> Self {
         Self {
+            current_setup: ir.page_setup.clone(),
+            current_blocks: ir.blocks.clone(),
+            section_furniture: Vec::new(),
             ir,
             active_part: "document".into(),
             // Reserve rId1..rId5 for styles, numbering, settings, footnotes, fontTable
@@ -72,7 +78,7 @@ impl<'a> DocxWriter<'a> {
     }
 
     pub(crate) fn content_width_dxa(&self) -> i64 {
-        let ps = &self.ir.page_setup;
+        let ps = &self.current_setup;
         let full_w_pt = (ps.width_pt - ps.margin_left_pt - ps.margin_right_pt).max(200.0);
         let (cols, gutter_pt) = if self.active_columns.0 > 1 {
             self.active_columns
