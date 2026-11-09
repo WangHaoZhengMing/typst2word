@@ -64,10 +64,17 @@ impl<'a> DocxBuilder<'a> {
             {
                 let cur_sz = Self::primary_font_size_pt(content);
                 let next_sz = Self::primary_font_size_pt(next_content);
-                if cur_sz <= 13.5 && next_sz >= cur_sz + 2.0 {
+                if cur_sz <= 13.5 && next_sz >= 15.0 && next_sz >= cur_sz + 2.0 {
                     let mut adj_style = style.clone();
                     adj_style.space_after_pt =
                         (adj_style.space_after_pt - (next_sz - cur_sz) * 1.2).max(0.0);
+                    self.render_paragraph(content, &adj_style, bookmark.as_deref(), out);
+                    continue;
+                } else if cur_sz <= 14.5 && next_sz <= 14.5 && (next_sz - cur_sz).abs() >= 0.5 {
+                    let max_sz = cur_sz.max(next_sz);
+                    let mut adj_style = style.clone();
+                    adj_style.space_after_pt =
+                        (1.20 * max_sz - 0.65 * cur_sz - 0.229 * (next_sz - cur_sz)).max(1.5);
                     self.render_paragraph(content, &adj_style, bookmark.as_deref(), out);
                     continue;
                 }

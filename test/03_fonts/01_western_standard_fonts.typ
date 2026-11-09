@@ -7,6 +7,7 @@
   margin: (top: 2.54cm, bottom: 2.54cm, left: 3.18cm, right: 3.18cm),
 )
 #set text(font: "Times New Roman", size: 11pt, lang: "en", hyphenate: false)
+#show raw: set text(font: "Courier New", size: 9pt)
 #set par(
   justify: true,
   linebreaks: "simple",
@@ -18,7 +19,7 @@
 = 1. Times New Roman (11pt Proportional Serif)
 
 #text(font: "Times New Roman", size: 11pt)[
-  Times New Roman uses a 2048-unit em-square (`unitsPerEm = 2048`) with OS/2 typographic ascender 1825, descender -443, and lineGap 87. It serves as the reference serif typeface for verifying proportional advance widths and kerning behavior between Typst and Microsoft Word.
+  Times New Roman uses a 2048-unit em-square (`unitsPerEm = 2048`) with OS/2 typographic ascender 1825, descender -443, and lineGap 87. It serves as the primary serif typeface for verifying proportional advance widths and kerning behavior between Typst and Word.
 ]
 
 = 2. Arial (11pt Proportional Sans-Serif)
@@ -30,7 +31,7 @@
 = 3. Georgia (11pt Transitional Serif)
 
 #text(font: "Georgia", size: 11pt)[
-  Georgia was designed by Matthew Carter specifically for screen legibility and high x-height clarity. Because Georgia's average lowercase glyph advance is wider than Times New Roman, fewer words fit onto a 415.3pt line, providing an independent check on horizontal advance summation.
+  Georgia was designed by Matthew Carter specifically for screen legibility and high x-height clarity. Because Georgia's average lowercase glyph advance is noticeably wider than Times New Roman, fewer words fit onto a 415.3pt line, providing a direct check on horizontal advance summation.
 ]
 
 = 4. Courier New (10pt Monospace Fixed-Pitch)
@@ -42,7 +43,7 @@
 = 5. Multi-Size Scaling Check (10pt, 12pt, 14pt)
 
 #text(font: "Times New Roman", size: 10pt)[
-  *10pt Times New Roman:* Smaller body size (20 half-points in OOXML `w:sz`) increases characters per line proportionally while scaling vertical line height by 10/11.
+  *10pt Times New Roman:* Smaller body size (20 half-points in OOXML `w:sz`) increases character density per line proportionally while scaling vertical line height by 10/11.
 ]
 
 #text(font: "Times New Roman", size: 12pt)[

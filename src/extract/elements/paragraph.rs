@@ -60,7 +60,11 @@ impl<'a> ExtractorContext<'a> {
             .unwrap_or(default_font_pt)
             .max(6.0);
 
-        let par_em_pt = base_font_pt.min(default_font_pt);
+        let par_em_pt = if base_font_pt >= 15.0 {
+            default_font_pt
+        } else {
+            base_font_pt
+        };
         let line_leading_pt = Self::resolve_length_pt(par.leading.get(chain), par_em_pt);
         let leading_pt = Self::resolve_length_pt(par.leading.get(chain), default_font_pt);
         let spacing_pt = Self::resolve_length_pt(par.spacing.get(chain), default_font_pt);

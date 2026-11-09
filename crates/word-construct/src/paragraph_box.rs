@@ -55,7 +55,7 @@ impl ParagraphScaleProfile {
         ) {
             (true, _) => Self::ExplicitLinebreakTerminated,
             (false, ratio) if ratio > 1.4 => Self::DisplayTitle,
-            (false, ratio) if ratio >= 1.2 => Self::SubHeading,
+            (false, ratio) if ratio >= 1.35 => Self::SubHeading,
             (false, _) => Self::BodyText,
         }
     }

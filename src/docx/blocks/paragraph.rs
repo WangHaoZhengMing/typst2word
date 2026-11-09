@@ -73,6 +73,7 @@ impl<'a> DocxBuilder<'a> {
             ind.push_str("/>");
             out.push_str(&ind);
         }
+        Self::render_paragraph_mark_rpr(content, out);
         out.push_str("</w:pPr>");
         let bm_id = bookmark.map(|bm| self.emit_bookmark_start(bm, out));
         self.render_inlines(content, out);

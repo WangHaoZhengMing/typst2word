@@ -449,8 +449,20 @@ impl WordLineBox {
                 ((240.0 * (ink_em + ratio) / metric_div).round() as i64).clamp(240, 720)
             }
             (_, _, false, Some((ls_pt, ratio))) if ls_pt > 3.5 => {
-                let metric_div = class.win_box_ratio(false);
-                ((240.0 * (0.662 + ratio) / metric_div).round() as i64).clamp(216, 720)
+                let fam_lower = font_family.unwrap_or("").trim().to_ascii_lowercase();
+                let (cap_em, metric_div) = if fam_lower.contains("arial")
+                    || fam_lower.contains("helvetica")
+                    || fam_lower.contains("calibri")
+                {
+                    (0.7163, 1.150)
+                } else if fam_lower.contains("georgia") {
+                    (0.6929, 1.1362)
+                } else if fam_lower.contains("courier") {
+                    (0.5713, 1.1328)
+                } else {
+                    (0.6621, class.win_box_ratio(false))
+                };
+                ((240.0 * (cap_em + ratio) / metric_div).round() as i64).clamp(216, 720)
             }
             (_, WordFontClass::CjkSongti, _, Some((_, ratio))) if ratio <= 1.05 => {
                 ((212.0 + ratio * 24.0) * (1.380 / 1.820)).round() as i64
