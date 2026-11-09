@@ -27,6 +27,9 @@ impl<'a> ExtractorContext<'a> {
                         out.insert(suffix);
                     }
                     recent.clear();
+                } else if Self::is_block_boundary_in_seq(child) {
+                    Self::collect_linebreak_preceding_texts(child, out);
+                    recent.clear();
                 } else {
                     Self::collect_linebreak_preceding_texts(child, out);
                     let plain = Self::content_plain_text_deep(child);
@@ -114,6 +117,25 @@ impl<'a> ExtractorContext<'a> {
                 }
             }
         }
+    }
+
+    fn is_block_boundary_in_seq(content: &Content) -> bool {
+        if let Some(styled) = content.to_packed::<StyledElem>() {
+            return Self::is_block_boundary_in_seq(&styled.child);
+        }
+        content.is::<typst::model::ParbreakElem>()
+            || content.is::<typst::model::ParElem>()
+            || content.is::<typst::model::HeadingElem>()
+            || content.is::<typst::model::TableElem>()
+            || content.is::<typst::layout::GridElem>()
+            || content.is::<typst::model::FigureElem>()
+            || content.is::<typst::layout::BlockElem>()
+            || content.is::<typst::layout::AlignElem>()
+            || content.is::<typst::layout::VElem>()
+            || content.is::<typst::model::EnumItem>()
+            || content.is::<typst::model::ListItem>()
+            || content.is::<typst::model::EnumElem>()
+            || content.is::<typst::model::ListElem>()
     }
 
     pub(crate) fn content_plain_text_deep(content: &Content) -> String {

@@ -143,35 +143,22 @@ impl<'a> DocxBuilder<'a> {
                         .blocks
                         .iter()
                         .any(|b| matches!(b, BlockNode::List { .. } | BlockNode::Enum { .. }));
-                let v_sub = if is_styled_container {
-                    if cell.inset.top > 0.5 { -1.5 } else { 0.0 }
-                } else if cell_has_list {
-                    3.8
-                } else if table.is_semantic_table {
-                    0.5
-                } else {
-                    2.2
-                };
-                let top_mar_dxa = pt_to_dxa((cell.inset.top - v_sub).max(0.0));
-                let bottom_mar_dxa = if is_styled_container {
-                    if cell.inset.bottom > 0.5 {
-                        pt_to_dxa((cell.inset.bottom - 1.0).max(0.0))
-                    } else {
-                        0
-                    }
-                } else {
-                    pt_to_dxa((cell.inset.bottom - v_sub).max(0.0))
-                };
-                let right_inset_pt = if is_styled_container {
-                    cell.inset.right + 3.0
-                } else {
-                    cell.inset.right
-                };
+                let cell_role = word_construct::TableCellRole::from_flags(
+                    is_styled_container,
+                    table.is_semantic_table,
+                    cell_has_list,
+                );
+                let margins = word_construct::WordCellMarginsDxa::solve_for_role(
+                    cell.inset.top,
+                    cell.inset.bottom,
+                    cell.inset.left,
+                    cell.inset.right,
+                    cell_role,
+                );
                 let _ = write!(
                     out,
-                    r#"<w:tcMar><w:top w:w="{top_mar_dxa}" w:type="dxa"/><w:left w:w="{}" w:type="dxa"/><w:bottom w:w="{bottom_mar_dxa}" w:type="dxa"/><w:right w:w="{}" w:type="dxa"/></w:tcMar>"#,
-                    pt_to_dxa(cell.inset.left),
-                    pt_to_dxa(right_inset_pt),
+                    r#"<w:tcMar><w:top w:w="{}" w:type="dxa"/><w:left w:w="{}" w:type="dxa"/><w:bottom w:w="{}" w:type="dxa"/><w:right w:w="{}" w:type="dxa"/></w:tcMar>"#,
+                    margins.top_dxa, margins.left_dxa, margins.bottom_dxa, margins.right_dxa,
                 );
 
                 // Vertical alignment

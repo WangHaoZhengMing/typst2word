@@ -47,18 +47,29 @@ impl<'a> DocxBuilder<'a> {
         } else {
             let mut body_xml = String::new();
             self.render_figure_body_indented(body, eff_indent, &mut body_xml);
-            if caption.is_some()
-                && body_xml.ends_with("</w:tbl>")
-                && let Some(last_tr_pos) = body_xml.rfind("<w:tr>")
-            {
-                let (head, tail) = body_xml.split_at(last_tr_pos);
-                let patched_tail = if tail.contains("<w:keepNext/>") {
-                    tail.to_string()
+            if caption.is_some() {
+                if body_xml.ends_with("</w:tbl>") {
+                    // Keep all rows of a figure table together with the figure caption.
+                    let patched = body_xml.replace("<w:p><w:pPr>", "<w:p><w:pPr><w:keepNext/>");
+                    out.push_str(&patched);
+                } else if body_xml.contains("<w:drawing>") {
+                    out.push_str(&body_xml.replacen(
+                        "<w:p><w:pPr>",
+                        "<w:p><w:pPr><w:keepNext/>",
+                        1,
+                    ));
+                } else if let Some(last_p_pos) = body_xml.rfind("<w:p><w:pPr>") {
+                    let (head, tail) = body_xml.split_at(last_p_pos);
+                    let patched_tail = if tail.contains("<w:keepNext/>") {
+                        tail.to_string()
+                    } else {
+                        tail.replacen("<w:p><w:pPr>", "<w:p><w:pPr><w:keepNext/>", 1)
+                    };
+                    out.push_str(head);
+                    out.push_str(&patched_tail);
                 } else {
-                    tail.replace("<w:p><w:pPr>", "<w:p><w:pPr><w:keepNext/>")
-                };
-                out.push_str(head);
-                out.push_str(&patched_tail);
+                    out.push_str(&body_xml);
+                }
             } else {
                 out.push_str(&body_xml);
             }

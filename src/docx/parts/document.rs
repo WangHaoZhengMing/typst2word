@@ -108,13 +108,13 @@ impl<'a> DocxBuilder<'a> {
             ""
         };
         let _ = write!(out, r#"<w:pgSz w:w="{w_dxa}" w:h="{h_dxa}"{orient}/>"#);
-        // Subtract 6pt from `w:bottom` to compensate for Word's empty CJK font descender box
-        // below the last line on a page so bottom lines don't prematurely overflow to the next page.
+        // Subtract 1.5pt from `w:top` for Word's internal CJK font top-leading on the first line
+        // of each page, and 6pt from `w:bottom` for Word's empty CJK descender box on the last line.
+        let top_dxa = pt_to_dxa((ps.margin_top_pt - 1.5).max(18.0));
         let bottom_dxa = pt_to_dxa((ps.margin_bottom_pt - 6.0).max(18.0));
         let _ = write!(
             out,
-            r#"<w:pgMar w:top="{}" w:right="{}" w:bottom="{bottom_dxa}" w:left="{}" w:header="{}" w:footer="{}" w:gutter="0"/>"#,
-            pt_to_dxa(ps.margin_top_pt),
+            r#"<w:pgMar w:top="{top_dxa}" w:right="{}" w:bottom="{bottom_dxa}" w:left="{}" w:header="{}" w:footer="{}" w:gutter="0"/>"#,
             pt_to_dxa(ps.margin_right_pt),
             pt_to_dxa(ps.margin_left_pt),
             pt_to_dxa(ps.header_margin_pt),

@@ -1,6 +1,10 @@
 //! Shared visual style primitives: alignment, paragraph style, strokes, borders, insets.
 
 use serde::{Deserialize, Serialize};
+pub use word_construct::{
+    ContextualSpacingPolicy, KeepLinesPolicy, KeepWithNextPolicy, KinsokuSet, LineBreakPolicy,
+    RowBreakPolicy, RowHeaderRepeatPolicy, SpaceBeforeTopPolicy, WidowOrphanPolicy,
+};
 
 use super::ColorHex;
 
@@ -34,6 +38,16 @@ pub struct ParagraphStyleIr {
     pub space_before_pt: f64,
     pub space_after_pt: f64,
     pub line_spacing_pt: Option<f64>,
+    #[serde(default)]
+    pub keep_with_next: bool,
+    #[serde(default)]
+    pub keep_lines: bool,
+    #[serde(default)]
+    pub line_break_policy: LineBreakPolicy,
+    #[serde(default)]
+    pub kinsoku: KinsokuSet,
+    #[serde(default)]
+    pub widow_orphan: WidowOrphanPolicy,
 }
 
 impl Default for ParagraphStyleIr {
@@ -47,7 +61,73 @@ impl Default for ParagraphStyleIr {
             space_before_pt: 0.0,
             space_after_pt: 6.0,
             line_spacing_pt: None,
+            keep_with_next: false,
+            keep_lines: false,
+            line_break_policy: LineBreakPolicy::default(),
+            kinsoku: KinsokuSet::default(),
+            widow_orphan: WidowOrphanPolicy::default(),
         }
+    }
+}
+
+impl ParagraphStyleIr {
+    #[inline]
+    pub const fn with_align(mut self, align: HAlignIr) -> Self {
+        self.align = align;
+        self
+    }
+
+    #[inline]
+    pub const fn with_spacing(mut self, before_pt: f64, after_pt: f64) -> Self {
+        self.space_before_pt = before_pt;
+        self.space_after_pt = after_pt;
+        self
+    }
+
+    #[inline]
+    pub const fn with_line_spacing(mut self, leading_pt: Option<f64>) -> Self {
+        self.line_spacing_pt = leading_pt;
+        self
+    }
+
+    #[inline]
+    pub const fn with_keep_with_next(mut self, keep: bool) -> Self {
+        self.keep_with_next = keep;
+        self
+    }
+
+    #[inline]
+    pub const fn with_keep_lines(mut self, keep: bool) -> Self {
+        self.keep_lines = keep;
+        self
+    }
+
+    #[inline]
+    pub const fn with_line_break_policy(mut self, policy: LineBreakPolicy) -> Self {
+        self.line_break_policy = policy;
+        self
+    }
+
+    #[inline]
+    pub fn with_kinsoku(mut self, kinsoku: KinsokuSet) -> Self {
+        self.kinsoku = kinsoku;
+        self
+    }
+
+    #[inline]
+    pub const fn with_widow_orphan(mut self, policy: WidowOrphanPolicy) -> Self {
+        self.widow_orphan = policy;
+        self
+    }
+
+    #[inline]
+    pub const fn keep_lines_policy(&self) -> KeepLinesPolicy {
+        KeepLinesPolicy::from_bool(self.keep_lines)
+    }
+
+    #[inline]
+    pub const fn keep_with_next_policy(&self) -> KeepWithNextPolicy {
+        KeepWithNextPolicy::from_bool(self.keep_with_next)
     }
 }
 
@@ -131,6 +211,17 @@ pub struct SidesPtIr {
     pub bottom: f64,
     pub left: f64,
     pub right: f64,
+}
+
+impl SidesPtIr {
+    pub const fn zero() -> Self {
+        Self {
+            top: 0.0,
+            bottom: 0.0,
+            left: 0.0,
+            right: 0.0,
+        }
+    }
 }
 
 impl Default for SidesPtIr {

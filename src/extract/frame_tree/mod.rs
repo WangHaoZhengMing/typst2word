@@ -1,12 +1,12 @@
 //! Frame tree construction: merges the introspection tag stream (`Tag::Start` /
-//! `Tag::End`) with laid-out `FrameItem`s into a `TreeNode` tree, plus generic
-//! tree queries used by all element extractors.
+//! `Tag::End`) with laid-out `FrameItem`s into a `TreeNode` tree.
+
+pub(crate) mod queries;
 
 use typst::foundations::Content;
 use typst::introspection::{Location, Tag};
-use typst::layout::{Frame, FrameItem, FrameKind, GroupItem, Inherit, Point, Size, Transform};
-use typst::model::{Destination, EnumElem, ListElem, TermsElem};
-use typst::pdf::{PdfMarkerTag, PdfMarkerTagKind};
+use typst::layout::{Frame, FrameItem, GroupItem, Inherit, Point, Size};
+use typst::model::Destination;
 use typst::syntax::Span;
 use typst::text::TextItem;
 use typst::visualize::{Image, Shape};
@@ -59,6 +59,15 @@ pub(crate) struct OpenElement {
     pub(crate) loc: Location,
     pub(crate) pos: Point,
     pub(crate) children: Vec<TreeNode>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PendingSplitGroup {
+    pub(crate) group: GroupItem,
+    pub(crate) pos: Point,
+    pub(crate) children: Vec<TreeNode>,
+    pub(crate) stack: Vec<OpenElement>,
+    pub(crate) cum_y: typst::layout::Abs,
 }
 
 impl<'a> ExtractorContext<'a> {
@@ -137,37 +146,6 @@ impl<'a> ExtractorContext<'a> {
         root_nodes
     }
 
-    pub(crate) fn frame_body_plain_text(frame: &Frame) -> String {
-        let mut s = String::new();
-        let mut in_artifact_depth = 0usize;
-        let mut flat_items = Vec::new();
-        Self::flatten_soft_groups(frame, Point::zero(), &mut flat_items);
-        for (_, item) in flat_items {
-            match item {
-                FrameItem::Tag(Tag::Start(elem, _)) => {
-                    if elem.is::<typst::pdf::ArtifactElem>()
-                        || elem.is::<typst::model::FootnoteEntry>()
-                    {
-                        in_artifact_depth += 1;
-                    }
-                }
-                FrameItem::Tag(Tag::End(..)) => {
-                    if in_artifact_depth > 0 {
-                        in_artifact_depth -= 1;
-                    }
-                }
-                FrameItem::Text(t) if in_artifact_depth == 0 => {
-                    s.push_str(&t.text);
-                }
-                FrameItem::Group(g) if in_artifact_depth == 0 && g.parent.is_none() => {
-                    s.push_str(&Self::frame_body_plain_text(&g.frame));
-                }
-                _ => {}
-            }
-        }
-        s
-    }
-
     pub(crate) fn append_frame_items_to_tree(
         &mut self,
         frame: &Frame,
@@ -193,12 +171,20 @@ impl<'a> ExtractorContext<'a> {
                 }
                 FrameItem::Tag(Tag::End(loc, _key, _flags)) => {
                     if let Some(match_idx) = stack.iter().rposition(|open| open.loc == loc) {
+                        if self.group_tree_depth == 0
+                            && !stack
+                                .iter()
+                                .any(|open| Self::is_page_furniture_elem(&open.elem))
+                        {
+                            self.flush_pending_split_group(root_nodes, stack);
+                        }
                         while stack.len() > match_idx {
                             let mut closed = stack.pop().unwrap();
-                            // Attach any logical child groups registered for `closed.loc`.
                             if let Some(detached) = self.logical_child_groups.remove(&closed.loc) {
                                 for (gpos, grp) in detached {
+                                    self.group_tree_depth += 1;
                                     let gchildren = self.build_frame_tree(&grp.frame, gpos);
+                                    self.group_tree_depth -= 1;
                                     closed.children.extend(gchildren);
                                 }
                             }
@@ -223,16 +209,86 @@ impl<'a> ExtractorContext<'a> {
                 }
                 FrameItem::Group(group) => {
                     if group.parent.is_some() {
-                        // Handled via `footnote_raw_groups` / `logical_child_groups`.
                         continue;
                     }
-                    let children = self.build_frame_tree(&group.frame, Point::zero());
-                    let node = TreeNode::Group {
-                        group,
-                        pos,
-                        children,
-                    };
-                    Self::push_node(root_nodes, stack, node);
+                    let in_furniture = stack
+                        .iter()
+                        .any(|open| Self::is_page_furniture_elem(&open.elem));
+                    let has_root_shape = group
+                        .frame
+                        .items()
+                        .any(|(_, it)| matches!(it, FrameItem::Shape(..)));
+                    let can_split_merge = self.group_tree_depth == 0
+                        && !in_furniture
+                        && stack.is_empty()
+                        && ((self.pending_split_group.is_some()
+                            && group.frame.size().x.to_pt() > 100.0)
+                            || (!has_root_shape && group.frame.size().x.to_pt() > 350.0));
+                    if can_split_merge {
+                        if let Some(mut pending) = self.pending_split_group.take() {
+                            let offset = Point::new(typst::layout::Abs::zero(), pending.cum_y);
+                            self.group_tree_depth += 1;
+                            self.append_frame_items_to_tree(
+                                &group.frame,
+                                offset,
+                                &mut pending.children,
+                                &mut pending.stack,
+                            );
+                            self.group_tree_depth -= 1;
+                            pending.cum_y += group.frame.size().y;
+                            if pending.stack.is_empty() {
+                                let node = TreeNode::Group {
+                                    group: pending.group,
+                                    pos: pending.pos,
+                                    children: pending.children,
+                                };
+                                Self::push_node(root_nodes, stack, node);
+                            } else {
+                                self.pending_split_group = Some(pending);
+                            }
+                        } else {
+                            let mut g_children: Vec<TreeNode> = Vec::new();
+                            let mut g_stack: Vec<OpenElement> = Vec::new();
+                            self.group_tree_depth += 1;
+                            self.append_frame_items_to_tree(
+                                &group.frame,
+                                Point::zero(),
+                                &mut g_children,
+                                &mut g_stack,
+                            );
+                            self.group_tree_depth -= 1;
+                            if g_stack.is_empty() {
+                                let node = TreeNode::Group {
+                                    group,
+                                    pos,
+                                    children: g_children,
+                                };
+                                Self::push_node(root_nodes, stack, node);
+                            } else {
+                                let cum_y = group.frame.size().y;
+                                self.pending_split_group = Some(PendingSplitGroup {
+                                    group,
+                                    pos,
+                                    children: g_children,
+                                    stack: g_stack,
+                                    cum_y,
+                                });
+                            }
+                        }
+                    } else {
+                        if self.group_tree_depth == 0 && !in_furniture {
+                            self.flush_pending_split_group(root_nodes, stack);
+                        }
+                        self.group_tree_depth += 1;
+                        let children = self.build_frame_tree(&group.frame, Point::zero());
+                        self.group_tree_depth -= 1;
+                        let node = TreeNode::Group {
+                            group,
+                            pos,
+                            children,
+                        };
+                        Self::push_node(root_nodes, stack, node);
+                    }
                 }
                 FrameItem::Text(text) => {
                     Self::push_node(root_nodes, stack, TreeNode::Text { text, pos });
@@ -259,15 +315,38 @@ impl<'a> ExtractorContext<'a> {
         }
     }
 
+    pub(crate) fn flush_pending_split_group(
+        &mut self,
+        root_nodes: &mut Vec<TreeNode>,
+        stack: &mut Vec<OpenElement>,
+    ) {
+        if let Some(mut pending) = self.pending_split_group.take() {
+            self.group_tree_depth += 1;
+            self.flush_open_stack(&mut pending.children, &mut pending.stack);
+            self.group_tree_depth -= 1;
+            let node = TreeNode::Group {
+                group: pending.group,
+                pos: pending.pos,
+                children: pending.children,
+            };
+            Self::push_node(root_nodes, stack, node);
+        }
+    }
+
     pub(crate) fn flush_open_stack(
         &mut self,
         root_nodes: &mut Vec<TreeNode>,
         stack: &mut Vec<OpenElement>,
     ) {
+        if self.group_tree_depth == 0 {
+            self.flush_pending_split_group(root_nodes, stack);
+        }
         while let Some(mut closed) = stack.pop() {
             if let Some(detached) = self.logical_child_groups.remove(&closed.loc) {
                 for (gpos, grp) in detached {
+                    self.group_tree_depth += 1;
                     let gchildren = self.build_frame_tree(&grp.frame, gpos);
+                    self.group_tree_depth -= 1;
                     closed.children.extend(gchildren);
                 }
             }
@@ -279,106 +358,5 @@ impl<'a> ExtractorContext<'a> {
             };
             Self::push_node(root_nodes, stack, node);
         }
-    }
-
-    pub(crate) fn flatten_soft_groups(
-        frame: &Frame,
-        offset: Point,
-        out: &mut Vec<(Point, FrameItem)>,
-    ) {
-        for (pos, item) in frame.items() {
-            let abs_pos = offset + *pos;
-            if let FrameItem::Group(group) = item {
-                if group.parent.is_none()
-                    && group.frame.kind() == FrameKind::Soft
-                    && group.transform == Transform::identity()
-                    && group.clip.is_none()
-                    && group.label.is_none()
-                {
-                    Self::flatten_soft_groups(&group.frame, abs_pos, out);
-                    continue;
-                }
-            }
-            out.push((abs_pos, item.clone()));
-        }
-    }
-
-    pub(crate) fn push_node(root: &mut Vec<TreeNode>, stack: &mut [OpenElement], node: TreeNode) {
-        if let Some(top) = stack.last_mut() {
-            top.children.push(node);
-        } else {
-            root.push(node);
-        }
-    }
-
-    pub(crate) fn is_page_furniture_elem(elem: &Content) -> bool {
-        if elem.is::<typst::model::FootnoteEntry>() {
-            return true;
-        }
-        if let Some(artifact) = elem.to_packed::<typst::pdf::ArtifactElem>() {
-            return matches!(
-                artifact.kind.get(typst::foundations::StyleChain::default()),
-                typst::pdf::ArtifactKind::Header
-                    | typst::pdf::ArtifactKind::Footer
-                    | typst::pdf::ArtifactKind::Page
-                    | typst::pdf::ArtifactKind::Background
-                    | typst::pdf::ArtifactKind::Watermark
-                    | typst::pdf::ArtifactKind::PageNumber
-                    | typst::pdf::ArtifactKind::LineNumber
-                    | typst::pdf::ArtifactKind::Bates
-                    | typst::pdf::ArtifactKind::PaginationOther
-            );
-        }
-        false
-    }
-
-    pub(crate) fn is_pdf_marker(node: &TreeNode, pred: impl Fn(&PdfMarkerTagKind) -> bool) -> bool {
-        if let TreeNode::Element { elem, .. } = node {
-            if let Some(marker) = elem.to_packed::<PdfMarkerTag>() {
-                return pred(&marker.kind);
-            }
-        }
-        false
-    }
-
-    pub(crate) fn collect_pdf_marker_elements(
-        nodes: &[TreeNode],
-        out: &mut Vec<(PdfMarkerTagKind, Vec<TreeNode>)>,
-    ) {
-        for node in nodes {
-            match node {
-                TreeNode::Element { elem, children, .. } => {
-                    if let Some(marker) = elem.to_packed::<PdfMarkerTag>() {
-                        out.push((marker.kind.clone(), children.clone()));
-                    } else {
-                        // Do not recurse into nested ListElem/EnumElem/TermsElem when collecting
-                        // top-level list items!
-                        if elem.is::<ListElem>() || elem.is::<EnumElem>() || elem.is::<TermsElem>()
-                        {
-                            continue;
-                        }
-                        Self::collect_pdf_marker_elements(children, out);
-                    }
-                }
-                TreeNode::Group { children, .. } => {
-                    Self::collect_pdf_marker_elements(children, out);
-                }
-                _ => {}
-            }
-        }
-    }
-
-    pub(crate) fn nodes_to_plain_text(nodes: &[TreeNode]) -> String {
-        let mut s = String::new();
-        for node in nodes {
-            match node {
-                TreeNode::Text { text, .. } => s.push_str(&text.text),
-                TreeNode::Element { children, .. } | TreeNode::Group { children, .. } => {
-                    s.push_str(&Self::nodes_to_plain_text(children));
-                }
-                _ => {}
-            }
-        }
-        s
     }
 }

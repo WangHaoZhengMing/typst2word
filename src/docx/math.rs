@@ -291,9 +291,17 @@ fn render_math_run(run: &MathRunIr, out: &mut String) {
     if run.text.is_empty() {
         return;
     }
+    let has_cjk = run.text.chars().any(|c| {
+        ('\u{4E00}'..='\u{9FFF}').contains(&c)
+            || ('\u{3000}'..='\u{303F}').contains(&c)
+            || ('\u{FF00}'..='\u{FFEF}').contains(&c)
+    });
     out.push_str("<m:r>");
-    if run.script.is_some() || run.style.is_some() {
+    if has_cjk || run.script.is_some() || run.style.is_some() {
         out.push_str("<m:rPr>");
+        if has_cjk {
+            out.push_str("<m:nor/>");
+        }
         if let Some(scr) = run.script {
             let scr_val = match scr {
                 MathScriptIr::DoubleStruck => "double-struck",
@@ -315,10 +323,52 @@ fn render_math_run(run: &MathRunIr, out: &mut String) {
         }
         out.push_str("</m:rPr>");
     }
-    if let Some(ref hex) = run.color {
-        let _ = write!(out, r#"<w:rPr><w:color w:val="{hex}"/></w:rPr>"#);
+    let needs_font = run.font_family.as_deref().is_some_and(|fam| !fam.is_empty());
+    let width_scale = run.width_scale_pct.filter(|&p| p != 100);
+    if needs_font || run.font_size_pt.is_some() || run.color.is_some() || width_scale.is_some() {
+        out.push_str("<w:rPr>");
+        if needs_font
+            && let Some(ref fam) = run.font_family
+        {
+            render_math_run_fonts(fam, has_cjk, out);
+        }
+        if let Some(ref hex) = run.color {
+            let _ = write!(out, r#"<w:color w:val="{hex}"/>"#);
+        }
+        if let Some(sz_pt) = run.font_size_pt {
+            let half_pts = ((sz_pt * 2.0).round() as u32).clamp(4, 288);
+            let _ = write!(
+                out,
+                r#"<w:sz w:val="{half_pts}"/><w:szCs w:val="{half_pts}"/>"#
+            );
+        }
+        if let Some(pct) = width_scale {
+            let clamped = pct.clamp(50, 200);
+            let _ = write!(out, r#"<w:w w:val="{clamped}"/>"#);
+        }
+        out.push_str("</w:rPr>");
     }
     out.push_str("<m:t>");
     out.push_str(&escape_xml_text(&run.text));
     out.push_str("</m:t></m:r>");
+}
+
+/// Emit `<w:rFonts>` for an OMML math run (`<m:r>`).
+///
+/// Always preserve the exact `font_family` extracted from Typst rather than substituting
+/// fallback font names (such as mapping `"PingFang SC"` to `"Heiti SC"` or `"Times New Roman"`).
+fn render_math_run_fonts(fam: &str, has_cjk: bool, out: &mut String) {
+    if has_cjk {
+        let ea_esc = escape_xml_attr(fam);
+        let _ = write!(
+            out,
+            r#"<w:rFonts w:ascii="{ea_esc}" w:hAnsi="{ea_esc}" w:eastAsia="{ea_esc}" w:cs="{ea_esc}" w:hint="eastAsia"/>"#
+        );
+    } else {
+        let math_esc = escape_xml_attr(fam);
+        let _ = write!(
+            out,
+            r#"<w:rFonts w:ascii="{math_esc}" w:hAnsi="{math_esc}" w:cs="{math_esc}"/>"#
+        );
+    }
 }

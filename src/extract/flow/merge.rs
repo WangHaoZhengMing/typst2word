@@ -1,57 +1,18 @@
-//! Block-level flow orchestration:
-//! - Walking `TreeNode` sequences and coalescing stray inline nodes into paragraphs
-//! - Merging cross-column / cross-page split styled container blocks (`is_styled_container`)
-//! - Recovering orphaned cross-page list/enum markers (`PdfMarkerTag`)
+//! Cross-page / cross-column styled container merging and orphaned list marker recovery.
 
-use typst::foundations::{Packed, StyleChain};
-use typst::math::EquationElem;
-use typst::model::{
-    CiteGroup, DirectLinkElem, EmphElem, EnumElem, FootnoteElem, LinkElem, LinkMarker, ListElem,
-    RefElem, StrongElem,
-};
+use typst::foundations::Packed;
+use typst::model::{EnumElem, ListElem};
 use typst::pdf::{PdfMarkerTag, PdfMarkerTagKind};
-use typst::text::{
-    HighlightElem, OverlineElem, RawElem, SmallcapsElem, StrikeElem, SubElem, SuperElem, TextElem,
-    UnderlineElem,
-};
+use typst::text::TextElem;
 
 use crate::extract::ExtractorContext;
 use crate::extract::frame_tree::TreeNode;
-use crate::extract::inline::ActiveInlineState;
-use crate::ir::{BlockNode, EnumItemIr, HAlignIr, ListItemIr, ParagraphStyleIr, TableRowIr};
+use crate::ir::{BlockNode, EnumItemIr, HAlignIr, ListItemIr, TableRowIr};
 
 impl<'a> ExtractorContext<'a> {
-    pub(crate) fn extract_blocks_from_nodes(
-        &mut self,
-        nodes: &[TreeNode],
-        list_level: usize,
-        inherited_align: HAlignIr,
-    ) -> Vec<BlockNode> {
-        let mut blocks = Vec::new();
-        let mut stray_inlines: Vec<TreeNode> = Vec::new();
-
-        for node in nodes {
-            if Self::is_stray_inline_node(node) {
-                stray_inlines.push(node.clone());
-                continue;
-            }
-            if !stray_inlines.is_empty() {
-                self.flush_stray_inlines(&mut stray_inlines, &mut blocks, inherited_align);
-            }
-            self.extract_block_from_node(node, &mut blocks, list_level, inherited_align);
-        }
-
-        if !stray_inlines.is_empty() {
-            self.flush_stray_inlines(&mut stray_inlines, &mut blocks, inherited_align);
-        }
-
-        Self::merge_split_styled_containers(&mut blocks);
-        blocks
-    }
-
     /// Merge adjacent 1-cell styled container tables produced when a single
     /// `#block(stroke: ..., fill: ...)[...]` broke across columns or pages in Typst.
-    fn merge_split_styled_containers(blocks: &mut Vec<BlockNode>) {
+    pub(super) fn merge_split_styled_containers(blocks: &mut Vec<BlockNode>) {
         let mut i = 1;
         while i < blocks.len() {
             let can_merge = match (&blocks[i - 1], &blocks[i]) {
@@ -141,81 +102,6 @@ impl<'a> ExtractorContext<'a> {
                     a_blocks.extend(b_blocks);
                 }
             }
-        }
-    }
-
-    pub(crate) fn is_stray_inline_node(node: &TreeNode) -> bool {
-        match node {
-            TreeNode::Text { .. } | TreeNode::Link { .. } => true,
-            TreeNode::Element { elem, .. } => {
-                elem.is::<StrongElem>()
-                    || elem.is::<EmphElem>()
-                    || elem.is::<UnderlineElem>()
-                    || elem.is::<StrikeElem>()
-                    || elem.is::<OverlineElem>()
-                    || elem.is::<HighlightElem>()
-                    || elem.is::<SubElem>()
-                    || elem.is::<SuperElem>()
-                    || elem.is::<SmallcapsElem>()
-                    || elem.is::<LinkMarker>()
-                    || elem.is::<LinkElem>()
-                    || elem.is::<DirectLinkElem>()
-                    || elem.is::<RefElem>()
-                    || elem.is::<CiteGroup>()
-                    || elem.is::<FootnoteElem>()
-                    || (elem.is::<EquationElem>()
-                        && !elem
-                            .to_packed::<EquationElem>()
-                            .unwrap()
-                            .block
-                            .get(StyleChain::default()))
-                    || (elem.is::<RawElem>()
-                        && !elem
-                            .to_packed::<RawElem>()
-                            .unwrap()
-                            .block
-                            .get(StyleChain::default()))
-            }
-            _ => false,
-        }
-    }
-
-    pub(crate) fn flush_stray_inlines(
-        &mut self,
-        stray: &mut Vec<TreeNode>,
-        blocks: &mut Vec<BlockNode>,
-        align: HAlignIr,
-    ) {
-        let inferred_align = self.infer_node_halign(stray).unwrap_or(align);
-        let eff_align = if inferred_align == HAlignIr::Left && align != HAlignIr::Left {
-            align
-        } else {
-            inferred_align
-        };
-        let mut inlines = Vec::new();
-        let mut state = ActiveInlineState::default();
-        let mut last_y: Option<f64> = None;
-        let mut last_x_end: Option<f64> = None;
-        self.extract_inlines_from_nodes(
-            stray,
-            &mut inlines,
-            &mut state,
-            &mut last_y,
-            &mut last_x_end,
-        );
-        Self::merge_adjacent_text_runs(&mut inlines);
-        stray.clear();
-        if !inlines.is_empty() {
-            self.report.paragraphs_count += 1;
-            blocks.push(BlockNode::Paragraph {
-                content: inlines,
-                style: ParagraphStyleIr {
-                    align: eff_align,
-                    space_after_pt: 2.0,
-                    ..Default::default()
-                },
-                bookmark: None,
-            });
         }
     }
 

@@ -12,7 +12,7 @@ impl<'a> DocxBuilder<'a> {
         let val = Self::dash_to_w_border_val(&stroke.dash);
         let _ = write!(
             out,
-            r#"<w:p><w:pPr><w:pBdr><w:bottom w:val="{val}" w:sz="{sz}" w:space="1" w:color="{}"/></w:pBdr><w:spacing w:before="90" w:after="90"/></w:pPr></w:p>"#,
+            r#"<w:p><w:pPr><w:pBdr><w:bottom w:val="{val}" w:sz="{sz}" w:space="1" w:color="{}"/></w:pBdr><w:spacing w:before="0" w:after="80" w:line="80" w:lineRule="exact"/><w:rPr><w:sz w:val="4"/><w:szCs w:val="4"/></w:rPr></w:pPr></w:p>"#,
             stroke.color
         );
     }

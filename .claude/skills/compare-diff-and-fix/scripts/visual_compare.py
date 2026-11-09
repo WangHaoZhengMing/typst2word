@@ -178,7 +178,12 @@ def main() -> int:
     parser.add_argument(
         "--coords-only",
         action="store_true",
-        help="Only generate PDFs and exact coordinate diff (layout_diff.txt), skipping overlay PNG rendering",
+        help="Only generate PDFs and exact coordinate diff (layout_diff.txt), skipping overlay PDF rendering",
+    )
+    parser.add_argument(
+        "--keep-pngs",
+        action="store_true",
+        help="Also render per-page overlay_page_<N>.png files and keep intermediate word_page_*.png images",
     )
     parser.add_argument(
         "--max-pages",
@@ -267,28 +272,33 @@ def main() -> int:
             tint=not args.no_tint,
         )
 
-        print("[5/5] Building & compiling overlay_compare.typ with Word pages as 100% page backgrounds...")
+        print("[5/5] Building & compiling overlay_compare.pdf with Word pages as 100% page backgrounds...")
         overlay_typ_path = build_overlay_typ(input_typ, out_dir, bg_files)
-        overlay_png_pattern = out_dir / "overlay_page_{p}.png"
 
-        ppi = int(round(72.0 * args.scale))
         subprocess.run(
             [typst_bin, "compile", "--jobs", "2", str(overlay_typ_path), str(overlay_pdf_path)],
             check=True,
         )
-        subprocess.run(
-            [
-                typst_bin,
-                "compile",
-                "--jobs",
-                "2",
-                "--ppi",
-                str(ppi),
-                str(overlay_typ_path),
-                str(overlay_png_pattern),
-            ],
-            check=True,
-        )
+        if args.keep_pngs:
+            overlay_png_pattern = out_dir / "overlay_page_{p}.png"
+            ppi = int(round(72.0 * args.scale))
+            subprocess.run(
+                [
+                    typst_bin,
+                    "compile",
+                    "--jobs",
+                    "2",
+                    "--ppi",
+                    str(ppi),
+                    str(overlay_typ_path),
+                    str(overlay_png_pattern),
+                ],
+                check=True,
+            )
+        else:
+            overlay_typ_path.unlink(missing_ok=True)
+            for png_file in out_dir.glob("word_page_*.png"):
+                png_file.unlink(missing_ok=True)
 
     print(f"\nDone! Visual & coordinate comparison files generated in {out_dir}:")
     if ir_path is not None and ir_path.exists():
@@ -297,10 +307,11 @@ def main() -> int:
     print(f"  - Word Exported PDF:    {word_pdf_path}")
     print(f"  - Coordinate Diff TXT:  {layout_diff_path}")
     if not args.coords_only:
-        print(f"  - Overlay Typst source: {overlay_typ_path}")
-        print(f"  - Overlay PDF:          {overlay_pdf_path}")
-        for p in range(1, len(bg_files) + 1):
-            print(f"  - Overlay Page {p} PNG:   {out_dir / f'overlay_page_{p}.png'}")
+        print(f"  - Merged Overlay PDF:   {overlay_pdf_path}")
+        if args.keep_pngs:
+            print(f"  - Overlay Typst source: {overlay_typ_path}")
+            for p in range(1, len(bg_files) + 1):
+                print(f"  - Overlay Page {p} PNG:   {out_dir / f'overlay_page_{p}.png'}")
     return 0
 
 

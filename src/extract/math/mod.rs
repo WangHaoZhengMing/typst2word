@@ -37,18 +37,27 @@ pub(crate) struct MathStyleCtx {
     pub(crate) is_display: bool,
     pub(crate) in_eq_arr: bool,
     pub(crate) force_limits: Option<bool>,
+    pub(crate) base_font_size_pt: Option<f64>,
+    pub(crate) math_font: Option<&'static str>,
+    pub(crate) cjk_font: Option<&'static str>,
 }
 
 /// Extract a Typst `EquationElem` into a list of semantic `MathNodeIr` nodes.
 pub(crate) fn extract_equation_math_nodes(
     eq: &Packed<EquationElem>,
     styles: StyleChain,
+    base_font_size_pt: Option<f64>,
+    math_font: Option<&'static str>,
+    cjk_font: Option<&'static str>,
 ) -> Vec<MathNodeIr> {
     let is_block = eq.block.get(styles);
     let ctx = MathStyleCtx {
         is_display: is_block,
         in_eq_arr: false,
         force_limits: None,
+        base_font_size_pt,
+        math_font,
+        cjk_font,
     };
     let mut nodes = Vec::new();
     extract_math_root(&eq.body, styles, ctx, &mut nodes);
@@ -187,6 +196,7 @@ pub(crate) fn extract_sequence_slice(
                 out.push(MathNodeIr::Run(MathRunIr {
                     text: "\u{2005}".to_string(),
                     style: Some(MathStyleIr::Plain),
+                    font_size_pt: ctx.base_font_size_pt,
                     ..Default::default()
                 }));
             }

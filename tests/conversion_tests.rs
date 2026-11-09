@@ -371,3 +371,55 @@ Final page paragraph.
     // Verify math inside CeTZ label textbox
     assert!(doc_xml.contains("<m:nary>"));
 }
+
+#[test]
+fn test_read_only_pdf_anchors_and_word_construct_policies() {
+    let typst_src = r##"
+#set par(justify: true, linebreaks: "optimized")
+
+= 排版算法与锚点校验测试
+
+这是一段采用优化断行策略的中文段落，包含避头尾标点符号（如括号、逗号、句号）。
+
+#block(sticky: true)[
+  *粘性标题块：必须与下一段同页*
+]
+
+#block(breakable: false)[
+  不可拆分块第一行。
+
+  不可拆分块第二行。
+]
+"##;
+
+    let (docx_bytes, ir) =
+        convert_typst_str_to_docx_bytes(typst_src, None).expect("conversion with anchors succeeded");
+    let doc_xml = assert_valid_docx_xml(&docx_bytes);
+
+    // 1. Read-only PDF line anchors should be populated on `DocumentIr` without mutating blocks.
+    assert!(
+        !ir.anchors.is_empty(),
+        "expected read-only AnchorLineIr entries extracted from laid-out Typst frames"
+    );
+    let anchor_report = word_construct::compare_line_anchors(&ir.anchors, &ir.anchors, 0.5, 0.5);
+    assert_eq!(anchor_report.token_parity_rate, 1.0);
+    assert_eq!(
+        anchor_report.exact_token_matches,
+        anchor_report.total_golden_lines
+    );
+
+    // 2. Verify `LineBreakPolicy::KnuthPlass` was captured on justified paragraph.
+    let has_knuth_plass = ir.blocks.iter().any(|b| {
+        matches!(
+            b,
+            typst2word::ir::BlockNode::Paragraph { style, .. }
+                if style.line_break_policy == word_construct::LineBreakPolicy::typst_knuth_plass()
+        )
+    });
+    assert!(has_knuth_plass, "expected KnuthPlass policy on justified optimized paragraph");
+
+    // 3. Verify `sticky: true` and `breakable: false` emit `<w:keepNext/>` and `<w:keepLines/>`.
+    assert!(doc_xml.contains("<w:keepNext/>"));
+    assert!(doc_xml.contains("<w:keepLines/>"));
+}
+

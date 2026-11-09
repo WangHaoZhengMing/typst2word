@@ -74,18 +74,20 @@ impl<'a> DocxBuilder<'a> {
             if let Some(id) = bm_id {
                 Self::emit_bookmark_end(id, out);
             }
+            let num_half_pts = ((eq.font_size_pt.unwrap_or(11.0) * 2.0).round() as u32).clamp(8, 144);
             let _ = write!(
                 out,
                 concat!(
                     r#"</w:p></w:tc>"#,
                     r#"<w:tc><w:tcPr><w:tcW w:w="{side_dxa}" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr>"#,
                     r#"<w:p><w:pPr><w:jc w:val="right"/><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/></w:pPr>"#,
-                    r#"<w:r><w:rPr><w:rFonts w:ascii="Libertinus Serif" w:hAnsi="Libertinus Serif" w:eastAsia="Heiti SC" w:cs="Libertinus Serif"/><w:sz w:val="22"/><w:szCs w:val="22"/></w:rPr>"#,
+                    r#"<w:r><w:rPr><w:rFonts w:ascii="Libertinus Serif" w:hAnsi="Libertinus Serif" w:eastAsia="Heiti SC" w:cs="Libertinus Serif"/><w:sz w:val="{num_half_pts}"/><w:szCs w:val="{num_half_pts}"/></w:rPr>"#,
                     r#"<w:t xml:space="preserve">{}</w:t></w:r></w:p></w:tc>"#,
                     r#"</w:tr></w:tbl>"#,
                 ),
                 escape_xml(num),
                 side_dxa = side_dxa,
+                num_half_pts = num_half_pts,
             );
             return;
         }

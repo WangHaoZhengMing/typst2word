@@ -47,7 +47,7 @@ pub fn cetz_canvas_to_drawingml_run(canvas: &CetzCanvasIr) -> String {
 
     // 3. Positioned text/formula label drawables
     for label_drawable in &canvas.labels {
-        children_xml.push_str(&build_cetz_label_wsp(label_drawable));
+        children_xml.push_str(&build_cetz_label_wsp(label_drawable, canvas.height_pt));
     }
 
     // Ensure `<wpg:wgp>` has at least one child shape so Word never complains about an empty group
@@ -83,7 +83,7 @@ pub fn cetz_canvas_to_drawingml_run(canvas: &CetzCanvasIr) -> String {
             r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" "#,
             r#"xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math">"#,
             r#"<wp:extent cx="{cx}" cy="{cy}"/>"#,
-            r#"<wp:effectExtent l="12700" t="12700" r="12700" b="12700"/>"#,
+            r#"<wp:effectExtent l="12700" t="0" r="12700" b="0"/>"#,
             r#"<wp:docPr id="{id}" name="CeTZCanvas_{id}"/>"#,
             r#"<wp:cNvGraphicFramePr/>"#,
             r#"<a:graphic>"#,
@@ -180,13 +180,20 @@ pub(crate) fn build_cetz_path_wsp(drawable: &CetzPathDrawableIr) -> String {
     )
 }
 
-pub(crate) fn build_cetz_label_wsp(label: &CetzLabelDrawableIr) -> String {
+pub(crate) fn build_cetz_label_wsp(label: &CetzLabelDrawableIr, canvas_height_pt: f64) -> String {
     let sp_id = next_drawing_id();
-    // Give the label textbox generous width/height so Word never wraps single-line labels
+    // Give the label textbox generous width so Word never wraps single-line labels,
+    // while clamping height so `off_y + cy` never overflows `canvas_height_pt` (`<wp:extent cy>`).
     let w_pt = (label.width_pt * 2.0 + 48.0).max(72.0);
-    let h_pt = (label.height_pt + 14.0).max(28.0);
+    let top_pt = (label.y_pt - 2.0).max(0.0);
+    let max_avail_h_pt = (canvas_height_pt - top_pt).max(11.0);
+    let h_pt = if label.rotation_deg.abs() > 0.01 {
+        (label.height_pt + 14.0).max(28.0)
+    } else {
+        (label.height_pt + 2.0).clamp(11.0, max_avail_h_pt)
+    };
     let off_x = pt_to_emu((label.x_pt - 2.0).max(0.0));
-    let off_y = pt_to_emu((label.y_pt - 2.0).max(0.0));
+    let off_y = pt_to_emu(top_pt);
     let cx = pt_to_emu(w_pt);
     let cy = pt_to_emu(h_pt);
 

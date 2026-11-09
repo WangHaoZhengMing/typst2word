@@ -36,7 +36,7 @@ impl<'a> DocxBuilder<'a> {
     <w:basedOn w:val="Normal"/>
     <w:next w:val="Normal"/>
     <w:qFormat/>
-    <w:pPr><w:keepNext/><w:spacing w:before="260" w:after="110" w:line="240" w:lineRule="auto"/><w:outlineLvl w:val="0"/></w:pPr>
+    <w:pPr><w:keepNext/><w:spacing w:before="240" w:after="20" w:line="240" w:lineRule="auto"/><w:outlineLvl w:val="0"/></w:pPr>
     <w:rPr><w:b/><w:sz w:val="31"/><w:szCs w:val="31"/></w:rPr>
   </w:style>
   <w:style w:type="paragraph" w:styleId="Heading2">

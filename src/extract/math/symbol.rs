@@ -29,7 +29,7 @@ pub(crate) fn extract_symbol_or_wrapper(
             4 => "⁗".to_string(),
             n => "′".repeat(n),
         };
-        if let Some(run) = build_math_run(&s, styles, false) {
+        if let Some(run) = build_math_run(&s, styles, ctx, false) {
             out.push(MathNodeIr::Run(run));
         }
         return;
@@ -38,7 +38,7 @@ pub(crate) fn extract_symbol_or_wrapper(
     // 2. Text Operator (`OpElem`, e.g. `sin`, `cos`, `lim`, `max`, `det`, etc.)
     if let Some(op) = content.to_packed::<OpElem>() {
         let op_str = op.text.plain_text();
-        if let Some(run) = build_math_run(&op_str, styles, true) {
+        if let Some(run) = build_math_run(&op_str, styles, ctx, true) {
             out.push(MathNodeIr::Run(run));
         }
         return;
@@ -51,7 +51,7 @@ pub(crate) fn extract_symbol_or_wrapper(
     if let Some(h) = content.to_packed::<HElem>() {
         if let Spacing::Rel(rel) = h.amount
             && !rel.is_zero()
-            && let Some(run) = build_math_run("\u{2009}", styles, true)
+            && let Some(run) = build_math_run("\u{2009}", styles, ctx, true)
         {
             out.push(MathNodeIr::Run(run));
         }
@@ -60,27 +60,27 @@ pub(crate) fn extract_symbol_or_wrapper(
 
     // 4. Symbols (`SymbolElem`) and Text (`TextElem`, `RawElem`, `SmartQuoteElem`)
     if let Some(sym) = content.to_packed::<SymbolElem>() {
-        if let Some(run) = build_math_run(&sym.text, styles, false) {
+        if let Some(run) = build_math_run(&sym.text, styles, ctx, false) {
             out.push(MathNodeIr::Run(run));
         }
         return;
     }
     if let Some(txt) = content.to_packed::<TextElem>() {
         let is_quoted_word = txt.text.chars().count() > 1;
-        if let Some(run) = build_math_run(&txt.text, styles, is_quoted_word) {
+        if let Some(run) = build_math_run(&txt.text, styles, ctx, is_quoted_word) {
             out.push(MathNodeIr::Run(run));
         }
         return;
     }
     if content.is::<RawElem>() {
         let t = content.plain_text();
-        if let Some(run) = build_math_run(&t, styles, true) {
+        if let Some(run) = build_math_run(&t, styles, ctx, true) {
             out.push(MathNodeIr::Run(run));
         }
         return;
     }
     if content.is::<SmartQuoteElem>() {
-        if let Some(run) = build_math_run("\"", styles, true) {
+        if let Some(run) = build_math_run("\"", styles, ctx, true) {
             out.push(MathNodeIr::Run(run));
         }
         return;
@@ -137,7 +137,7 @@ pub(crate) fn extract_symbol_or_wrapper(
     }
     if let Some(r) = content.to_packed::<RefElem>() {
         let t = format!("@{}", r.target.resolve());
-        if let Some(run) = build_math_run(&t, styles, true) {
+        if let Some(run) = build_math_run(&t, styles, ctx, true) {
             out.push(MathNodeIr::Run(run));
         }
         return;
@@ -145,7 +145,7 @@ pub(crate) fn extract_symbol_or_wrapper(
 
     // Fallback for any other content inside math: extract plain text.
     let fallback_txt = content.plain_text();
-    if let Some(run) = build_math_run(&fallback_txt, styles, false) {
+    if let Some(run) = build_math_run(&fallback_txt, styles, ctx, false) {
         out.push(MathNodeIr::Run(run));
     }
 }
@@ -153,6 +153,7 @@ pub(crate) fn extract_symbol_or_wrapper(
 pub(crate) fn build_math_run(
     text: &str,
     styles: StyleChain,
+    ctx: MathStyleCtx,
     default_upright: bool,
 ) -> Option<MathRunIr> {
     if text.is_empty() {
@@ -206,10 +207,30 @@ pub(crate) fn build_math_run(
         _ => None,
     };
 
+    let has_cjk = text.chars().any(|c| {
+        ('\u{4E00}'..='\u{9FFF}').contains(&c)
+            || ('\u{3000}'..='\u{303F}').contains(&c)
+            || ('\u{FF00}'..='\u{FFEF}').contains(&c)
+    });
+    let font_family = if has_cjk {
+        ctx.cjk_font.map(str::to_string).or_else(|| {
+            styles
+                .get_ref(TextElem::font)
+                .into_iter()
+                .find_map(|f| crate::extract::ExtractorContext::classify_cjk_font_static(f.as_str()))
+                .map(str::to_string)
+        })
+    } else {
+        ctx.math_font.map(str::to_string)
+    };
+
     Some(MathRunIr {
         text: text.to_string(),
         script,
         style,
         color,
+        font_family,
+        font_size_pt: ctx.base_font_size_pt,
+        width_scale_pct: None,
     })
 }

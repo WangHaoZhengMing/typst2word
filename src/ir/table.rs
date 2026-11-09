@@ -49,6 +49,32 @@ pub struct TableCellIr {
     pub blocks: Vec<BlockNode>,
 }
 
+/// High-level semantic classification of a `TableIr`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum TableKindIr {
+    /// Explicit `#table(...)` with semantic borders and cell insets.
+    #[default]
+    SemanticTable,
+    /// Borderless layout `#grid(...)`.
+    LayoutGrid,
+    /// Bordered/filled `#block(...)` container modeled as a breakable 1x1 table.
+    StyledContainer,
+}
+
+impl TableIr {
+    /// Return the domain `TableKindIr` enum for this table.
+    #[inline]
+    pub const fn kind(&self) -> TableKindIr {
+        if self.is_styled_container {
+            TableKindIr::StyledContainer
+        } else if self.is_semantic_table {
+            TableKindIr::SemanticTable
+        } else {
+            TableKindIr::LayoutGrid
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum VMergeState {
     Restart,

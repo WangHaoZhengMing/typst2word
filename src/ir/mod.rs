@@ -33,15 +33,63 @@ pub use list::{EnumItemIr, ListItemIr, TermItemIr};
 pub use outline::OutlineEntryIr;
 pub use shape::{CurveSegmentIr, ShapeIr, ShapeKindIr};
 pub use style::{
-    BordersIr, DashPatternIr, HAlignIr, LineCapIr, LineJoinIr, ParagraphStyleIr, SidesPtIr,
-    StrokeIr, VAlignIr,
+    BordersIr, ContextualSpacingPolicy, DashPatternIr, HAlignIr, KeepLinesPolicy,
+    KeepWithNextPolicy, KinsokuSet, LineBreakPolicy, LineCapIr, LineJoinIr, ParagraphStyleIr,
+    RowBreakPolicy, RowHeaderRepeatPolicy, SidesPtIr, SpaceBeforeTopPolicy, StrokeIr, VAlignIr,
+    WidowOrphanPolicy,
 };
-pub use table::{TableCellIr, TableIr, TableRowIr, VMergeState};
+pub use table::{TableCellIr, TableIr, TableKindIr, TableRowIr, VMergeState};
 pub use text::{ScriptKindIr, TextRunIr};
 pub use unsupported::UnsupportedIr;
+pub use word_construct::AnchorLineIr;
 
 /// 6-digit uppercase hex RGB color string (e.g., `"1A2B3C"`).
 pub type ColorHex = String;
+
+/// Semantic kind of a `BlockNode::Figure` (`image`, `table`, `raw`, or custom).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum FigureKindIr {
+    #[default]
+    Image,
+    Table,
+    Code,
+    Custom(String),
+}
+
+impl FigureKindIr {
+    pub fn from_typst_repr(repr: &str) -> Self {
+        let lower = repr.to_ascii_lowercase();
+        if lower.contains("table") {
+            Self::Table
+        } else if lower.contains("raw") || lower.contains("code") {
+            Self::Code
+        } else if lower.contains("image") || lower == "auto" {
+            Self::Image
+        } else {
+            Self::Custom(repr.to_string())
+        }
+    }
+}
+
+/// Position of a figure caption relative to its body.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum CaptionPositionIr {
+    Top,
+    #[default]
+    Bottom,
+}
+
+impl CaptionPositionIr {
+    #[inline]
+    pub const fn from_top_bool(is_top: bool) -> Self {
+        if is_top { Self::Top } else { Self::Bottom }
+    }
+
+    #[inline]
+    pub const fn is_top(self) -> bool {
+        matches!(self, Self::Top)
+    }
+}
 
 /// Complete intermediate representation of a compiled Typst document.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -50,6 +98,9 @@ pub struct DocumentIr {
     pub page_setup: PageSetupIr,
     pub blocks: Vec<BlockNode>,
     pub report: ConversionReport,
+    /// Read-only verification line anchors extracted from reference layout (never read by generator).
+    #[serde(default)]
+    pub anchors: Vec<AnchorLineIr>,
 }
 
 /// Block-level document node.

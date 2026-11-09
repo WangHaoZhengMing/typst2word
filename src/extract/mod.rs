@@ -16,6 +16,7 @@
 //! - `math`: Typst math AST -> semantic `MathNodeIr`
 //! - `convert`: Typst value -> IR value helpers
 
+mod anchors;
 mod convert;
 mod dispatch;
 mod document;
@@ -77,6 +78,10 @@ pub(crate) struct ExtractorContext<'a> {
     pub(crate) container_inset_pt: f64,
     /// Pending list/enum marker text from an orphaned `PdfMarkerTag(ListItemLabel)`.
     pub(crate) pending_list_marker: Option<String>,
+    /// Open `FrameItem::Group` that split across a page/column boundary with unclosed tags.
+    pub(crate) pending_split_group: Option<frame_tree::PendingSplitGroup>,
+    /// Recursion depth inside `FrameItem::Group` frames during `build_frame_tree`.
+    pub(crate) group_tree_depth: usize,
 }
 
 impl<'a> ExtractorContext<'a> {
@@ -108,6 +113,8 @@ impl<'a> ExtractorContext<'a> {
             active_columns: (1, 0.0),
             container_inset_pt: 0.0,
             pending_list_marker: None,
+            pending_split_group: None,
+            group_tree_depth: 0,
         }
     }
 
@@ -198,12 +205,14 @@ impl<'a> ExtractorContext<'a> {
 
         let mut blocks = self.extract_blocks_from_nodes(&all_root_nodes, 0, HAlignIr::Left);
         self.clean_redundant_pagebreaks(&mut blocks);
+        let anchors = self.extract_page_line_anchors();
 
         DocumentIr {
             metadata,
             page_setup,
             blocks,
             report: self.report.clone(),
+            anchors,
         }
     }
 }

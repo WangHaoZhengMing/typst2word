@@ -402,6 +402,7 @@ for p in 1...maxPages {
     var alignedCount = 0
     var shiftedCount = 0
     var missingCount = 0
+    var anchorExactCount = 0
     var maxAbsDy = 0.0
     var maxAbsDx = 0.0
 
@@ -440,6 +441,9 @@ for p in 1...maxPages {
                 alignedCount += 1
             } else {
                 shiftedCount += 1
+            }
+            if o.normText.first == w.normText.first && o.normText.last == w.normText.last {
+                anchorExactCount += 1
             }
             let status = isOk ? "OK        " : "SHIFT     "
             let shortText = o.text.count > 34 ? String(o.text.prefix(34)) + "…" : o.text
@@ -483,8 +487,8 @@ for p in 1...maxPages {
     }
 
     let sumLine = String(
-        format: "PAGE %2d SUMMARY: aligned=%2d, shifted=%2d, unmatched=%2d, max|dY|=%5.1fpt, max|dX|=%5.1fpt",
-        p, alignedCount, shiftedCount, missingCount, maxAbsDy, maxAbsDx
+        format: "PAGE %2d SUMMARY: aligned=%2d, shifted=%2d, unmatched=%2d, anchor_parity=%2d/%2d, max|dY|=%5.1fpt, max|dX|=%5.1fpt",
+        p, alignedCount, shiftedCount, missingCount, anchorExactCount, oSpans.count, maxAbsDy, maxAbsDx
     )
     lines.append(sumLine)
     summaryLines.append("  " + sumLine)

@@ -36,10 +36,10 @@ impl<'a> DocxBuilder<'a> {
             };
             for (idx, line_runs) in lines.iter().enumerate() {
                 let before = if idx == 0 { 40 } else { 0 };
-                let after = if idx + 1 == num_lines { 60 } else { 0 };
+                let after = if idx + 1 == num_lines { 100 } else { 0 };
                 let _ = write!(
                     out,
-                    r#"<w:p><w:pPr><w:spacing w:before="{before}" w:after="{after}" w:line="220" w:lineRule="auto"/>{ind_xml}</w:pPr>"#,
+                    r#"<w:p><w:pPr><w:spacing w:before="{before}" w:after="{after}" w:line="276" w:lineRule="auto"/>{ind_xml}</w:pPr>"#,
                 );
                 for run in line_runs {
                     let mut code_run = run.clone();

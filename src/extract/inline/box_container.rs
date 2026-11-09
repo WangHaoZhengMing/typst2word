@@ -20,7 +20,7 @@ impl<'a> ExtractorContext<'a> {
         children: &[TreeNode],
         out: &mut Vec<InlineNode>,
         state: &mut ActiveInlineState,
-        last_y: &mut Option<f64>,
+        _last_y: &mut Option<f64>,
         last_x_end: &mut Option<f64>,
     ) -> bool {
         let mut bg_shapes = Vec::new();
@@ -66,7 +66,9 @@ impl<'a> ExtractorContext<'a> {
         if inner_text.trim().is_empty() {
             // Empty / whitespace-only inline `#box(width: 4em, stroke: (bottom: 0.5pt))`:
             // emit only the shape so whitespace doesn't offset the underline!
-            self.extract_inlines_from_nodes(&shape_nodes, out, state, last_y, last_x_end);
+            let mut inner_y = None;
+            let mut inner_x = None;
+            self.extract_inlines_from_nodes(&shape_nodes, out, state, &mut inner_y, &mut inner_x);
             *last_x_end = Some(pos.x.to_pt() + group.frame.size().x.to_pt());
             return true;
         }
@@ -110,7 +112,9 @@ impl<'a> ExtractorContext<'a> {
                 state.border = Some(st);
             }
         }
-        self.extract_inlines_from_nodes(&content_children, out, state, last_y, last_x_end);
+        let mut inner_y = None;
+        let mut inner_x = None;
+        self.extract_inlines_from_nodes(&content_children, out, state, &mut inner_y, &mut inner_x);
         state.highlight = prev_hl;
         state.border = prev_bdr;
         state.underline = prev_ul;
