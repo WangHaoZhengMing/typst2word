@@ -1,7 +1,7 @@
 //! Inter-block PDF vertical gap measurements (`InterBlockFlowIr` and `extra_trailing_space_pt`).
 
 use crate::extract::ExtractorContext;
-use crate::extract::frame_tree::TreeNode;
+use crate::extract::frame_tree::{TreeNode, decode_page_and_local_y};
 use crate::ir::{BlockNode, InterBlockFlowIr};
 
 impl<'a> ExtractorContext<'a> {
@@ -12,32 +12,22 @@ impl<'a> ExtractorContext<'a> {
                     if text.text.trim().is_empty() {
                         continue;
                     }
-                    let raw_y = (pos.y - text.size * 0.8).to_pt().max(0.0);
-                    let page_idx = (raw_y / 10000.0).floor() as usize;
-                    let local_y = raw_y - page_idx as f64 * 10000.0;
-                    return Some((page_idx, local_y, pos.x.to_pt()));
+                    let raw_y = (pos.y - text.size * 0.8).to_pt();
+                    return Some(decode_page_and_local_y(raw_y, pos.x.to_pt()));
                 }
                 TreeNode::Group { group, pos, .. } => {
                     if group.frame.size().x.to_pt() <= 0.0 && group.frame.size().y.to_pt() <= 0.0 {
                         continue;
                     }
-                    let raw_y = pos.y.to_pt().max(0.0);
-                    let page_idx = (raw_y / 10000.0).floor() as usize;
-                    let local_y = raw_y - page_idx as f64 * 10000.0;
-                    return Some((page_idx, local_y, pos.x.to_pt()));
+                    return Some(decode_page_and_local_y(pos.y.to_pt(), pos.x.to_pt()));
                 }
                 TreeNode::Shape { shape, pos, .. } => {
                     let b = shape.geometry.bbox(None);
-                    let raw_y = (pos.y + b.min.y).to_pt().max(0.0);
-                    let page_idx = (raw_y / 10000.0).floor() as usize;
-                    let local_y = raw_y - page_idx as f64 * 10000.0;
-                    return Some((page_idx, local_y, pos.x.to_pt()));
+                    let raw_y = (pos.y + b.min.y).to_pt();
+                    return Some(decode_page_and_local_y(raw_y, pos.x.to_pt()));
                 }
                 TreeNode::Image { pos, .. } => {
-                    let raw_y = pos.y.to_pt().max(0.0);
-                    let page_idx = (raw_y / 10000.0).floor() as usize;
-                    let local_y = raw_y - page_idx as f64 * 10000.0;
-                    return Some((page_idx, local_y, pos.x.to_pt()));
+                    return Some(decode_page_and_local_y(pos.y.to_pt(), pos.x.to_pt()));
                 }
                 TreeNode::Element { elem, children, .. } => {
                     if Self::is_page_furniture_elem(elem) {
@@ -60,32 +50,24 @@ impl<'a> ExtractorContext<'a> {
                     if text.text.trim().is_empty() {
                         continue;
                     }
-                    let raw_y = (pos.y + text.size * 0.2).to_pt().max(0.0);
-                    let page_idx = (raw_y / 10000.0).floor() as usize;
-                    let local_y = raw_y - page_idx as f64 * 10000.0;
-                    return Some((page_idx, local_y, pos.x.to_pt()));
+                    let raw_y = (pos.y + text.size * 0.2).to_pt();
+                    return Some(decode_page_and_local_y(raw_y, pos.x.to_pt()));
                 }
                 TreeNode::Group { group, pos, .. } => {
                     if group.frame.size().x.to_pt() <= 0.0 && group.frame.size().y.to_pt() <= 0.0 {
                         continue;
                     }
-                    let raw_y = (pos.y + group.frame.size().y).to_pt().max(0.0);
-                    let page_idx = (raw_y / 10000.0).floor() as usize;
-                    let local_y = raw_y - page_idx as f64 * 10000.0;
-                    return Some((page_idx, local_y, pos.x.to_pt()));
+                    let raw_y = (pos.y + group.frame.size().y).to_pt();
+                    return Some(decode_page_and_local_y(raw_y, pos.x.to_pt()));
                 }
                 TreeNode::Shape { shape, pos, .. } => {
                     let b = shape.geometry.bbox(None);
-                    let raw_y = (pos.y + b.max.y).to_pt().max(0.0);
-                    let page_idx = (raw_y / 10000.0).floor() as usize;
-                    let local_y = raw_y - page_idx as f64 * 10000.0;
-                    return Some((page_idx, local_y, pos.x.to_pt()));
+                    let raw_y = (pos.y + b.max.y).to_pt();
+                    return Some(decode_page_and_local_y(raw_y, pos.x.to_pt()));
                 }
                 TreeNode::Image { size, pos, .. } => {
-                    let raw_y = (pos.y + size.y).to_pt().max(0.0);
-                    let page_idx = (raw_y / 10000.0).floor() as usize;
-                    let local_y = raw_y - page_idx as f64 * 10000.0;
-                    return Some((page_idx, local_y, pos.x.to_pt()));
+                    let raw_y = (pos.y + size.y).to_pt();
+                    return Some(decode_page_and_local_y(raw_y, pos.x.to_pt()));
                 }
                 TreeNode::Element { elem, children, .. } => {
                     if Self::is_page_furniture_elem(elem) {

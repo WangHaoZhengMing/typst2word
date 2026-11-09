@@ -13,6 +13,23 @@ use typst::visualize::{Image, Shape};
 
 use crate::extract::ExtractorContext;
 
+/// Virtual vertical stride (`10000.0 pt`) separating consecutive pages in the unified
+/// multi-page `TreeNode` coordinate space.
+pub(crate) const PAGE_Y_STRIDE_PT: f64 = 10000.0;
+
+#[inline]
+pub(crate) fn encode_page_y_offset(page_idx: usize) -> typst::layout::Abs {
+    typst::layout::Abs::pt(page_idx as f64 * PAGE_Y_STRIDE_PT)
+}
+
+#[inline]
+pub(crate) fn decode_page_and_local_y(raw_y_pt: f64, x_pt: f64) -> (usize, f64, f64) {
+    let clamped_y = raw_y_pt.max(0.0);
+    let page_idx = (clamped_y / PAGE_Y_STRIDE_PT).floor() as usize;
+    let local_y = clamped_y - page_idx as f64 * PAGE_Y_STRIDE_PT;
+    (page_idx, local_y, x_pt)
+}
+
 /// Tree representation unifying `Tag::Start` / `Tag::End` semantic nodes with
 /// laid-out `FrameItem` visual nodes.
 #[derive(Debug, Clone)]
@@ -137,7 +154,7 @@ impl<'a> ExtractorContext<'a> {
             }
             let base_offset = Point::new(
                 typst::layout::Abs::zero(),
-                typst::layout::Abs::pt(page_idx as f64 * 10000.0),
+                encode_page_y_offset(page_idx),
             );
             self.append_frame_items_to_tree(&page.frame, base_offset, &mut root_nodes, &mut stack);
         }

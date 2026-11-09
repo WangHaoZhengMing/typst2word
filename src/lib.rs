@@ -24,7 +24,8 @@
 pub mod color;
 pub mod compiler;
 pub mod construct;
-pub mod docx;
+pub mod docx_writer;
+pub use docx_writer as docx;
 pub mod extract;
 pub mod ir;
 pub mod passes;
@@ -34,7 +35,7 @@ pub mod xml;
 use std::path::Path;
 
 use compiler::{TypstWorld, compile_world};
-use docx::{write_docx_to_bytes, write_docx_to_path};
+use docx_writer::{write_docx_to_bytes, write_docx_to_path};
 use extract::extract_document_ir;
 use ir::DocumentIr;
 use passes::run_pipeline_passes;
