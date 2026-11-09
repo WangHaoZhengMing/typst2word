@@ -27,6 +27,17 @@ impl<'a> DocxWriter<'a> {
 
     pub(crate) fn render_inline(&mut self, inline: &InlineNode, out: &mut String) {
         match inline {
+            InlineNode::Field { kind, format, content } => {
+                let mut instruction = match kind {
+                    ir::FieldKindIr::Page => "PAGE".to_string(),
+                    ir::FieldKindIr::NumPages => "NUMPAGES".to_string(),
+                    ir::FieldKindIr::PageRef { bookmark } => format!("PAGEREF {bookmark} \\h"),
+                };
+                if let Some(format) = format { instruction.push_str(&format!(" \\* {format}")); }
+                let _ = write!(out, r#"<w:fldSimple w:instr="{}" w:dirty="true">"#, crate::xml::escape_xml(&instruction));
+                self.render_inlines(content, out);
+                out.push_str("</w:fldSimple>");
+            }
             InlineNode::Text(run) => {
                 self.render_text_run(run, out);
             }

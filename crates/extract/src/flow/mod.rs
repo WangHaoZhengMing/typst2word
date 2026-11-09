@@ -168,7 +168,7 @@ impl<'a> ExtractorContext<'a> {
         match node {
             TreeNode::Text { .. } | TreeNode::Link { .. } => true,
             TreeNode::Element { elem, .. } => {
-                elem.is::<StrongElem>()
+                elem.is::<typst::introspection::CounterDisplayElem>() || elem.is::<StrongElem>()
                     || elem.is::<EmphElem>()
                     || elem.is::<UnderlineElem>()
                     || elem.is::<StrikeElem>()

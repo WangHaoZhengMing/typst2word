@@ -232,9 +232,18 @@ pub enum BlockNode {
     UnsupportedBlock(UnsupportedIr),
 }
 
+/// Dynamic Word field, with a cached display value retained from Typst.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum FieldKindIr {
+    Page,
+    NumPages,
+    PageRef { bookmark: String },
+}
+
 /// Inline-level document node inside paragraphs, headings, captions, etc.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum InlineNode {
+    Field { kind: FieldKindIr, format: Option<String>, content: Vec<InlineNode> },
     /// Styled text run.
     Text(TextRunIr),
     /// Inline math equation (`$...$`).

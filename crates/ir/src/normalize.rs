@@ -275,7 +275,8 @@ where
 {
     for inline in inlines {
         match inline {
-            InlineNode::Link { content, .. }
+            InlineNode::Field { content, .. }
+            | InlineNode::Link { content, .. }
             | InlineNode::Ref { content, .. }
             | InlineNode::Citation { content, .. } => {
                 visit_inlines_block_lists_mut(content, f);
@@ -363,7 +364,8 @@ where
 {
     for inline in inlines.iter_mut() {
         match inline {
-            InlineNode::Link { content, .. }
+            InlineNode::Field { content, .. }
+            | InlineNode::Link { content, .. }
             | InlineNode::Ref { content, .. }
             | InlineNode::Citation { content, .. } => {
                 visit_inline_list_recursive_mut(content, f);

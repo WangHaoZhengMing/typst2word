@@ -48,7 +48,11 @@ impl<'a> DocxWriter<'a> {
                 );
                 self.render_inlines(&entry.title, out);
                 out.push_str(r#"<w:r><w:tab/></w:r>"#);
-                self.render_text_run(&page_run, out);
+                self.render_inline(&InlineNode::Field {
+                    kind: ir::FieldKindIr::PageRef { bookmark: bm.clone() },
+                    format: None,
+                    content: vec![InlineNode::Text(page_run.clone())],
+                }, out);
                 out.push_str("</w:hyperlink>");
             } else {
                 self.render_inlines(&entry.title, out);

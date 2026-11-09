@@ -63,16 +63,6 @@ impl<'a> DocxWriter<'a> {
         out.push_str(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#);
         let _ = write!(out, "<w:{tag} {}>", Self::xml_namespaces());
         self.render_blocks(blocks, &mut out);
-        if tag == "ftr" && self.ir.report.pages_count > 1 {
-            let total = self.ir.report.pages_count;
-            let static_pat = format!(r#"<w:t xml:space="preserve">1/{total}</w:t>"#);
-            if out.contains(&static_pat) {
-                let dyn_pat = format!(
-                    r#"<w:fldChar w:fldCharType="begin"/><w:instrText xml:space="preserve"> PAGE </w:instrText><w:fldChar w:fldCharType="separate"/><w:t>1</w:t><w:fldChar w:fldCharType="end"/><w:t xml:space="preserve">/{total}</w:t>"#
-                );
-                out = out.replace(&static_pat, &dyn_pat);
-            }
-        }
         let _ = write!(out, "</w:{tag}>");
         out
     }

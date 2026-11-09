@@ -217,6 +217,45 @@ impl<'a> ExtractorContext<'a> {
             return;
         }
 
+        if let Some(counter) = elem.to_packed::<typst::introspection::CounterDisplayElem>() {
+            // Typst keeps counter-display's fields private and excludes them from
+            // reflection. Compare the raw native element hash (no span/location)
+            // with the page-numbering element constructed by Typst's page layouter.
+            use typst::introspection::{Counter, CounterKey, CounterDisplayElem};
+            if let Some(typst::model::Numbering::Pattern(pattern)) = self.compiled.document.pages().first().and_then(|p| p.numbering.clone()) {
+                let both = pattern.pieces() >= 2;
+                let expected = CounterDisplayElem::new(Counter::new(CounterKey::Page), typst::foundations::Smart::Custom(typst::model::Numbering::Pattern(pattern.clone())), both);
+                if typst_utils::hash128(&**counter) == typst_utils::hash128(&expected) {
+                    let cached = self.extract_inlines_flat(children);
+                    let template = cached.iter().find_map(|i| if let InlineNode::Text(r) = i { Some(r.clone()) } else { None }).unwrap_or_default();
+                    let count = if both { 2 } else { 1 };
+                    for index in 0..count {
+                        let Some((prefix, system)) = pattern.pieces.get(index).or_else(|| pattern.pieces.last()) else { break };
+                        let mut prefix = prefix.to_string();
+                        if index >= pattern.pieces.len() && prefix.is_empty() { prefix = pattern.suffix.to_string(); }
+                        if !prefix.is_empty() { let mut r = template.clone(); r.text = prefix; out.push(InlineNode::Text(r)); }
+                        let mut single = pattern.clone();
+                        single.pieces = [(Default::default(), *system)].into_iter().collect();
+                        single.suffix = Default::default();
+                        let sample = single.apply(None, &[1]).unwrap_or_default();
+                        let format = match sample.as_str() { "1" => Some("Arabic"), "i" => Some("roman"), "I" => Some("ROMAN"), "a" => Some("alphabetic"), "A" => Some("ALPHABETIC"), _ => None };
+                        if format.is_none() {
+                            self.report.compiler_warnings.push("Page numbering format is not supported by Word fields; using Arabic numerals".into());
+                        }
+                        let value = if index == 0 { 1 } else { self.compiled.document.pages().len() as u64 };
+                        let mut run = template.clone();
+                        run.text = single.apply(None, &[value]).unwrap_or_else(|_| value.to_string().into()).to_string();
+                        out.push(InlineNode::Field { kind: if index == 0 { ir::FieldKindIr::Page } else { ir::FieldKindIr::NumPages }, format: Some(format.unwrap_or("Arabic").into()), content: vec![InlineNode::Text(run)] });
+                    }
+                    if !pattern.suffix.is_empty() { let mut r = template; r.text = pattern.suffix.to_string(); out.push(InlineNode::Text(r)); }
+                    *last_y = None;
+                    *last_x_end = None;
+                    return;
+                }
+
+            }
+        }
+
         // 1. Inline formatting & code tags (`style.rs`).
         if self.try_extract_inline_style_element(elem, children, out, state, last_y, last_x_end) {
             return;
