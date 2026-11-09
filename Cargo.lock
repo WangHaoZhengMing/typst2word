@@ -245,9 +245,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1aa79e62e7697b8e29b513a68abacf485adcd1fe8284a4316c5ae868e6633327"
 dependencies = [
  "iana-time-zone",
- "js-sys",
  "num-traits",
- "wasm-bindgen",
  "windows-link",
 ]
 
@@ -360,6 +358,25 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "compiler"
+version = "0.2.0"
+dependencies = [
+ "comemo",
+ "dirs 7.0.0",
+ "ecow",
+ "parking_lot",
+ "typst",
+ "typst-eval",
+ "typst-html",
+ "typst-kit",
+ "typst-layout",
+ "typst-library",
+ "typst-realize",
+ "typst-syntax",
+ "typst-utils",
 ]
 
 [[package]]
@@ -569,6 +586,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "docx-writer"
+version = "0.2.0"
+dependencies = [
+ "ir",
+ "word-construct",
+ "zip",
+]
+
+[[package]]
 name = "ecow"
 version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -636,6 +662,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f1a05365e3b1c6d1650318537c7460c6923f1abdd272ad6842baa2b509957a06"
 dependencies = [
  "num-traits",
+]
+
+[[package]]
+name = "extract"
+version = "0.2.0"
+dependencies = [
+ "compiler",
+ "ecow",
+ "ir",
+ "roxmltree 0.21.2",
+ "typst",
+ "typst-html",
+ "typst-layout",
+ "typst-library",
+ "typst-svg",
+ "typst-syntax",
+ "typst-utils",
 ]
 
 [[package]]
@@ -1334,6 +1377,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a580c13f0ffc335ef42dd3f6b1a41b726051c5e1656d9a3aa6fddb3c5dfbbf9"
 dependencies = [
  "hybrid-array",
+]
+
+[[package]]
+name = "ir"
+version = "0.2.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
@@ -2981,27 +3031,13 @@ dependencies = [
 name = "typst2word"
 version = "0.2.0"
 dependencies = [
- "chrono",
- "comemo",
- "dirs 7.0.0",
- "ecow",
- "flate2",
- "parking_lot",
+ "compiler",
+ "docx-writer",
+ "extract",
+ "ir",
  "roxmltree 0.21.2",
- "serde",
  "serde_json",
- "tar",
  "tempfile",
- "typst",
- "typst-eval",
- "typst-html",
- "typst-kit",
- "typst-layout",
- "typst-library",
- "typst-realize",
- "typst-svg",
- "typst-syntax",
- "typst-utils",
  "word-construct",
  "zip",
 ]
@@ -3459,8 +3495,9 @@ dependencies = [
 
 [[package]]
 name = "word-construct"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
+ "ir",
  "serde",
 ]
 

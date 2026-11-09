@@ -1,0 +1,18 @@
+[package]
+name = "extract"
+version = "0.2.0"
+edition = "2024"
+description = "Pure Typst semantic AST and PDF physical layout frame extractor producing DocumentIr"
+
+[dependencies]
+compiler = { path = "../compiler" }
+ir = { path = "../ir" }
+ecow = "0.2.6"
+roxmltree = "0.21.1"
+typst = "0.15.1"
+typst-html = "0.15.1"
+typst-layout = "0.15.1"
+typst-library = "0.15.1"
+typst-svg = "0.15.1"
+typst-syntax = "0.15.1"
+typst-utils = "0.15.1"

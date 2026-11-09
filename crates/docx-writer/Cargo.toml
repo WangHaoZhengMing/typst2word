@@ -1,0 +1,10 @@
+[package]
+name = "docx-writer"
+version = "0.2.0"
+edition = "2024"
+description = "Pure OpenXML (WordprocessingML / OMML / DrawingML) serializer and .docx ZIP package writer"
+
+[dependencies]
+ir = { path = "../ir" }
+word-construct = { path = "../word-construct" }
+zip = "9.4.2"

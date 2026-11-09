@@ -14,16 +14,16 @@
 //!    Decoupled `AnchorLineIr` and LCS-based `compare_line_anchors` diagnostic comparator.
 //! 5. **Paragraph, List, and Table Box Solvers ([`paragraph_box`], [`list_box`], [`table_box`], [`units`])**.
 
-pub mod anchor;
+pub use ir::{anchor, policy, units};
 pub mod equation_box;
 pub mod font_metrics;
 pub mod linebreak;
 pub mod list_box;
+pub mod objects;
 pub mod paginator;
 pub mod paragraph_box;
-pub mod policy;
+pub mod pipeline;
 pub mod table_box;
-pub mod units;
 
 pub use anchor::{
     AnchorDiffEntry, AnchorDiffReport, AnchorLineIr, AnchorMismatchKind, compare_line_anchors,
@@ -45,6 +45,10 @@ pub use linebreak::{
 pub use list_box::{
     EnumMarkerWidthKind, FollowingBlockKind, ListItemLayoutInput, WordListItemLayout,
 };
+pub use objects::{
+    WordBlockObjectKind, cetz, code, equation, figure, heading, list, paragraph, shape, table,
+    text_run,
+};
 pub use paginator::{
     LayoutBlock, LayoutParagraph, LayoutTableRow, PageConstraint, PaginatedLine, PaginatedPage,
     paginate_blocks,
@@ -53,6 +57,7 @@ pub use paragraph_box::{
     InterBlockGapAction, NextBlockSpacingContext, ParagraphScaleProfile, WordJc,
     WordParagraphConstruct,
 };
+pub use pipeline::{WordPipelinePassKind, run_word_construct_pipeline};
 pub use policy::{
     ContextualSpacingPolicy, DEFAULT_KINSOKU_LINE_END_FORBIDDEN,
     DEFAULT_KINSOKU_LINE_START_FORBIDDEN, KeepLinesPolicy, KeepWithNextPolicy, KinsokuSet,

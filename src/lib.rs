@@ -1,29 +1,25 @@
 //! `typst2word` — Semantic + Visual Typst (`.typ`) to Microsoft Word (`.docx`) converter.
 //!
-//! Architecture:
+//! Workspace Crate Pipeline:
 //! 1. [`compiler`]: Self-contained Typst 0.15.1 compiler & query engine (`TypstWorld`,
-//!    `CUSTOM_ROUTINES`, `CompiledTypstDocument`) that preserves pre-layout `Content`
-//!    semantics, introspection `Introspector` queries, and laid-out `PagedDocument`
-//!    `Frame` tags (`Tag::Start` / `Tag::End`).
-//! 2. [`ir`]: Exhaustive enum-driven Semantic + PDF Metrics Intermediate Representation (`DocumentIr`).
-//! 3. [`extract`]: Pure Typst semantic & PDF physical layout extractor (zero Word-specific logic).
-//! 4. [`passes`]: 5-stage sequential pre-processing pipeline (`FontRecognition`, `InlineCoalescing`,
-//!    `LanguageAndScriptRecognition`, `ContainerAndPageBreakMerge`, `InterBlockFlowAndSpacing`).
-//! 5. [`construct`]: Per-object Word Construct builders (`paragraph`, `heading`, `list`, `table`,
-//!    `equation`, `figure`, `code`, `text_run`, `shape`, `cetz`) encapsulating all Word layout math.
-//! 6. [`docx_writer`]: Pure OpenXML & ZIP package writer (`DocxWriter`).
-//!
-//! Shared helpers: [`xml`] (escaping), [`units`] (pt -> dxa / EMU), [`color`] (paint -> hex).
+//!    `CUSTOM_ROUTINES`, `CompiledTypstDocument`) preserving both pre-layout `Content`
+//!    semantics (`Introspector`) and laid-out `PagedDocument` `Frame` geometry (`Tag::Start` / `Tag::End`).
+//! 2. [`extract`]: Pure Typst semantic & PDF physical layout extractor producing structurally
+//!    normalized [`DocumentIr`] (zero Word-specific logic).
+//! 3. [`ir`]: Exhaustive enum-driven Semantic + PDF Metrics Intermediate Representation (`DocumentIr`,
+//!    `ir::pdf`, `ir::normalize`, `ir::policy`, `ir::units`, `ir::anchor`).
+//! 4. [`word_construct`]: Two-stage Word layout engine:
+//!    - `word_construct::pipeline`: Sequential Word recognition & spacing passes (`FontRecognition`,
+//!      `LanguageAndScriptRecognition`, `InterBlockFlowAndSpacing`).
+//!    - `word_construct::objects`: Per-object Word Construct builders (`paragraph`, `heading`, `list`,
+//!      `table`, `equation`, `figure`, `code`, `text_run`, `shape`, `cetz`).
+//! 5. [`docx_writer`]: Pure OpenXML & ZIP package writer (`DocxWriter`).
 
-pub mod color;
-pub mod compiler;
-pub mod construct;
-pub mod docx_writer;
-pub mod extract;
-pub mod ir;
-pub mod passes;
-pub mod units;
-pub mod xml;
+pub use compiler;
+pub use docx_writer;
+pub use extract;
+pub use ir;
+pub use word_construct;
 
 use std::path::Path;
 
@@ -31,14 +27,14 @@ use compiler::{TypstWorld, compile_world};
 use docx_writer::{write_docx_to_bytes, write_docx_to_path};
 use extract::extract_document_ir;
 use ir::DocumentIr;
-use passes::run_pipeline_passes;
+use word_construct::run_word_construct_pipeline;
 
 /// Compile a Typst `.typ` file and extract its pipeline-processed `DocumentIr`.
 pub fn compile_file_to_ir(input_path: &Path) -> Result<DocumentIr, String> {
     let world = TypstWorld::from_file(input_path)?;
     let compiled = compile_world(&world)?;
     let mut ir = extract_document_ir(&compiled, &world);
-    run_pipeline_passes(&mut ir);
+    run_word_construct_pipeline(&mut ir);
     Ok(ir)
 }
 
@@ -47,7 +43,7 @@ pub fn compile_str_to_ir(source: &str, root_dir: Option<&Path>) -> Result<Docume
     let world = TypstWorld::from_str(source, root_dir.map(|p| p.to_path_buf()));
     let compiled = compile_world(&world)?;
     let mut ir = extract_document_ir(&compiled, &world);
-    run_pipeline_passes(&mut ir);
+    run_word_construct_pipeline(&mut ir);
     Ok(ir)
 }
 

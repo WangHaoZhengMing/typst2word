@@ -1,0 +1,20 @@
+[package]
+name = "compiler"
+version = "0.2.0"
+edition = "2024"
+description = "Self-contained Typst 0.15 compiler, World implementation, and dual semantic/layout query engine"
+
+[dependencies]
+comemo = "0.5.1"
+dirs = "7.0.0"
+ecow = "0.2.6"
+parking_lot = "0.12"
+typst = "0.15.1"
+typst-eval = "0.15.1"
+typst-html = "0.15.1"
+typst-kit = { version = "0.15.1", features = ["embedded-fonts", "scan-fonts", "system-packages", "system-downloader", "datetime"] }
+typst-layout = "0.15.1"
+typst-library = "0.15.1"
+typst-realize = "0.15.1"
+typst-syntax = "0.15.1"
+typst-utils = "0.15.1"

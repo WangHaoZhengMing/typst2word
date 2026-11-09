@@ -1,8 +1,9 @@
 [package]
 name = "word-construct"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
-description = "Spatial and layout model for Microsoft Word (OOXML WordprocessingML) constructs"
+description = "Spatial, line-breaking, pagination, preprocessing pipeline, and per-object layout model for Microsoft Word (OOXML WordprocessingML)"
 
 [dependencies]
+ir = { path = "../ir" }
 serde = { version = "1.0", features = ["derive"] }

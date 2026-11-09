@@ -316,7 +316,7 @@ pub fn tokenize_spans_with_script_policy(
 
         let family = span.font_family.as_deref();
         let size = span.font_size_pt;
-        let resolved_script = script_policy.resolve_for_font(family);
+        let resolved_script = ptls7::resolve_script_policy_for_font(script_policy, family);
         let dflt_latin_override = resolved_script.is_dflt_latin_override();
 
         let mut word_buf = String::new();

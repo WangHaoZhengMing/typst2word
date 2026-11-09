@@ -59,42 +59,15 @@ use serde::{Deserialize, Serialize};
 
 use crate::font_metrics::{ShapingWorkaround, is_cjk_or_fullwidth_char, lookup_known_font};
 use crate::policy::KinsokuSet;
+pub use ir::policy::WordScriptOverridePolicy;
 
-/// Policy controlling whether East Asian runs use normal CJK per-character breaking (`'hani'`)
-/// or Microsoft Word's OpenType `'DFLT'` / `script_id = 5` (`Latin`) override (`0x10044afdc`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub enum WordScriptOverridePolicy {
-    /// Standard East Asian script (`script_id = 19`, `'hani'`): CJK ideographs break per-character
-    /// subject to `KinsokuSet` (避头尾) rules.
-    #[default]
-    StandardEastAsian,
-    /// Word's OpenType `'DFLT'` / `script_id = 5` (`Latin`) override (`0x10044afdc`): all
-    /// non-whitespace characters in the run collapse to [`Ptls7BreakClass::LatinWord`] (`0`),
-    /// disabling CJK per-character breaking and triggering emergency mid-word character truncation.
-    OpenTypeDfltLatinOverride,
-    /// Automatically inspect each span's `font_family` and select [`Self::OpenTypeDfltLatinOverride`]
-    /// for macOS AAT-only CJK fonts lacking OpenType `'hani'` `GSUB`/`GPOS` tables (e.g. `"Songti SC"`),
-    /// while using [`Self::StandardEastAsian`] for OpenType/GDI CJK fonts (e.g. `"SimSun"`, `"宋体"`).
-    AutoDetectFont,
-}
-
-impl WordScriptOverridePolicy {
-    /// Resolve the effective policy for a given `font_family` via [`lookup_known_font`].
-    #[inline]
-    pub fn resolve_for_font(self, font_family: Option<&str>) -> Self {
-        match (self, is_aat_only_cjk_font_triggering_dflt_override(font_family)) {
-            (Self::StandardEastAsian, _) | (Self::AutoDetectFont, false) => Self::StandardEastAsian,
-            (Self::OpenTypeDfltLatinOverride, _) | (Self::AutoDetectFont, true) => {
-                Self::OpenTypeDfltLatinOverride
-            }
-        }
-    }
-
-    /// Returns `true` if this resolved policy collapses non-whitespace CJK runs into class `0` (`LatinWord`).
-    #[inline]
-    pub const fn is_dflt_latin_override(self) -> bool {
-        matches!(self, Self::OpenTypeDfltLatinOverride)
-    }
+/// Resolve the effective [`WordScriptOverridePolicy`] for a given `font_family` via [`lookup_known_font`].
+#[inline]
+pub fn resolve_script_policy_for_font(
+    policy: WordScriptOverridePolicy,
+    font_family: Option<&str>,
+) -> WordScriptOverridePolicy {
+    policy.resolve_for_aat_font(is_aat_only_cjk_font_triggering_dflt_override(font_family))
 }
 
 /// Check whether `font_family` is a macOS Apple AAT-only CJK font (containing `feat`/`morx`
