@@ -254,14 +254,18 @@ impl<'a> ExtractorContext<'a> {
                     } else {
                         line_spans[0].1
                     };
-                    if base_l >= self.content_left_pt - 4.0 {
-                        let vis_left = (base_l - self.content_left_pt).max(0.0);
-                        if (2.0..=48.0).contains(&vis_left) {
-                            left_indent_pt = vis_left;
-                        }
+                    let col_w = self.current_column_width_pt();
+                    let (left_bound, right_bound) = if base_l >= self.content_left_pt - 4.0 {
+                        (self.content_left_pt, self.content_right_pt)
+                    } else {
+                        (0.0, col_w)
+                    };
+                    let vis_left = (base_l - left_bound).max(0.0);
+                    if (2.0..=48.0).contains(&vis_left) {
+                        left_indent_pt = vis_left;
                     }
-                    if eff_align == HAlignIr::Justify && r0 <= self.content_right_pt + 4.0 {
-                        let r_gap = (self.content_right_pt - r0).max(0.0);
+                    if eff_align == HAlignIr::Justify && r0 <= right_bound + 4.0 {
+                        let r_gap = (right_bound - r0).max(0.0);
                         if (2.0..=48.0).contains(&r_gap) {
                             right_indent_pt = r_gap;
                         }

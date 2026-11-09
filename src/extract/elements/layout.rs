@@ -93,8 +93,12 @@ impl<'a> ExtractorContext<'a> {
             for b in &mut child_blocks {
                 match b {
                     BlockNode::Paragraph { style, .. } => {
-                        style.left_indent_pt += pad_left_pt;
-                        style.right_indent_pt += pad_right_pt;
+                        if pad_left_pt > 0.1 {
+                            style.left_indent_pt = pad_left_pt;
+                        }
+                        if pad_right_pt > 0.1 {
+                            style.right_indent_pt = pad_right_pt;
+                        }
                     }
                     BlockNode::List { indent_pt, .. } | BlockNode::Enum { indent_pt, .. } => {
                         *indent_pt += pad_left_pt;

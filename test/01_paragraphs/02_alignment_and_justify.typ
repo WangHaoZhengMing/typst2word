@@ -44,7 +44,9 @@
 
 = 5. Hanging Indentation and Block Insets
 
-#block(inset: (left: 24pt, right: 24pt))[
+#[
   #set par(justify: true, hanging-indent: 18pt)
-  *Hanging Indent (18pt) with 24pt Left/Right Insets:* The first line of this paragraph begins at the 24pt left inset, whereas all wrapped continuation lines are indented an additional 18pt (42pt total from the body margin), matching bibliographic reference formatting in Word.
+  #pad(left: 24pt, right: 24pt)[
+    *Hanging Indent (18pt) with 24pt Left/Right Insets:* The first line of this paragraph begins at the 24pt left inset, whereas all wrapped continuation lines are indented an additional 18pt (42pt total from the body margin), matching bibliographic reference formatting in Word.
+  ]
 ]

@@ -116,15 +116,14 @@ impl<'a> ExtractorContext<'a> {
 
         let mut left_indent_pt = 0.0;
         let mut right_indent_pt = 0.0;
-        if matches!(align, HAlignIr::Left | HAlignIr::Justify)
-            && first_line_indent_pt < 0.5
-            && hanging_indent_pt < 0.5
-        {
-            let (vis_first, vis_hang) = Self::infer_paragraph_line_indents(children);
-            if vis_first > 2.0 {
-                first_line_indent_pt = vis_first;
-            } else if vis_hang > 2.0 {
-                hanging_indent_pt = vis_hang;
+        if matches!(align, HAlignIr::Left | HAlignIr::Justify) {
+            if first_line_indent_pt < 0.5 && hanging_indent_pt < 0.5 {
+                let (vis_first, vis_hang) = Self::infer_paragraph_line_indents(children);
+                if vis_first > 2.0 {
+                    first_line_indent_pt = vis_first;
+                } else if vis_hang > 2.0 {
+                    hanging_indent_pt = vis_hang;
+                }
             }
             if list_level == 0
                 && let Some(vis_left) = self.node_left_offset_in_column(children)
