@@ -19,6 +19,8 @@ impl<'a> DocxBuilder<'a> {
     <w:pPrDefault>
       <w:pPr>
         <w:overflowPunct w:val="1"/>
+        <w:autoSpaceDE w:val="0"/>
+        <w:autoSpaceDN w:val="0"/>
         <w:spacing w:after="120" w:line="246" w:lineRule="auto"/>
       </w:pPr>
     </w:pPrDefault>

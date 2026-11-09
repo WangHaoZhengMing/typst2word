@@ -88,6 +88,7 @@ func normalizeText(_ s: String) -> String {
     }
     return out
         .replacingOccurrences(of: "人又", with: "人口")
+        .replacingOccurrences(of: "转又", with: "转口")
         .replacingOccurrences(of: "\r\n", with: "\n")
         .replacingOccurrences(of: "\r", with: "\n")
         .trimmingCharacters(in: .whitespacesAndNewlines)

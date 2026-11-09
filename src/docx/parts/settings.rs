@@ -9,8 +9,6 @@ impl<'a> DocxBuilder<'a> {
   <w:zoom w:percent="100"/>
   <w:defaultTabStop w:val="720"/>
   <w:characterSpacingControl w:val="doNotCompress"/>
-  <w:autoSpaceDE w:val="1"/>
-  <w:autoSpaceDN w:val="1"/>
   <w:doNotExpandShiftReturn/>
   <w:compat>
     <w:useFELayout/>
