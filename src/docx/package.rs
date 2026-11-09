@@ -32,6 +32,7 @@ impl<'a> DocxBuilder<'a> {
             None
         };
         let footnotes_xml = self.render_footnotes_xml();
+        let font_table_xml = Self::render_font_table_xml();
         let styles_xml = self.render_styles_xml();
         let numbering_xml = self.render_numbering_xml();
         let settings_xml = self.render_settings_xml();
@@ -62,6 +63,7 @@ impl<'a> DocxBuilder<'a> {
         Self::zip_write_str(&mut zip, "word/numbering.xml", &numbering_xml, options)?;
         Self::zip_write_str(&mut zip, "word/settings.xml", &settings_xml, options)?;
         Self::zip_write_str(&mut zip, "word/footnotes.xml", &footnotes_xml, options)?;
+        Self::zip_write_str(&mut zip, "word/fontTable.xml", &font_table_xml, options)?;
 
         if let Some(hxml) = &header_xml {
             Self::zip_write_str(&mut zip, "word/header1.xml", hxml, options)?;
@@ -114,6 +116,7 @@ impl<'a> DocxBuilder<'a> {
   <Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>
   <Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/>
   <Override PartName="/word/footnotes.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml"/>
+  <Override PartName="/word/fontTable.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.fontTable+xml"/>
   <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
   <Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>"#,
         );
@@ -149,7 +152,8 @@ impl<'a> DocxBuilder<'a> {
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
   <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/>
   <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" Target="settings.xml"/>
-  <Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footnotes" Target="footnotes.xml"/>"#,
+  <Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footnotes" Target="footnotes.xml"/>
+  <Relationship Id="rId5" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/fontTable" Target="fontTable.xml"/>"#,
         );
 
         if let Some(hid) = &self.header_rel_id {
@@ -204,6 +208,31 @@ impl<'a> DocxBuilder<'a> {
 <Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties">
   <Application>typst2word</Application>
 </Properties>"#
+            .to_string()
+    }
+
+    pub(crate) fn render_font_table_xml() -> String {
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:fonts xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:font w:name="DejaVu Sans Mono">
+    <w:altName w:val="Consolas"/>
+    <w:charset w:val="00"/>
+    <w:family w:val="modern"/>
+    <w:pitch w:val="fixed"/>
+  </w:font>
+  <w:font w:name="Libertinus Serif">
+    <w:altName w:val="Times New Roman"/>
+    <w:charset w:val="00"/>
+    <w:family w:val="roman"/>
+    <w:pitch w:val="variable"/>
+  </w:font>
+  <w:font w:name="New Computer Modern Math">
+    <w:altName w:val="Cambria Math"/>
+    <w:charset w:val="00"/>
+    <w:family w:val="roman"/>
+    <w:pitch w:val="variable"/>
+  </w:font>
+</w:fonts>"#
             .to_string()
     }
 }

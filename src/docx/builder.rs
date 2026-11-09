@@ -44,8 +44,8 @@ impl<'a> DocxBuilder<'a> {
     pub(crate) fn new(ir: &'a DocumentIr) -> Self {
         Self {
             ir,
-            // Reserve rId1..rId4 for styles, numbering, settings, footnotes
-            next_rel_id: 5,
+            // Reserve rId1..rId5 for styles, numbering, settings, footnotes, fontTable
+            next_rel_id: 6,
             next_drawing_id: 1,
             next_bookmark_id: 1,
             media_assets: Vec::new(),

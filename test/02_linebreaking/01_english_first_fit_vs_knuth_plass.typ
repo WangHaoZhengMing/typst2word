@@ -7,6 +7,7 @@
   margin: (top: 2.54cm, bottom: 2.54cm, left: 3.18cm, right: 3.18cm),
 )
 #set text(font: "Times New Roman", size: 11pt, lang: "en", hyphenate: false)
+#show raw: set text(font: "Courier New", size: 9pt)
 #set par(
   justify: true,
   linebreaks: "simple",

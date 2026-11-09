@@ -89,7 +89,10 @@ pub(crate) fn render_text_run_xml(run: &TextRunIr, out: &mut String) {
     }
     if let Some(sz_pt) = run.font_size_pt {
         let is_consolas_fallback = run.is_code
-            && run.font_family.as_deref() == Some("Consolas")
+            && matches!(
+                run.font_family.as_deref(),
+                Some("Consolas" | "DejaVu Sans Mono")
+            )
             && (sz_pt - 8.8).abs() < 0.15;
         let half_pts = if is_consolas_fallback {
             // DejaVu Sans Mono (1233/2048 em at 8.8pt = 5.298pt/char) mapped to
