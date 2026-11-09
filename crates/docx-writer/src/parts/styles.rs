@@ -4,7 +4,19 @@ use crate::writer::DocxWriter;
 
 impl<'a> DocxWriter<'a> {
     pub(crate) fn render_styles_xml(&self) -> String {
-        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        let has_cjk = self.document_has_cjk();
+        let lang_xml = if has_cjk {
+            "\n        <w:lang w:val=\"en-US\" w:eastAsia=\"zh-CN\" w:bidi=\"ar-SA\"/>"
+        } else {
+            ""
+        };
+        let ppr_cjk_xml = if has_cjk {
+            "\n        <w:overflowPunct w:val=\"1\"/>\n        <w:autoSpaceDE w:val=\"0\"/>\n        <w:autoSpaceDN w:val=\"0\"/>"
+        } else {
+            ""
+        };
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
   <w:docDefaults>
     <w:rPrDefault>
@@ -12,15 +24,11 @@ impl<'a> DocxWriter<'a> {
         <w:rFonts w:ascii="Libertinus Serif" w:hAnsi="Libertinus Serif" w:eastAsia="Heiti SC" w:cs="Libertinus Serif"/>
         <w:kern w:val="2"/>
         <w:sz w:val="22"/>
-        <w:szCs w:val="22"/>
-        <w:lang w:val="en-US" w:eastAsia="zh-CN" w:bidi="ar-SA"/>
+        <w:szCs w:val="22"/>{lang_xml}
       </w:rPr>
     </w:rPrDefault>
     <w:pPrDefault>
-      <w:pPr>
-        <w:overflowPunct w:val="1"/>
-        <w:autoSpaceDE w:val="0"/>
-        <w:autoSpaceDN w:val="0"/>
+      <w:pPr>{ppr_cjk_xml}
         <w:spacing w:after="120" w:line="246" w:lineRule="auto"/>
       </w:pPr>
     </w:pPrDefault>
@@ -107,6 +115,6 @@ impl<'a> DocxWriter<'a> {
     <w:rPr><w:vertAlign w:val="superscript"/></w:rPr>
   </w:style>
 </w:styles>"#
-            .to_string()
+        )
     }
 }
