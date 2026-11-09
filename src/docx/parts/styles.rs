@@ -10,6 +10,7 @@ impl<'a> DocxBuilder<'a> {
     <w:rPrDefault>
       <w:rPr>
         <w:rFonts w:ascii="Libertinus Serif" w:hAnsi="Libertinus Serif" w:eastAsia="Heiti SC" w:cs="Libertinus Serif"/>
+        <w:kern w:val="2"/>
         <w:sz w:val="22"/>
         <w:szCs w:val="22"/>
       </w:rPr>
