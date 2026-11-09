@@ -207,11 +207,8 @@ pub(crate) fn build_math_run(
         _ => None,
     };
 
-    let has_cjk = text.chars().any(|c| {
-        ('\u{4E00}'..='\u{9FFF}').contains(&c)
-            || ('\u{3000}'..='\u{303F}').contains(&c)
-            || ('\u{FF00}'..='\u{FFEF}').contains(&c)
-    });
+    let text_script = crate::passes::lang_script::classify_text_script(&text);
+    let has_cjk = text_script.has_cjk();
     let font_family = if has_cjk {
         ctx.cjk_font.map(str::to_string).or_else(|| {
             styles
@@ -232,5 +229,6 @@ pub(crate) fn build_math_run(
         font_family,
         font_size_pt: ctx.base_font_size_pt,
         width_scale_pct: None,
+        text_script,
     })
 }

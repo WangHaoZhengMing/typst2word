@@ -7,6 +7,7 @@ pub use word_construct::{
 };
 
 use super::ColorHex;
+use super::pdf::{InterBlockFlowIr, ParagraphPdfMetricsIr};
 
 /// Horizontal alignment in paragraphs, cells, and blocks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -48,6 +49,12 @@ pub struct ParagraphStyleIr {
     pub kinsoku: KinsokuSet,
     #[serde(default)]
     pub widow_orphan: WidowOrphanPolicy,
+    #[serde(default)]
+    pub pdf_metrics: ParagraphPdfMetricsIr,
+    #[serde(default)]
+    pub inter_block_flow: InterBlockFlowIr,
+    #[serde(default)]
+    pub extra_trailing_space_pt: f64,
 }
 
 impl Default for ParagraphStyleIr {
@@ -66,6 +73,9 @@ impl Default for ParagraphStyleIr {
             line_break_policy: LineBreakPolicy::default(),
             kinsoku: KinsokuSet::default(),
             widow_orphan: WidowOrphanPolicy::default(),
+            pdf_metrics: ParagraphPdfMetricsIr::default(),
+            inter_block_flow: InterBlockFlowIr::default(),
+            extra_trailing_space_pt: 0.0,
         }
     }
 }

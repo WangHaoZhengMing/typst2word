@@ -147,20 +147,41 @@ pub enum BlockPdfSpanIr {
     },
 }
 
+/// PDF & Typst physical spacing parameters of a `ParElem` before Word line-box compensation.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+pub enum ParagraphPdfMetricsIr {
+    /// Synthetic or unmeasured paragraph (e.g. stray inline flush or header/footer); uses `space_after_pt` directly.
+    #[default]
+    Unmeasured,
+    /// Extracted from a Typst `ParElem` with resolved `par.spacing`, `par.leading`, and font scales.
+    Measured {
+        ends_with_explicit_linebreak: bool,
+        base_font_pt: f64,
+        default_font_pt: f64,
+        par_spacing_pt: f64,
+        par_leading_pt: f64,
+        in_multi_block_group_tail: bool,
+    },
+}
+
 /// Exhaustive classification of the vertical flow relationship between two consecutive blocks.
 #[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 pub enum InterBlockFlowIr {
     /// Standard flow without special cross-block overrides.
     #[default]
     Standard,
-    /// Immediately precedes a tight `List` or `Enum` (`space_after` collapses to `0`).
-    BeforeTightList,
-    /// Measured vertical gap between two consecutive blocks on the same page.
-    SamePageMeasuredGap {
+    /// Immediately precedes a tight `List` or `Enum` on the same page (`gap_pt <= 10.0`).
+    BeforeTightList { gap_pt: f64 },
+    /// Measured vertical gap between two consecutive paragraphs on the same page.
+    SamePageParagraphGap {
         gap_pt: f64,
         prev_font_pt: f64,
         next_font_pt: f64,
     },
-    /// Explicit vertical whitespace (`#v(...)`) inserted after the block.
-    ExplicitVerticalSpace { extra_pt: f64 },
+    /// Measured vertical gap between this block and a non-paragraph block on the same page.
+    SamePageBlockGap {
+        gap_pt: f64,
+        prev_font_pt: f64,
+        next_font_pt: f64,
+    },
 }

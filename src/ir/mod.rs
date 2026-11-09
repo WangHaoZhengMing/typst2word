@@ -31,7 +31,7 @@ pub use equation::{EquationIr, MathFracStyleIr, MathNodeIr, MathRunIr, MathScrip
 pub use image::{ImageFormatIr, ImageIr};
 pub use list::{EnumItemIr, ListItemIr, TermItemIr};
 pub use outline::OutlineEntryIr;
-pub use pdf::{BlockPdfSpanIr, EquationPdfMetricsIr, InterBlockFlowIr};
+pub use pdf::{BlockPdfSpanIr, EquationPdfMetricsIr, InterBlockFlowIr, ParagraphPdfMetricsIr};
 pub use shape::{CurveSegmentIr, ShapeIr, ShapeKindIr};
 pub use style::{
     BordersIr, ContextualSpacingPolicy, DashPatternIr, HAlignIr, KeepLinesPolicy,
@@ -40,7 +40,7 @@ pub use style::{
     WidowOrphanPolicy,
 };
 pub use table::{TableCellIr, TableIr, TableKindIr, TableRowIr, VMergeState};
-pub use text::{ScriptKindIr, TextRunIr};
+pub use text::{FontFamilyClassIr, ScriptKindIr, TextRunIr, TextScriptClassIr};
 pub use unsupported::UnsupportedIr;
 pub use word_construct::AnchorLineIr;
 

@@ -1,8 +1,8 @@
-//! Inter-block vertical spacing measurements and causal adjustments via `word_construct`.
+//! Inter-block PDF vertical gap measurements (`InterBlockFlowIr` and `extra_trailing_space_pt`).
 
 use crate::extract::ExtractorContext;
 use crate::extract::frame_tree::TreeNode;
-use crate::ir::BlockNode;
+use crate::ir::{BlockNode, InterBlockFlowIr};
 
 impl<'a> ExtractorContext<'a> {
     pub(crate) fn nodes_first_page_top_y(nodes: &[TreeNode]) -> Option<(usize, f64, f64)> {
@@ -105,7 +105,7 @@ impl<'a> ExtractorContext<'a> {
         if let Some(last) = blocks.last_mut() {
             match last {
                 BlockNode::Paragraph { style, .. } => {
-                    style.space_after_pt += extra_pt;
+                    style.extra_trailing_space_pt += extra_pt;
                 }
                 BlockNode::Enum { items, .. } => {
                     if let Some(last_item) = items.last_mut() {
@@ -123,7 +123,7 @@ impl<'a> ExtractorContext<'a> {
     }
 
     #[allow(clippy::type_complexity)]
-    pub(super) fn adjust_inter_block_vertical_gaps(
+    pub(super) fn record_inter_block_pdf_gaps(
         blocks: &mut [BlockNode],
         spans: &[(usize, Option<(usize, f64, f64)>, Option<(usize, f64, f64)>)],
     ) {
@@ -161,32 +161,27 @@ impl<'a> ExtractorContext<'a> {
                 BlockNode::List { tight: true, .. } | BlockNode::Enum { tight: true, .. }
             );
             let next_is_paragraph = matches!(&blocks[idx_b], BlockNode::Paragraph { .. });
-            let next_context = word_construct::NextBlockSpacingContext::from_flags(
-                next_is_tight_list,
-                next_is_paragraph,
-            );
-            match word_construct::WordParagraphConstruct::solve_inter_block_gap_for_context(
-                gap_pt,
-                font_a,
-                font_b,
-                next_context,
-            ) {
-                word_construct::InterBlockGapAction::ZeroSpaceAfter => {
-                    if let BlockNode::Paragraph { style, .. } = &mut blocks[idx_a] {
-                        style.space_after_pt = 0.0;
-                    }
+            if next_is_tight_list && gap_pt <= 10.0 {
+                if let BlockNode::Paragraph { style, .. } = &mut blocks[idx_a] {
+                    style.inter_block_flow = InterBlockFlowIr::BeforeTightList { gap_pt };
                 }
-                word_construct::InterBlockGapAction::SetExactSpaceAfter(target_pt) => {
-                    if let BlockNode::Paragraph { style, .. } = &mut blocks[idx_a] {
-                        style.space_after_pt = target_pt;
-                    }
+            } else if next_is_paragraph
+                && (font_a >= 15.0 || font_b >= 15.0)
+                && gap_pt > 10.0
+                && gap_pt < 60.0
+            {
+                if let BlockNode::Paragraph { style, .. } = &mut blocks[idx_a] {
+                    style.inter_block_flow = InterBlockFlowIr::SamePageParagraphGap {
+                        gap_pt,
+                        prev_font_pt: font_a,
+                        next_font_pt: font_b,
+                    };
                 }
-                word_construct::InterBlockGapAction::AddExtraSpaceAfter(extra_pt) => {
-                    if gap_pt > 48.0 {
-                        Self::add_extra_space_after_to_last_block(&mut blocks[..=idx_a], extra_pt);
-                    }
-                }
-                word_construct::InterBlockGapAction::KeepDefault => {}
+            } else if gap_pt > 48.0 && gap_pt < 500.0 {
+                Self::add_extra_space_after_to_last_block(
+                    &mut blocks[..=idx_a],
+                    (gap_pt - 12.0).max(0.0),
+                );
             }
         }
     }

@@ -55,6 +55,7 @@ impl<'a> ExtractorContext<'a> {
                     let filtered_nodes = Self::filter_outline_entry_body_nodes(children);
                     let raw_inlines = self.extract_inlines_flat(&filtered_nodes);
                     let mut body_inlines = Self::unwrap_link_inlines(raw_inlines);
+                    crate::passes::inline_coalesce::coalesce_adjacent_text_runs(&mut body_inlines);
                     Self::strip_trailing_outline_page(&mut body_inlines, &page);
 
                     if body_inlines.is_empty() {

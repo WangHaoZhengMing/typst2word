@@ -9,7 +9,9 @@ use typst::pdf::{ArtifactElem, ArtifactKind};
 use crate::color::paint_to_hex;
 use crate::extract::ExtractorContext;
 use crate::extract::frame_tree::TreeNode;
-use crate::ir::{BlockNode, HAlignIr, MetadataIr, PageSetupIr};
+use crate::ir::{
+    BlockNode, HAlignIr, InterBlockFlowIr, MetadataIr, PageSetupIr, ParagraphPdfMetricsIr,
+};
 
 impl<'a> ExtractorContext<'a> {
     pub(crate) fn extract_metadata(&self) -> MetadataIr {
@@ -118,6 +120,9 @@ impl<'a> ExtractorContext<'a> {
             if let BlockNode::Paragraph { style, .. } = block {
                 style.space_before_pt = 0.0;
                 style.space_after_pt = 0.0;
+                style.pdf_metrics = ParagraphPdfMetricsIr::Unmeasured;
+                style.inter_block_flow = InterBlockFlowIr::Standard;
+                style.extra_trailing_space_pt = 0.0;
             }
         }
     }
@@ -281,26 +286,6 @@ impl<'a> ExtractorContext<'a> {
                     }
                 }
                 out.push(found_text.unwrap_or_else(|| "__PAGEBREAK_ANY__".to_string()));
-            }
-        }
-    }
-
-    pub(crate) fn clean_redundant_pagebreaks(&self, blocks: &mut Vec<BlockNode>) {
-        // Trim leading or trailing PageBreaks and collapse consecutive PageBreaks.
-        while matches!(blocks.first(), Some(BlockNode::PageBreak)) {
-            blocks.remove(0);
-        }
-        while matches!(blocks.last(), Some(BlockNode::PageBreak)) {
-            blocks.pop();
-        }
-        let mut i = 1;
-        while i < blocks.len() {
-            if matches!(blocks[i], BlockNode::PageBreak)
-                && matches!(blocks[i - 1], BlockNode::PageBreak)
-            {
-                blocks.remove(i);
-            } else {
-                i += 1;
             }
         }
     }

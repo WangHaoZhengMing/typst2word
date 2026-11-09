@@ -26,6 +26,7 @@ pub mod compiler;
 pub mod docx;
 pub mod extract;
 pub mod ir;
+pub mod passes;
 pub mod units;
 pub mod xml;
 
@@ -35,19 +36,24 @@ use compiler::{TypstWorld, compile_world};
 use docx::{write_docx_to_bytes, write_docx_to_path};
 use extract::extract_document_ir;
 use ir::DocumentIr;
+use passes::run_pipeline_passes;
 
-/// Compile a Typst `.typ` file and extract its `DocumentIr`.
+/// Compile a Typst `.typ` file and extract its pipeline-processed `DocumentIr`.
 pub fn compile_file_to_ir(input_path: &Path) -> Result<DocumentIr, String> {
     let world = TypstWorld::from_file(input_path)?;
     let compiled = compile_world(&world)?;
-    Ok(extract_document_ir(&compiled, &world))
+    let mut ir = extract_document_ir(&compiled, &world);
+    run_pipeline_passes(&mut ir);
+    Ok(ir)
 }
 
-/// Compile an in-memory Typst source string and extract its `DocumentIr`.
+/// Compile an in-memory Typst source string and extract its pipeline-processed `DocumentIr`.
 pub fn compile_str_to_ir(source: &str, root_dir: Option<&Path>) -> Result<DocumentIr, String> {
     let world = TypstWorld::from_str(source, root_dir.map(|p| p.to_path_buf()));
     let compiled = compile_world(&world)?;
-    Ok(extract_document_ir(&compiled, &world))
+    let mut ir = extract_document_ir(&compiled, &world);
+    run_pipeline_passes(&mut ir);
+    Ok(ir)
 }
 
 /// Convert a Typst `.typ` file directly to a `.docx` file on disk, returning the `DocumentIr`.

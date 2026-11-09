@@ -62,7 +62,6 @@ impl<'a> ExtractorContext<'a> {
         let mut last_y: Option<f64> = None;
         let mut last_x_end: Option<f64> = None;
         self.extract_inlines_from_nodes(nodes, &mut out, &mut state, &mut last_y, &mut last_x_end);
-        Self::merge_adjacent_text_runs(&mut out);
         out
     }
 

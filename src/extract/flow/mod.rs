@@ -74,8 +74,7 @@ impl<'a> ExtractorContext<'a> {
             }
         }
 
-        Self::adjust_inter_block_vertical_gaps(&mut blocks, &block_source_spans);
-        Self::merge_split_styled_containers(&mut blocks);
+        Self::record_inter_block_pdf_gaps(&mut blocks, &block_source_spans);
         blocks
     }
 
@@ -292,7 +291,6 @@ impl<'a> ExtractorContext<'a> {
             &mut last_y,
             &mut last_x_end,
         );
-        Self::merge_adjacent_text_runs(&mut inlines);
         stray.clear();
         if !inlines.is_empty() {
             self.report.paragraphs_count += 1;

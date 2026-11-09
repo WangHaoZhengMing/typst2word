@@ -34,7 +34,7 @@ impl<'a> ExtractorContext<'a> {
                 for rl in raw_lines {
                     lines.push(vec![TextRunIr {
                         text: rl.text.to_string(),
-                        font_family: Some("Consolas".to_string()),
+                        font_family: None,
                         is_code: true,
                         ..Default::default()
                     }]);
@@ -89,7 +89,7 @@ impl<'a> ExtractorContext<'a> {
                         if runs.is_empty() {
                             runs.push(TextRunIr {
                                 text: raw_line.text.to_string(),
-                                font_family: Some("Consolas".to_string()),
+                                font_family: None,
                                 is_code: true,
                                 ..Default::default()
                             });

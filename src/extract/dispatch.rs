@@ -23,7 +23,7 @@ use typst::visualize::ImageElem;
 use crate::compiler::compile::is_cetz_span;
 use crate::extract::ExtractorContext;
 use crate::extract::frame_tree::TreeNode;
-use crate::ir::{BlockNode, HAlignIr, ShapeKindIr, TableKindIr};
+use crate::ir::{BlockNode, HAlignIr, ParagraphPdfMetricsIr, ShapeKindIr, TableKindIr};
 
 impl<'a> ExtractorContext<'a> {
     pub(crate) fn extract_block_from_node(
@@ -74,9 +74,16 @@ impl<'a> ExtractorContext<'a> {
                 let group_h_pt = group.frame.size().y.to_pt();
                 if inner.len() >= 2
                     && let Some(BlockNode::Paragraph { style, .. }) = inner.last_mut()
-                    && (1.5..6.0).contains(&style.space_after_pt)
                 {
-                    style.space_after_pt = 6.05;
+                    if let ParagraphPdfMetricsIr::Measured {
+                        in_multi_block_group_tail,
+                        ..
+                    } = &mut style.pdf_metrics
+                    {
+                        *in_multi_block_group_tail = true;
+                    } else if (1.5..6.0).contains(&style.space_after_pt) {
+                        style.space_after_pt = 6.05;
+                    }
                 }
                 if group_h_pt >= 15.0 && inner.len() >= 2 {
                     let last_idx = inner.len() - 1;

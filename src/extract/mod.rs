@@ -203,8 +203,7 @@ impl<'a> ExtractorContext<'a> {
         );
         let all_root_nodes = self.build_document_frame_tree(pagebreak_targets);
 
-        let mut blocks = self.extract_blocks_from_nodes(&all_root_nodes, 0, HAlignIr::Left);
-        self.clean_redundant_pagebreaks(&mut blocks);
+        let blocks = self.extract_blocks_from_nodes(&all_root_nodes, 0, HAlignIr::Left);
         let anchors = self.extract_page_line_anchors();
 
         DocumentIr {

@@ -7,7 +7,9 @@ use typst::model::{Linebreaks, ParElem};
 
 use crate::extract::ExtractorContext;
 use crate::extract::frame_tree::TreeNode;
-use crate::ir::{BlockNode, HAlignIr, InlineNode, LineBreakPolicy, ParagraphStyleIr};
+use crate::ir::{
+    BlockNode, HAlignIr, InlineNode, LineBreakPolicy, ParagraphPdfMetricsIr, ParagraphStyleIr,
+};
 
 impl<'a> ExtractorContext<'a> {
     /// `ParElem` -> `BlockNode::Paragraph` (or a CeTZ canvas if the paragraph only wraps one).
@@ -75,21 +77,6 @@ impl<'a> ExtractorContext<'a> {
                 .linebreak_preceding_texts
                 .iter()
                 .any(|sfx| plain_no_ws.ends_with(sfx));
-
-        // Word's line spacing (`w:line`) already includes `par.leading` on every line of the
-        // paragraph, so the additional paragraph-after gap needed to match Typst's inter-paragraph
-        // distance (`1em + par.spacing`) is `par.spacing - par.leading` (or full `spacing_pt` for
-        // large display-sized single-line paragraphs where `w:line` is clamped to 1.0x).
-        // When a paragraph is terminated by an explicit `linebreak()` (`\`) before a block/list,
-        // Typst only applies `par.leading` (no `par.spacing`), so `space_after_pt` is `0.0`.
-        let space_after_pt =
-            word_construct::WordParagraphConstruct::solve_initial_space_after_pt(
-                ends_with_explicit_linebreak,
-                base_font_pt,
-                default_font_pt,
-                spacing_pt,
-                leading_pt,
-            );
 
         let fl_indent_cfg = par.first_line_indent.get(chain);
         let mut first_line_indent_pt =
@@ -159,9 +146,17 @@ impl<'a> ExtractorContext<'a> {
             hanging_indent_pt,
             left_indent_pt,
             right_indent_pt,
-            space_after_pt,
+            space_after_pt: (spacing_pt - leading_pt).max(0.0),
             line_spacing_pt: Some(line_leading_pt),
             line_break_policy,
+            pdf_metrics: ParagraphPdfMetricsIr::Measured {
+                ends_with_explicit_linebreak,
+                base_font_pt,
+                default_font_pt,
+                par_spacing_pt: spacing_pt,
+                par_leading_pt: leading_pt,
+                in_multi_block_group_tail: false,
+            },
             ..Default::default()
         };
 

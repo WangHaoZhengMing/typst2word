@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::ir::ColorHex;
 use crate::ir::pdf::EquationPdfMetricsIr;
+use crate::ir::text::TextScriptClassIr;
 
 /// Mathematical equation IR.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -158,4 +159,6 @@ pub struct MathRunIr {
     pub font_size_pt: Option<f64>,
     #[serde(default)]
     pub width_scale_pct: Option<u32>,
+    #[serde(default)]
+    pub text_script: TextScriptClassIr,
 }

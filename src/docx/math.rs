@@ -336,7 +336,7 @@ fn render_math_run(run: &MathRunIr, out: &mut String) {
     if run.text.is_empty() {
         return;
     }
-    let has_cjk = word_construct::str_has_cjk_chars(&run.text);
+    let has_cjk = run.text_script.has_cjk();
     out.push_str("<m:r>");
     if has_cjk || run.script.is_some() || run.style.is_some() {
         out.push_str("<m:rPr>");

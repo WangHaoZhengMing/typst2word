@@ -13,24 +13,8 @@ pub(crate) fn render_text_run_xml(run: &TextRunIr, out: &mut String) {
     out.push_str("<w:r><w:rPr>");
     if let Some(fam) = &run.font_family {
         let esc = escape_xml(fam);
-        let fam_lower = fam.to_ascii_lowercase();
-        let is_cjk_font = fam_lower.contains("song")
-            || fam_lower.contains("hei")
-            || fam_lower.contains("kai")
-            || fam_lower.contains("fang")
-            || fam_lower.contains("pingfang")
-            || fam_lower.contains("sim")
-            || fam_lower.contains("yahei")
-            || fam_lower.contains("dengxian")
-            || fam_lower.contains("宋体")
-            || fam_lower.contains("黑体")
-            || fam_lower.contains("楷体")
-            || fam_lower.contains("仿宋");
-        let has_ea_symbol = is_cjk_font
-            && run
-                .text
-                .chars()
-                .any(|c| ('\u{2000}'..='\u{2BFF}').contains(&c));
+        let has_ea_symbol =
+            run.font_class.is_cjk_font() && run.text_script.has_east_asian_symbol();
         let hint_attr = if has_ea_symbol {
             r#" w:hint="eastAsia""#
         } else {

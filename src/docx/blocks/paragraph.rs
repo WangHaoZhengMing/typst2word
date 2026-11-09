@@ -164,23 +164,14 @@ impl<'a> DocxBuilder<'a> {
 
     pub(crate) fn content_has_cjk_chars(content: &[InlineNode]) -> bool {
         content.iter().any(|inl| match inl {
-            InlineNode::Text(r) => r.text.chars().any(|c| {
-                ('\u{4E00}'..='\u{9FFF}').contains(&c)
-                    || ('\u{3000}'..='\u{303F}').contains(&c)
-                    || ('\u{FF00}'..='\u{FFEF}').contains(&c)
-            }),
+            InlineNode::Text(r) => r.text_script.has_cjk(),
             _ => false,
         })
     }
 
     pub(crate) fn content_has_cjk(content: &[InlineNode]) -> bool {
         content.iter().any(|inl| match inl {
-            InlineNode::Text(r) => {
-                word_construct::str_has_cjk_chars(&r.text)
-                    || word_construct::WordFontMetricsProvider::is_cjk_codepage_font(
-                        r.font_family.as_deref(),
-                    )
-            }
+            InlineNode::Text(r) => r.text_script.has_cjk() || r.font_class.is_cjk_font(),
             _ => false,
         })
     }
