@@ -87,11 +87,15 @@ impl<'a> DocxBuilder<'a> {
             let before_dxa = if collapse_before {
                 0
             } else if level == 1 {
-                if line_dxa < 200 { 212 } else { 240 }
+                if line_dxa < 200 { 224 } else { 240 }
             } else {
                 160
             };
-            let after_dxa = if compact_after { 16 } else { 80 };
+            let after_dxa = if compact_after {
+                if line_dxa < 200 { 0 } else { 16 }
+            } else {
+                80
+            };
             let _ = write!(
                 out,
                 r#"<w:spacing w:before="{before_dxa}" w:after="{after_dxa}" w:line="{line_dxa}" w:lineRule="auto"/>"#

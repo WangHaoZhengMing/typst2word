@@ -441,12 +441,17 @@ impl WordLineBox {
                 ((240.0 * (0.692 + ratio) / metric_div).round() as i64).clamp(174, 720)
             }
             (_, _, true, Some((ls_pt, ratio))) if ls_pt > 3.5 => {
-                let metric_div = class.win_box_ratio(has_cjk_chars);
-                let ink_em = match s < 10.0 {
-                    true => 0.90,
-                    false => 0.95,
-                };
-                ((240.0 * (ink_em + ratio) / metric_div).round() as i64).clamp(240, 720)
+                let fam_lower = font_family.unwrap_or("").trim().to_ascii_lowercase();
+                if fam_lower.contains("heiti") {
+                    ((240.0 * (0.715 + ratio) / 1.300).round() as i64).clamp(180, 720)
+                } else {
+                    let metric_div = class.win_box_ratio(has_cjk_chars);
+                    let ink_em = match s < 10.0 {
+                        true => 0.90,
+                        false => 0.95,
+                    };
+                    ((240.0 * (ink_em + ratio) / metric_div).round() as i64).clamp(240, 720)
+                }
             }
             (_, _, false, Some((ls_pt, ratio))) if ls_pt > 3.5 => {
                 let fam_lower = font_family.unwrap_or("").trim().to_ascii_lowercase();
