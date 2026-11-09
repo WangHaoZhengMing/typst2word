@@ -59,10 +59,11 @@ pub(crate) fn render_inline_nodes_as_txbx_para(inlines: &[InlineNode], align: HA
         HAlignIr::Right => "right",
         HAlignIr::Justify => "both",
     };
+    let line_dxa = crate::docx::builder::DocxBuilder::compute_line_spacing_dxa(inlines, None);
     let mut runs_xml = String::new();
     render_inline_nodes_to_wml(inlines, &mut runs_xml);
     format!(
-        r#"<w:p><w:pPr><w:jc w:val="{jc}"/><w:spacing w:before="0" w:after="0"/></w:pPr>{runs_xml}</w:p>"#
+        r#"<w:p><w:pPr><w:jc w:val="{jc}"/><w:spacing w:before="0" w:after="0" w:line="{line_dxa}" w:lineRule="auto"/></w:pPr>{runs_xml}</w:p>"#
     )
 }
 

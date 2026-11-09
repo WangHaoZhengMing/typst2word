@@ -198,7 +198,7 @@ pub(crate) fn build_wsp_xml(
                 r#"<wps:txbx><w:txbxContent>{paras}</w:txbxContent></wps:txbx>"#,
                 r#"<wps:bodyPr rot="0" vert="horz" wrap="square" "#,
                 r#"lIns="{l}" tIns="{t}" rIns="{r}" bIns="{b}" anchor="{anchor}">"#,
-                r#"<a:spAutoFit/>"#,
+                r#"<a:noAutofit/>"#,
                 r#"</wps:bodyPr>"#
             ),
             paras = inner_paras,

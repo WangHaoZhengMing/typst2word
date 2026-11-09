@@ -8,8 +8,8 @@
 use typst::foundations::{Content, StyleChain};
 use typst::introspection::Location;
 use typst::layout::{
-    AlignElem, ColbreakElem, ColumnsElem, GridElem, HideElem, LayoutElem, MoveElem, PadElem,
-    PagebreakElem, Point, RotateElem, ScaleElem,
+    AlignElem, BlockElem, ColbreakElem, ColumnsElem, GridElem, HideElem, LayoutElem, MoveElem,
+    PadElem, PagebreakElem, Point, RotateElem, ScaleElem,
 };
 use typst::math::EquationElem;
 use typst::model::{
@@ -71,6 +71,25 @@ impl<'a> ExtractorContext<'a> {
                 let mut inner =
                     self.extract_blocks_from_nodes(children, list_level, inherited_align);
                 self.apply_group_left_offset(group, *pos, list_level, &mut inner);
+                let group_h_pt = group.frame.size().y.to_pt();
+                if inner.len() >= 2
+                    && let Some(BlockNode::Paragraph { style, .. }) = inner.last_mut()
+                    && (1.5..6.0).contains(&style.space_after_pt)
+                {
+                    style.space_after_pt = 6.05;
+                }
+                if group_h_pt >= 15.0 && inner.len() >= 2 {
+                    let last_idx = inner.len() - 1;
+                    let keep_all = group_h_pt <= 240.0 && inner.len() <= 6;
+                    for (idx, b) in inner.iter_mut().enumerate() {
+                        if let BlockNode::Paragraph { style, .. } = b {
+                            style.keep_lines = true;
+                            if idx == 0 || (keep_all && idx < last_idx) {
+                                style.keep_with_next = true;
+                            }
+                        }
+                    }
+                }
                 blocks.extend(inner);
             }
             TreeNode::Shape { shape, span, pos } => {
@@ -376,8 +395,42 @@ impl<'a> ExtractorContext<'a> {
             return;
         }
 
-        // 18. Generic container fallback (recurse into children).
-        let child_blocks = self.extract_blocks_from_nodes(children, list_level, inherited_align);
+        // 18. Generic container fallback (recurse into children), honoring `BlockElem`
+        // styled containers (`fill`/`stroke`) as well as `sticky` (`keep_with_next`) and `breakable: false` (`keep_lines`).
+        if elem.is::<BlockElem>()
+            && let Some(styled_box) = self.try_extract_styled_container_nodes(
+                None,
+                pos,
+                children,
+                list_level,
+                inherited_align,
+            )
+        {
+            blocks.push(styled_box);
+            return;
+        }
+        let mut child_blocks =
+            self.extract_blocks_from_nodes(children, list_level, inherited_align);
+        if let Some(blk) = elem.to_packed::<BlockElem>() {
+            let sticky = blk.sticky.get(StyleChain::default());
+            let unbreakable = !blk.breakable.get(StyleChain::default());
+            if sticky || unbreakable {
+                let last_idx = child_blocks.len().saturating_sub(1);
+                for (idx, b) in child_blocks.iter_mut().enumerate() {
+                    if let BlockNode::Paragraph { style, .. } = b {
+                        if unbreakable {
+                            style.keep_lines = true;
+                            if idx < last_idx {
+                                style.keep_with_next = true;
+                            }
+                        }
+                        if sticky && idx == last_idx {
+                            style.keep_with_next = true;
+                        }
+                    }
+                }
+            }
+        }
         blocks.extend(child_blocks);
     }
 }
