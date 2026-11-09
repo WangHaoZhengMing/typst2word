@@ -21,6 +21,7 @@ pub mod linebreak;
 pub mod list_box;
 pub mod objects;
 pub mod paginator;
+pub mod page_calibration;
 pub mod paragraph_box;
 pub mod pipeline;
 pub mod table_box;

@@ -143,16 +143,11 @@ impl<'a> DocxWriter<'a> {
             ""
         };
         let _ = write!(out, r#"<w:pgSz w:w="{w_dxa}" w:h="{h_dxa}"{orient}/>"#);
-        // Subtract 3.5pt (Western) or 7.2pt (CJK higher winAscent) from `w:top` to align Word's
-        // first-line `winAscent` top box with Typst's default `top-edge: "cap-height"` baseline,
-        // and 6pt from `w:bottom` for Word's empty CJK descender box on the last line.
-        let top_offset_pt = if self.first_block_uses_cjk_font() {
-            5.0
-        } else {
-            3.5
-        };
-        let top_dxa = pt_to_dxa((ps.margin_top_pt - top_offset_pt).max(18.0));
-        let bottom_dxa = pt_to_dxa((ps.margin_bottom_pt - 6.0).max(18.0));
+        let (top_pt, bottom_pt) = self.options.page_margin_calibration.margins(
+            ps.margin_top_pt, ps.margin_bottom_pt, self.first_block_uses_cjk_font(),
+        );
+        let top_dxa = pt_to_dxa(top_pt);
+        let bottom_dxa = pt_to_dxa(bottom_pt);
         let _ = write!(
             out,
             r#"<w:pgMar w:top="{top_dxa}" w:right="{}" w:bottom="{bottom_dxa}" w:left="{}" w:header="{}" w:footer="{}" w:gutter="0"/>"#,

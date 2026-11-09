@@ -54,3 +54,15 @@ pub fn write_docx_to_bytes(ir: &DocumentIr) -> Result<Vec<u8>, String> {
     let mut builder = DocxWriter::new(ir);
     builder.build()
 }
+
+/// Export options for controlled comparison of page-margin calibration.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DocxWriteOptions {
+    pub page_margin_calibration: word_construct::page_calibration::PageMarginCalibration,
+}
+
+pub fn write_docx_to_bytes_with_options(ir: &DocumentIr, options: DocxWriteOptions) -> Result<Vec<u8>, String> {
+    let mut builder = DocxWriter::new(ir);
+    builder.options = options;
+    builder.build()
+}

@@ -27,6 +27,7 @@ pub(crate) struct FootnoteRecord {
 }
 
 pub(crate) struct DocxWriter<'a> {
+    pub(crate) options: crate::DocxWriteOptions,
     pub(crate) current_setup: ir::PageSetupIr,
     pub(crate) current_blocks: Vec<BlockNode>,
     pub(crate) section_furniture: Vec<(Option<String>, Option<String>)>,
@@ -49,6 +50,7 @@ pub(crate) struct DocxWriter<'a> {
 impl<'a> DocxWriter<'a> {
     pub(crate) fn new(ir: &'a DocumentIr) -> Self {
         Self {
+            options: Default::default(),
             current_setup: ir.page_setup.clone(),
             current_blocks: ir.blocks.clone(),
             section_furniture: Vec::new(),
