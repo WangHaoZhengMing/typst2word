@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 use parking_lot::RwLock;
-use typst::diag::{FileError, FileResult, PackageError, PackageResult};
+use typst::diag::{FileError, FileResult, PackageResult};
 use typst::foundations::{Bytes, Datetime, Duration};
 use typst::syntax::package::PackageSpec;
 use typst::syntax::{FileId, RootedPath, Source, VirtualPath, VirtualRoot};
@@ -175,29 +175,11 @@ impl TypstWorld {
             }
         }
 
-        // Try Typst Kit's system packages (which may download if network is available).
-        if let Ok(root) = GlobalTypstResources::get().packages.obtain(spec) {
-            return Ok(root.path().to_path_buf());
-        }
-
-        // Fallback: if exact version is not cached and download failed, check if another
-        // compatible version of the same package is cached locally on disk.
-        let pkg_parent_sub = format!("{}/{}", spec.namespace, spec.name);
-        for root in &candidate_roots {
-            let pkg_dir = root.join(&pkg_parent_sub);
-            if let Ok(entries) = fs::read_dir(&pkg_dir) {
-                let mut versions: Vec<PathBuf> = entries
-                    .filter_map(|e| e.ok().map(|e| e.path()))
-                    .filter(|p| p.join("typst.toml").exists())
-                    .collect();
-                versions.sort();
-                if let Some(best) = versions.pop() {
-                    return Ok(best);
-                }
-            }
-        }
-
-        Err(PackageError::NotFound(spec.clone()))
+        // A validated source must resolve the exact version it requests. Never
+        // silently substitute a cached version: its API and output may differ.
+        let root = GlobalTypstResources::get().packages.obtain(spec)
+            .unwrap_or_else(|error| panic!("failed to obtain exact Typst package {spec}: {error}"));
+        Ok(root.path().to_path_buf())
     }
 
     fn candidate_package_roots() -> Vec<PathBuf> {
