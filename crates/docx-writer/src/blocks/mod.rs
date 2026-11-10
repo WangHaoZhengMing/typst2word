@@ -77,7 +77,7 @@ impl<'a> DocxWriter<'a> {
             {
                 let next_keep = matches!(
                     blocks.get(idx + 1),
-                    Some(BlockNode::Paragraph { style, .. }) if style.keep_with_next
+                    Some(BlockNode::Paragraph { style, .. }) if style.sticky
                 );
                 self.render_figure_with_layout_and_keep(
                     body,

@@ -1,6 +1,7 @@
 //! Domain enums and layout constraints for Word (`FirstFit` + `Kinsoku` + `WidowOrphan`)
 //! and Typst (`KnuthPlass` dynamic programming) layout reproduction.
 
+use ir::{LinebreaksIr, ParagraphStyleIr};
 use serde::{Deserialize, Serialize};
 
 /// Policy controlling whether East Asian runs use normal CJK per-character breaking (`'hani'`)
@@ -84,6 +85,15 @@ impl Default for LineBreakPolicy {
 }
 
 impl LineBreakPolicy {
+    /// Map Typst's semantic `par.linebreaks` and `par.justify` into a [`LineBreakPolicy`].
+    #[inline]
+    pub const fn from_typst_linebreaks(linebreaks: LinebreaksIr, justify: bool) -> Self {
+        match (linebreaks, justify) {
+            (LinebreaksIr::Optimized, _) | (LinebreaksIr::Auto, true) => Self::typst_knuth_plass(),
+            (LinebreaksIr::Simple, _) | (LinebreaksIr::Auto, false) => Self::word_first_fit(),
+        }
+    }
+
     /// Construct Word's default greedy `FirstFit` policy (`StandardEastAsian`).
     #[inline]
     pub const fn word_first_fit() -> Self {
@@ -320,7 +330,7 @@ pub enum RowHeaderRepeatPolicy {
     RepeatHeaderAtTop,
 }
 
-/// Complete layout constraint bundle attached to a paragraph in IR and `word-construct`.
+/// Complete layout constraint bundle solved for a paragraph in `word-construct`.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct ParagraphLayoutConstraint {
     pub line_break_policy: LineBreakPolicy,
@@ -335,6 +345,22 @@ impl ParagraphLayoutConstraint {
     #[inline]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Construct a [`ParagraphLayoutConstraint`] from Typst's semantic [`ParagraphStyleIr`].
+    #[inline]
+    pub fn from_paragraph_style(style: &ParagraphStyleIr) -> Self {
+        Self {
+            line_break_policy: LineBreakPolicy::from_typst_linebreaks(
+                style.linebreaks,
+                style.justify,
+            ),
+            kinsoku: KinsokuSet::default(),
+            widow_orphan: WidowOrphanPolicy::default(),
+            keep_lines: KeepLinesPolicy::from_bool(!style.breakable),
+            keep_with_next: KeepWithNextPolicy::from_bool(style.sticky),
+            contextual_spacing: ContextualSpacingPolicy::default(),
+        }
     }
 
     #[inline]

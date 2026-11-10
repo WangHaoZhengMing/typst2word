@@ -20,7 +20,6 @@ mod list;
 pub mod normalize;
 mod outline;
 pub mod pdf;
-pub mod policy;
 mod shape;
 mod style;
 mod table;
@@ -44,17 +43,10 @@ pub use normalize::{
 };
 pub use outline::OutlineEntryIr;
 pub use pdf::{BlockPdfSpanIr, EquationPdfMetricsIr, InterBlockFlowIr, ParagraphPdfMetricsIr};
-pub use policy::{
-    ContextualSpacingPolicy, DEFAULT_KINSOKU_LINE_END_FORBIDDEN,
-    DEFAULT_KINSOKU_LINE_START_FORBIDDEN, KeepLinesPolicy, KeepWithNextPolicy, KinsokuSet,
-    LineBreakPolicy, ParagraphLayoutConstraint, RowBreakPolicy, RowHeaderRepeatPolicy,
-    SpaceBeforeTopPolicy, TYPST_CONSECUTIVE_DASH_COST, TYPST_HYPH_COST, TYPST_MAX_COST,
-    TYPST_MIN_RATIO, TYPST_RUNT_COST, WidowOrphanPolicy, WordScriptOverridePolicy,
-};
 pub use shape::{CurveSegmentIr, ShapeIr, ShapeKindIr};
 pub use style::{
-    BordersIr, DashPatternIr, HAlignIr, LineCapIr, LineJoinIr, ParagraphStyleIr, SidesPtIr,
-    StrokeIr, VAlignIr,
+    BordersIr, DashPatternIr, HAlignIr, LineCapIr, LineJoinIr, LinebreaksIr, ParagraphStyleIr,
+    SidesPtIr, StrokeIr, VAlignIr,
 };
 pub use table::{TableCellIr, TableIr, TableKindIr, TableRowIr, VMergeState};
 pub use text::{

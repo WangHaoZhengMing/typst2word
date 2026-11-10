@@ -1,9 +1,6 @@
 //! Shared visual style primitives: alignment, paragraph style, strokes, borders, insets.
 
 use serde::{Deserialize, Serialize};
-pub use crate::policy::{
-    KeepLinesPolicy, KeepWithNextPolicy, KinsokuSet, LineBreakPolicy, WidowOrphanPolicy,
-};
 
 use super::ColorHex;
 use super::pdf::{InterBlockFlowIr, ParagraphPdfMetricsIr};
@@ -27,7 +24,23 @@ pub enum VAlignIr {
     Bottom,
 }
 
-/// Paragraph layout and spacing properties.
+/// Typst semantic paragraph line-breaking mode (`#set par(linebreaks: ...)`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum LinebreaksIr {
+    /// `auto`: Typst chooses based on `justify`.
+    #[default]
+    Auto,
+    /// `"simple"`: greedy line-by-line breaking.
+    Simple,
+    /// `"optimized"`: paragraph-wide Knuth-Plass optimization.
+    Optimized,
+}
+
+const fn default_true() -> bool {
+    true
+}
+
+/// Paragraph layout and spacing properties extracted from Typst.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParagraphStyleIr {
     pub align: HAlignIr,
@@ -38,16 +51,18 @@ pub struct ParagraphStyleIr {
     pub space_before_pt: f64,
     pub space_after_pt: f64,
     pub line_spacing_pt: Option<f64>,
+    /// Typst `par.linebreaks` (`auto`, `"simple"`, or `"optimized"`).
     #[serde(default)]
-    pub keep_with_next: bool,
+    pub linebreaks: LinebreaksIr,
+    /// Typst `par.justify` (`#set par(justify: ...)`).
     #[serde(default)]
-    pub keep_lines: bool,
+    pub justify: bool,
+    /// Typst `block.breakable` (`#set block(breakable: ...)`). Defaults to `true`.
+    #[serde(default = "default_true")]
+    pub breakable: bool,
+    /// Typst `block.sticky` (`#set block(sticky: ...)`). Defaults to `false`.
     #[serde(default)]
-    pub line_break_policy: LineBreakPolicy,
-    #[serde(default)]
-    pub kinsoku: KinsokuSet,
-    #[serde(default)]
-    pub widow_orphan: WidowOrphanPolicy,
+    pub sticky: bool,
     #[serde(default)]
     pub pdf_metrics: ParagraphPdfMetricsIr,
     #[serde(default)]
@@ -67,11 +82,10 @@ impl Default for ParagraphStyleIr {
             space_before_pt: 0.0,
             space_after_pt: 6.0,
             line_spacing_pt: None,
-            keep_with_next: false,
-            keep_lines: false,
-            line_break_policy: LineBreakPolicy::default(),
-            kinsoku: KinsokuSet::default(),
-            widow_orphan: WidowOrphanPolicy::default(),
+            linebreaks: LinebreaksIr::Auto,
+            justify: false,
+            breakable: true,
+            sticky: false,
             pdf_metrics: ParagraphPdfMetricsIr::default(),
             inter_block_flow: InterBlockFlowIr::default(),
             extra_trailing_space_pt: 0.0,
@@ -100,43 +114,27 @@ impl ParagraphStyleIr {
     }
 
     #[inline]
-    pub const fn with_keep_with_next(mut self, keep: bool) -> Self {
-        self.keep_with_next = keep;
+    pub const fn with_linebreaks(mut self, linebreaks: LinebreaksIr) -> Self {
+        self.linebreaks = linebreaks;
         self
     }
 
     #[inline]
-    pub const fn with_keep_lines(mut self, keep: bool) -> Self {
-        self.keep_lines = keep;
+    pub const fn with_justify(mut self, justify: bool) -> Self {
+        self.justify = justify;
         self
     }
 
     #[inline]
-    pub const fn with_line_break_policy(mut self, policy: LineBreakPolicy) -> Self {
-        self.line_break_policy = policy;
+    pub const fn with_breakable(mut self, breakable: bool) -> Self {
+        self.breakable = breakable;
         self
     }
 
     #[inline]
-    pub fn with_kinsoku(mut self, kinsoku: KinsokuSet) -> Self {
-        self.kinsoku = kinsoku;
+    pub const fn with_sticky(mut self, sticky: bool) -> Self {
+        self.sticky = sticky;
         self
-    }
-
-    #[inline]
-    pub const fn with_widow_orphan(mut self, policy: WidowOrphanPolicy) -> Self {
-        self.widow_orphan = policy;
-        self
-    }
-
-    #[inline]
-    pub const fn keep_lines_policy(&self) -> KeepLinesPolicy {
-        KeepLinesPolicy::from_bool(self.keep_lines)
-    }
-
-    #[inline]
-    pub const fn keep_with_next_policy(&self) -> KeepWithNextPolicy {
-        KeepWithNextPolicy::from_bool(self.keep_with_next)
     }
 }
 

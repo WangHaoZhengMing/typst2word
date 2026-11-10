@@ -408,12 +408,15 @@ fn test_read_only_pdf_anchors_and_word_construct_policies() {
         anchor_report.total_golden_lines
     );
 
-    // 2. Verify `LineBreakPolicy::KnuthPlass` was captured on justified paragraph.
+    // 2. Verify `LinebreaksIr::Optimized` + `justify` maps to `LineBreakPolicy::KnuthPlass`.
     let has_knuth_plass = ir.blocks.iter().any(|b| {
         matches!(
             b,
             typst2word::ir::BlockNode::Paragraph { style, .. }
-                if style.line_break_policy == word_construct::LineBreakPolicy::typst_knuth_plass()
+                if word_construct::LineBreakPolicy::from_typst_linebreaks(
+                    style.linebreaks,
+                    style.justify,
+                ) == word_construct::LineBreakPolicy::typst_knuth_plass()
         )
     });
     assert!(has_knuth_plass, "expected KnuthPlass policy on justified optimized paragraph");

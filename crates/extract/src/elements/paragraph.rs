@@ -8,7 +8,7 @@ use typst::model::{Linebreaks, ParElem};
 use crate::ExtractorContext;
 use crate::frame_tree::TreeNode;
 use ir::{
-    BlockNode, HAlignIr, InlineNode, LineBreakPolicy, ParagraphPdfMetricsIr, ParagraphStyleIr,
+    BlockNode, HAlignIr, InlineNode, LinebreaksIr, ParagraphPdfMetricsIr, ParagraphStyleIr,
 };
 
 impl<'a> ExtractorContext<'a> {
@@ -127,12 +127,12 @@ impl<'a> ExtractorContext<'a> {
             }
         }
 
-        let line_break_policy = match par.linebreaks.get(chain) {
-            Smart::Custom(Linebreaks::Optimized) => LineBreakPolicy::typst_knuth_plass(),
-            Smart::Custom(Linebreaks::Simple) => LineBreakPolicy::word_first_fit(),
-            Smart::Auto if par.justify.get(chain) => LineBreakPolicy::typst_knuth_plass(),
-            Smart::Auto => LineBreakPolicy::word_first_fit(),
+        let linebreaks = match par.linebreaks.get(chain) {
+            Smart::Custom(Linebreaks::Optimized) => LinebreaksIr::Optimized,
+            Smart::Custom(Linebreaks::Simple) => LinebreaksIr::Simple,
+            Smart::Auto => LinebreaksIr::Auto,
         };
+        let justify = par.justify.get(chain);
 
         let style = ParagraphStyleIr {
             align,
@@ -142,7 +142,8 @@ impl<'a> ExtractorContext<'a> {
             right_indent_pt,
             space_after_pt: (spacing_pt - leading_pt).max(0.0),
             line_spacing_pt: Some(line_leading_pt),
-            line_break_policy,
+            linebreaks,
+            justify,
             pdf_metrics: ParagraphPdfMetricsIr::Measured {
                 ends_with_explicit_linebreak,
                 base_font_pt,

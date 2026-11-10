@@ -90,9 +90,9 @@ impl<'a> ExtractorContext<'a> {
                     let keep_all = group_h_pt <= 240.0 && inner.len() <= 6;
                     for (idx, b) in inner.iter_mut().enumerate() {
                         if let BlockNode::Paragraph { style, .. } = b {
-                            style.keep_lines = true;
+                            style.breakable = false;
                             if idx == 0 || (keep_all && idx < last_idx) {
-                                style.keep_with_next = true;
+                                style.sticky = true;
                             }
                         }
                     }
@@ -403,7 +403,7 @@ impl<'a> ExtractorContext<'a> {
         }
 
         // 18. Generic container fallback (recurse into children), honoring `BlockElem`
-        // styled containers (`fill`/`stroke`) as well as `sticky` (`keep_with_next`) and `breakable: false` (`keep_lines`).
+        // styled containers (`fill`/`stroke`) as well as `sticky` and `breakable: false`.
         if elem.is::<BlockElem>()
             && let Some(styled_box) = self.try_extract_styled_container_nodes(
                 None,
@@ -426,13 +426,13 @@ impl<'a> ExtractorContext<'a> {
                 for (idx, b) in child_blocks.iter_mut().enumerate() {
                     if let BlockNode::Paragraph { style, .. } = b {
                         if unbreakable {
-                            style.keep_lines = true;
+                            style.breakable = false;
                             if idx < last_idx {
-                                style.keep_with_next = true;
+                                style.sticky = true;
                             }
                         }
                         if sticky && idx == last_idx {
-                            style.keep_with_next = true;
+                            style.sticky = true;
                         }
                     }
                 }

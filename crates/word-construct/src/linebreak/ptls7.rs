@@ -59,7 +59,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::font_metrics::{ShapingWorkaround, is_cjk_or_fullwidth_char, lookup_known_font};
 use crate::policy::KinsokuSet;
-pub use ir::policy::WordScriptOverridePolicy;
+pub use crate::policy::WordScriptOverridePolicy;
 
 /// Resolve the effective [`WordScriptOverridePolicy`] for a given `font_family` via [`lookup_known_font`].
 #[inline]

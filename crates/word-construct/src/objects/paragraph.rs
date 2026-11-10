@@ -96,8 +96,8 @@ impl ParagraphConstruct {
             line_dxa,
             indentation,
             right_tab_stop_dxa,
-            keep_with_next: keep_with_next_override || style.keep_with_next,
-            keep_lines: style.keep_lines,
+            keep_with_next: keep_with_next_override || style.sticky,
+            keep_lines: !style.breakable,
             mark_rpr_sz_half_pt: paragraph_mark_rpr_sz_half_pt(content),
             needs_zwsp_for_inline_eq: is_only_inline_equation(content),
         }
