@@ -39,9 +39,7 @@ impl<'a> ExtractorContext<'a> {
 
         let col_w = self.current_column_width_pt();
         let (count, gutter_pt) = self.active_columns;
-        let (left_bound, right_bound) = if let Some(gw) = self.active_group_width_pt
-            && min_x < self.content_left_pt - 8.0
-        {
+        let (left_bound, right_bound) = if let Some(gw) = self.active_group_width_pt {
             (0.0, gw.max(40.0))
         } else if min_x >= self.content_left_pt - 8.0 {
             if count > 1 && width <= col_w + 12.0 {

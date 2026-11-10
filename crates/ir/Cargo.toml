@@ -1,6 +1,6 @@
 [package]
 name = "ir"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2024"
 description = "Semantic + PDF physical metrics Intermediate Representation (DocumentIr) for typst2word"
 

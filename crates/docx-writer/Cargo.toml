@@ -1,6 +1,6 @@
 [package]
 name = "docx-writer"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2024"
 description = "Pure OpenXML (WordprocessingML / OMML / DrawingML) serializer and .docx ZIP package writer"
 

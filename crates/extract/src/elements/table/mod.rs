@@ -57,7 +57,7 @@ impl<'a> ExtractorContext<'a> {
         };
 
         // 2. Resolve column widths and row heights from explicit sizings and laid-out frames.
-        let dims = self.resolve_table_dimensions(
+        let mut dims = self.resolve_table_dimensions(
             grid,
             &cell_nodes_map,
             is_semantic_table,
@@ -95,6 +95,41 @@ impl<'a> ExtractorContext<'a> {
                 is_header,
                 cells: row_cells,
             });
+        }
+
+        // Shift horizontal column gutter from a bottom-bordered field column `x` to the next column `x + 1`'s left inset.
+        if !is_semantic_table && grid.has_gutter && num_cols > 1 {
+            for x in 0..(num_cols - 1) {
+                let col_has_bottom_border = rows.iter().any(|r| {
+                    r.cells
+                        .iter()
+                        .any(|c| c.x == x && c.borders.bottom.is_some())
+                });
+                let next_col_has_bottom_border = rows.iter().any(|r| {
+                    r.cells
+                        .iter()
+                        .any(|c| c.x == x + 1 && c.borders.bottom.is_some())
+                });
+                if col_has_bottom_border
+                    && !next_col_has_bottom_border
+                    && let Some(Sizing::Rel(rel)) = grid.cols.get(x * 2 + 1)
+                {
+                    let col_gutter_pt =
+                        (Self::resolve_length_pt(rel.abs, 11.0) + rel.rel.get() * avail_w_pt)
+                            .max(0.0);
+                    if col_gutter_pt > 0.5 && dims.col_widths_pt[x] > col_gutter_pt + 20.0 {
+                        dims.col_widths_pt[x] -= col_gutter_pt;
+                        dims.col_widths_pt[x + 1] += col_gutter_pt;
+                        for r in &mut rows {
+                            for c in &mut r.cells {
+                                if c.x == x + 1 {
+                                    c.inset.left += col_gutter_pt;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         let align = if inherited_align == HAlignIr::Left && dims.inferred_center_align {
@@ -158,9 +193,9 @@ impl<'a> ExtractorContext<'a> {
                         self.record_unsupported_paint("table.cell.fill", resolved_cell.body.span());
                     }
                     let fill = resolved_cell.fill.as_ref().and_then(paint_to_hex);
-                    let borders = Self::extract_cell_borders(resolved_cell, is_semantic_table);
+                    let mut borders = Self::extract_cell_borders(resolved_cell, is_semantic_table);
 
-                    let (mut inset, halign, valign, is_header_cell, cell_blocks) =
+                    let (inset, halign, valign, is_header_cell, cell_blocks) =
                         if let Some((cell_elem, cnodes, _)) = cell_nodes_map.get(&(x, y)) {
                             let (mut ins, ha, va, ih) =
                                 Self::extract_cell_props(cell_elem, is_header, is_semantic_table);
@@ -168,12 +203,38 @@ impl<'a> ExtractorContext<'a> {
                             self.container_inset_pt += ins.left + ins.right + 1.0;
                             let mut blks = self.extract_blocks_from_nodes(cnodes, 0, ha);
                             self.container_inset_pt = prev_inset;
-                             if num_cols > 1 && Self::find_explicit_align_elem(cnodes).is_none() {
+                            if num_cols > 1 && Self::find_explicit_align_elem(cnodes).is_none() {
                                 for blk in &mut blks {
                                     if let ir::BlockNode::Paragraph { style, .. } = blk {
                                         style.align = ha;
                                     }
                                 }
+                            }
+                            if !is_semantic_table
+                                && fill.is_none()
+                                && !borders.has_any()
+                                && blks.len() == 1
+                                && matches!(
+                                    &blks[0],
+                                    ir::BlockNode::Table(inner)
+                                        if inner.kind == TableKindIr::StyledContainer
+                                            && inner.rows.len() == 1
+                                            && inner.rows[0].cells.len() == 1
+                                            && inner.rows[0].cells[0].fill.is_none()
+                                            && inner.rows[0].cells[0].borders.left.is_none()
+                                            && inner.rows[0].cells[0].borders.right.is_none()
+                                            && inner.rows[0].cells[0].borders.has_any()
+                                )
+                            {
+                                let Some(ir::BlockNode::Table(mut inner)) = blks.pop() else {
+                                    unreachable!()
+                                };
+                                let inner_cell = inner.rows.remove(0).cells.remove(0);
+                                borders = inner_cell.borders;
+                                ins = inner_cell.inset;
+                                blks = inner_cell.blocks;
+                                self.report.tables_count =
+                                    self.report.tables_count.saturating_sub(1);
                             }
                             if !is_semantic_table
                                 && row_min_y.is_finite()
@@ -199,18 +260,6 @@ impl<'a> ExtractorContext<'a> {
                             (ins, HAlignIr::Left, VAlignIr::Top, is_header, Vec::new())
                         };
 
-                    if !is_semantic_table
-                        && grid.has_gutter
-                        && y + 1 < num_rows
-                        && let Some(Sizing::Rel(rel)) = grid.rows.get(raw_y + 1)
-                        && rel.rel.is_zero()
-                    {
-                        let row_gutter_pt = Self::resolve_length_pt(rel.abs, 11.0);
-                        if row_gutter_pt > 1.3 {
-                            inset.bottom += row_gutter_pt - 1.3;
-                        }
-                    }
-
                     row_cells.push(TableCellIr {
                         x,
                         y,
@@ -226,6 +275,33 @@ impl<'a> ExtractorContext<'a> {
                     });
                 }
                 Entry::Merged { .. } => {}
+            }
+        }
+
+        if !is_semantic_table && grid.has_gutter {
+            let row_has_bottom_border = row_cells.iter().any(|c| c.borders.bottom.is_some());
+            if row_has_bottom_border {
+                if y > 0
+                    && let Some(Sizing::Rel(rel)) = grid.rows.get(raw_y - 1)
+                    && rel.rel.is_zero()
+                {
+                    let row_gutter_pt = Self::resolve_length_pt(rel.abs, 11.0);
+                    if row_gutter_pt > 1.3 {
+                        for c in &mut row_cells {
+                            c.inset.top += row_gutter_pt - 1.3;
+                        }
+                    }
+                }
+            } else if y + 1 < num_rows
+                && let Some(Sizing::Rel(rel)) = grid.rows.get(raw_y + 1)
+                && rel.rel.is_zero()
+            {
+                let row_gutter_pt = Self::resolve_length_pt(rel.abs, 11.0);
+                if row_gutter_pt > 1.3 {
+                    for c in &mut row_cells {
+                        c.inset.bottom += row_gutter_pt - 1.3;
+                    }
+                }
             }
         }
 

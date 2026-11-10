@@ -83,7 +83,11 @@ impl<'a> ExtractorContext<'a> {
         let mut max_w_pt = 0.0_f64;
         let mut max_h_pt = 0.0_f64;
         let mut main_fill = None;
+        let mut stroke = None;
+        let mut top_border: Option<StrokeIr> = None;
+        let mut bottom_border: Option<StrokeIr> = None;
         let mut left_accent_border: Option<StrokeIr> = None;
+        let mut right_border: Option<StrokeIr> = None;
 
         let min_shape_x = bg_shapes
             .iter()
@@ -97,50 +101,94 @@ impl<'a> ExtractorContext<'a> {
             let sh = b.size().y.to_pt().abs();
             if sw > max_w_pt {
                 max_w_pt = sw;
-                if let Some(f) = s.fill.as_ref().and_then(paint_to_hex) {
-                    main_fill = Some(f);
-                }
             }
             if sh > max_h_pt {
                 max_h_pt = sh;
             }
-            if (0.5..=12.0).contains(&sw)
-                && sh >= 12.0
-                && (spos.x.to_pt() - min_shape_x).abs() <= 4.0
-                && let Some(c) = s.fill.as_ref().and_then(paint_to_hex)
-            {
-                left_accent_border = Some(StrokeIr {
-                    color: c,
-                    thickness_pt: sw,
-                    dash: DashPatternIr::Solid,
-                    ..Default::default()
-                });
+            if sw > 12.0 && sh > 6.0 {
+                if let Some(f) = s.fill.as_ref().and_then(paint_to_hex) {
+                    main_fill = Some(f);
+                }
+                if stroke.is_none() {
+                    stroke = s.stroke.as_ref().map(Self::fixed_stroke_to_ir);
+                }
+            } else if sw > 12.0 && sh <= 6.0 {
+                let border_stroke = s
+                    .stroke
+                    .as_ref()
+                    .map(Self::fixed_stroke_to_ir)
+                    .or_else(|| {
+                        s.fill.as_ref().and_then(paint_to_hex).map(|c| StrokeIr {
+                            color: c,
+                            thickness_pt: sh.max(0.5),
+                            dash: DashPatternIr::Solid,
+                            ..Default::default()
+                        })
+                    });
+                if let Some(st) = border_stroke {
+                    let sy = spos.y.to_pt() + b.min.y.to_pt();
+                    if sy <= 3.0 {
+                        top_border = Some(st);
+                    } else {
+                        bottom_border = Some(st);
+                    }
+                }
+            } else if (0.3..=12.0).contains(&sw) && sh > 6.0 {
+                let border_stroke = s
+                    .stroke
+                    .as_ref()
+                    .map(Self::fixed_stroke_to_ir)
+                    .or_else(|| {
+                        s.fill.as_ref().and_then(paint_to_hex).map(|c| StrokeIr {
+                            color: c,
+                            thickness_pt: sw.max(0.5),
+                            dash: DashPatternIr::Solid,
+                            ..Default::default()
+                        })
+                    });
+                if let Some(st) = border_stroke {
+                    if (spos.x.to_pt() - min_shape_x).abs() <= 4.0 {
+                        left_accent_border = Some(st);
+                    } else {
+                        right_border = Some(st);
+                    }
+                }
             }
         }
 
-        let fill = main_fill.or_else(|| {
-            bg_shapes
-                .iter()
-                .find_map(|(_, s, _)| s.fill.as_ref().and_then(paint_to_hex))
-        });
-        let stroke = bg_shapes
-            .iter()
-            .find_map(|(_, s, _)| s.stroke.as_ref().map(Self::fixed_stroke_to_ir));
-        if fill.is_none() && stroke.is_none() && left_accent_border.is_none() {
+        let fill = main_fill;
+        let has_partial_border = top_border.is_some()
+            || bottom_border.is_some()
+            || left_accent_border.is_some()
+            || right_border.is_some();
+        if fill.is_none() && stroke.is_none() && !has_partial_border {
             return None;
         }
+
+        let has_box_sides = fill.is_some()
+            || stroke.is_some()
+            || left_accent_border.is_some()
+            || right_border.is_some();
 
         let mut line_starts = Vec::new();
         Self::collect_line_left_edges(&content_nodes, Point::zero(), &mut line_starts);
         Self::collect_shape_left_edges(&content_nodes, Point::zero(), &mut line_starts);
-        let inferred_pad = line_starts
-            .iter()
-            .map(|(_, lx)| if min_shape_x > 10.0 { *lx - min_shape_x } else { *lx })
-            .filter(|&lx| lx >= 2.0)
-            .reduce(f64::min)
-            .map(|lx| lx.clamp(4.0, 24.0))
-            .unwrap_or(6.0);
-        let v_pad = inferred_pad.clamp(4.0, 12.0);
+        let inferred_pad = if has_box_sides {
+            line_starts
+                .iter()
+                .map(|(_, lx)| if min_shape_x > 10.0 { *lx - min_shape_x } else { *lx })
+                .filter(|&lx| lx >= 2.0)
+                .reduce(f64::min)
+                .map(|lx| lx.clamp(4.0, 24.0))
+                .unwrap_or(6.0)
+        } else {
+            0.0
+        };
+        let v_pad = if has_box_sides {
+            inferred_pad.clamp(4.0, 12.0)
+        } else {
+            2.0
+        };
 
         let width_pt = frame_size
             .map(|sz| sz.x.to_pt())
@@ -168,11 +216,14 @@ impl<'a> ExtractorContext<'a> {
             )
         });
         let prev_inset = self.container_inset_pt;
-        if !has_full_width_child_group {
+        let prev_gw = self.active_group_width_pt;
+        if !has_full_width_child_group && has_box_sides {
             self.container_inset_pt += 2.0 * inferred_pad + 3.0;
         }
+        self.active_group_width_pt = Some(width_pt);
         let mut body_blocks =
             self.extract_blocks_from_nodes(&content_nodes, list_level, inherited_align);
+        self.active_group_width_pt = prev_gw;
         self.container_inset_pt = prev_inset;
 
         if body_blocks.is_empty() {
@@ -180,16 +231,24 @@ impl<'a> ExtractorContext<'a> {
         }
 
         let inset = SidesPtIr {
-            top: v_pad,
-            bottom: v_pad,
+            top: if has_box_sides || top_border.is_some() {
+                v_pad
+            } else {
+                0.0
+            },
+            bottom: if has_box_sides || bottom_border.is_some() {
+                v_pad
+            } else {
+                0.0
+            },
             left: inferred_pad,
             right: inferred_pad,
         };
 
-        // If the styled `#block(stroke: ..., fill: ...)[...]` has a left-only accent border,
+        // If the styled `#block(stroke: ..., fill: ...)[...]` has partial side borders,
         // or contains tables, lists, enums, figures, rules, code blocks, CeTZ canvases, or more than 3 blocks,
         // represent it as a breakable bordered `BlockNode::Table` (`kind: StyledContainer`).
-        let needs_table_container = (left_accent_border.is_some() && stroke.is_none())
+        let needs_table_container = (has_partial_border && stroke.is_none())
             || body_blocks.iter().any(|b| {
                 !matches!(
                     b,
@@ -202,13 +261,20 @@ impl<'a> ExtractorContext<'a> {
 
         if needs_table_container {
             self.report.tables_count += 1;
-            let cell_borders = if left_accent_border.is_some() && stroke.is_none() {
+            let cell_borders = if has_partial_border && stroke.is_none() {
                 BordersIr {
+                    top: top_border,
+                    bottom: bottom_border,
                     left: left_accent_border,
-                    ..Default::default()
+                    right: right_border,
                 }
             } else {
-                BordersIr::splat(stroke.clone())
+                BordersIr {
+                    top: top_border.or_else(|| stroke.clone()),
+                    bottom: bottom_border.or_else(|| stroke.clone()),
+                    left: left_accent_border.or_else(|| stroke.clone()),
+                    right: right_border.or_else(|| stroke.clone()),
+                }
             };
 
             // Detect 2-part card container (`#block(inset: 0pt, fill: F_body)[ #block(fill: F_hdr)[...] #block[...]]`)
