@@ -1,14 +1,45 @@
 //! Word Table & Cell Construct (`<w:tbl>`, `<w:tr>`, `<w:tc>`).
 //!
 //! Solves table indentation, column widths, row splitting policy (`RowSplitPolicy`),
+//! Word `<w:vMerge/>` (`VMergeState`) and `<w:gridSpan/>` slot expansion (`TableCellSlotConstruct`),
 //! `<w:tcMar>` cell padding via [`crate::WordCellMarginsDxa`], cell-internal
 //! paragraph style overrides, and child table width/indent adjustments inside list items.
 
 use crate::TableCellRole;
-
 use crate::objects::paragraph::content_has_cjk_chars;
-use ir::{BlockNode, HAlignIr, InlineNode, ParagraphStyleIr, TableIr, TableKindIr};
 use crate::units::pt_to_dxa;
+use ir::{
+    BlockNode, BordersIr, ColorHex, HAlignIr, InlineNode, ParagraphStyleIr, SidesPtIr,
+    TableCellIr, TableIr, TableKindIr, VAlignIr,
+};
+
+/// Vertical merge state for Word `<w:vMerge/>`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VMergeState {
+    Restart,
+    Continue,
+}
+
+/// Solved `<w:tc>` slot in a Word table row (`Primary` cell or `VMergeContinue` placeholder).
+#[derive(Debug, Clone)]
+pub enum TableCellSlotConstruct<'a> {
+    /// Primary Typst cell starting at `(cell.x, cell.y)`.
+    Primary {
+        cell: &'a TableCellIr,
+        vmerge: Option<VMergeState>,
+        width_dxa: i64,
+    },
+    /// Word `<w:vMerge/>` continuation placeholder for a cell spanning from an earlier row.
+    VMergeContinue {
+        x: usize,
+        colspan: usize,
+        width_dxa: i64,
+        fill: Option<ColorHex>,
+        borders: BordersIr,
+        inset: SidesPtIr,
+        valign: VAlignIr,
+    },
+}
 
 /// Exhaustive table width specification for `<w:tblW>`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,28 +59,29 @@ pub enum RowSplitPolicy {
     CantSplit,
 }
 
-/// Solved construct for a table header/body row (`<w:trPr>`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TableRowConstruct {
+/// Solved construct for a table header/body row (`<w:trPr>` + expanded `<w:tc>` slots).
+#[derive(Debug, Clone)]
+pub struct TableRowConstruct<'a> {
     pub split_policy: RowSplitPolicy,
     pub is_header: bool,
     pub min_height_dxa: Option<i64>,
     pub keep_rows_together: bool,
+    pub cells: Vec<TableCellSlotConstruct<'a>>,
 }
 
 /// Solved top-level construct for a `<w:tbl>` element.
 #[derive(Debug, Clone)]
-pub struct TableConstruct {
+pub struct TableConstruct<'a> {
     pub kind: TableKindIr,
     pub align: HAlignIr,
     pub indent_dxa: Option<i64>,
     pub width: TableWidthConstruct,
     pub grid_cols_dxa: Vec<i64>,
-    pub rows: Vec<TableRowConstruct>,
+    pub rows: Vec<TableRowConstruct<'a>>,
 }
 
-impl TableConstruct {
-    pub fn solve(table: &TableIr) -> Self {
+impl<'a> TableConstruct<'a> {
+    pub fn solve(table: &'a TableIr) -> Self {
         let kind = table.kind;
 
         let indent_dxa = (table.left_indent_pt > 0.5 && table.align == HAlignIr::Left).then(|| {
@@ -76,6 +108,17 @@ impl TableConstruct {
             .map(|&col_w| pt_to_dxa(col_w).max(144))
             .collect();
 
+        let num_cols = table
+            .col_widths_pt
+            .len()
+            .max(
+                table
+                    .rows
+                    .iter()
+                    .flat_map(|r| r.cells.iter().map(|c| c.x + c.colspan.max(1)))
+                    .max()
+                    .unwrap_or(1),
+            );
         let num_rows = table.rows.len();
         let rows = table
             .rows
@@ -102,23 +145,27 @@ impl TableConstruct {
                     && !next_row_is_complex_layout
                     && num_rows <= 15
                     && row_idx + 1 < num_rows;
-                let split_policy = if (kind == TableKindIr::StyledContainer && row.height_pt.is_none())
-                    || row_is_complex_layout
-                {
-                    RowSplitPolicy::AllowSplit
-                } else {
-                    RowSplitPolicy::CantSplit
-                };
+                let split_policy =
+                    if (kind == TableKindIr::StyledContainer && row.height_pt.is_none())
+                        || row_is_complex_layout
+                    {
+                        RowSplitPolicy::AllowSplit
+                    } else {
+                        RowSplitPolicy::CantSplit
+                    };
                 let min_height_dxa = row
                     .height_pt
                     .map(pt_to_dxa)
                     .filter(|&h_dxa| h_dxa > 40);
+
+                let cells = Self::expand_row_cell_slots(table, row_idx, num_cols);
 
                 TableRowConstruct {
                     split_policy,
                     is_header: row.is_header,
                     min_height_dxa,
                     keep_rows_together,
+                    cells,
                 }
             })
             .collect();
@@ -131,6 +178,61 @@ impl TableConstruct {
             grid_cols_dxa,
             rows,
         }
+    }
+
+    fn expand_row_cell_slots(
+        table: &'a TableIr,
+        row_idx: usize,
+        num_cols: usize,
+    ) -> Vec<TableCellSlotConstruct<'a>> {
+        let mut slots = Vec::new();
+        let row = &table.rows[row_idx];
+        let mut x = 0;
+        while x < num_cols {
+            if let Some(cell) = row.cells.iter().find(|c| c.x == x) {
+                let span_cols = cell.colspan.max(1);
+                let cell_w_pt: f64 = table.col_widths_pt.iter().skip(x).take(span_cols).sum();
+                let width_dxa = pt_to_dxa(cell_w_pt).max(144);
+                let vmerge = (cell.rowspan > 1).then_some(VMergeState::Restart);
+                slots.push(TableCellSlotConstruct::Primary {
+                    cell,
+                    vmerge,
+                    width_dxa,
+                });
+                x += span_cols;
+                continue;
+            }
+
+            // Check if a cell from an earlier row `parent_y < row_idx` vertically spans `(x, row_idx)`.
+            let mut found_vmerge_parent = None;
+            for parent_y in (0..row_idx).rev() {
+                if let Some(parent_cell) = table.rows[parent_y].cells.iter().find(|c| {
+                    c.x == x && parent_y + c.rowspan.max(1) > row_idx
+                }) {
+                    found_vmerge_parent = Some(parent_cell);
+                    break;
+                }
+            }
+
+            if let Some(parent_cell) = found_vmerge_parent {
+                let span_cols = parent_cell.colspan.max(1);
+                let cell_w_pt: f64 = table.col_widths_pt.iter().skip(x).take(span_cols).sum();
+                let width_dxa = pt_to_dxa(cell_w_pt).max(144);
+                slots.push(TableCellSlotConstruct::VMergeContinue {
+                    x,
+                    colspan: span_cols,
+                    width_dxa,
+                    fill: parent_cell.fill.clone(),
+                    borders: parent_cell.borders.clone(),
+                    inset: SidesPtIr::default(),
+                    valign: VAlignIr::Top,
+                });
+                x += span_cols;
+            } else {
+                x += 1;
+            }
+        }
+        slots
     }
 }
 
@@ -186,21 +288,12 @@ pub fn solve_table_cell_paragraph_style(
     match table_kind {
         TableKindIr::StyledContainer => {}
         TableKindIr::SemanticTable => {
-            let char_cnt: usize = content
-                .iter()
-                .map(|inl| match inl {
-                    InlineNode::Text(r) => r.text.chars().count(),
-                    _ => 1,
-                })
-                .sum();
-            if char_cnt > 12 {
-                if content_has_cjk_chars(content) {
-                    cell_style.line_spacing_pt = Some(4.5);
-                } else {
-                    cell_style.line_spacing_pt = cell_style.line_spacing_pt.or(Some(6.0));
-                }
+            if content_has_cjk_chars(content) {
+                cell_style.line_spacing_pt = Some(4.5);
+            } else if cell_style.line_spacing_pt.is_some() {
+                cell_style.line_spacing_pt = Some(6.5);
             } else {
-                cell_style.line_spacing_pt = Some(2.0);
+                cell_style.line_spacing_pt = Some(6.0);
             }
         }
         TableKindIr::LayoutGrid => {

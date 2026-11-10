@@ -3,14 +3,13 @@
 use std::fmt::Write as _;
 
 use word_construct::table::{
-    RowSplitPolicy, TableConstruct, TableWidthConstruct, resolve_table_cell_role,
-    solve_table_cell_paragraph_style,
+    RowSplitPolicy, TableCellSlotConstruct, TableConstruct, TableWidthConstruct, VMergeState,
+    resolve_table_cell_role, solve_table_cell_paragraph_style,
 };
 use crate::writer::DocxWriter;
 use ir::{
-    BlockNode, DashPatternIr, StrokeIr, TableIr, TableKindIr, VAlignIr, VMergeState,
+    BlockNode, DashPatternIr, StrokeIr, TableIr, TableKindIr, VAlignIr,
 };
-use word_construct::units::pt_to_dxa;
 use crate::xml::escape_xml;
 
 impl<'a> DocxWriter<'a> {
@@ -61,8 +60,7 @@ impl<'a> DocxWriter<'a> {
         out.push_str("</w:tblGrid>");
 
         // Rows
-        for (row_idx, row) in table.rows.iter().enumerate() {
-            let row_construct = construct.rows[row_idx];
+        for (row_idx, row_construct) in construct.rows.iter().enumerate() {
             let keep_rows_together = keep_all_rows_with_next || row_construct.keep_rows_together;
             match row_construct.split_policy {
                 RowSplitPolicy::AllowSplit => out.push_str("<w:tr><w:trPr>"),
@@ -76,25 +74,58 @@ impl<'a> DocxWriter<'a> {
             }
             out.push_str("</w:trPr>");
 
-            for cell in &row.cells {
-                if cell.hmerged_covered {
-                    continue;
-                }
+            for slot in &row_construct.cells {
+                let (
+                    colspan,
+                    cell_w_dxa,
+                    vmerge,
+                    borders,
+                    fill,
+                    inset,
+                    valign,
+                    blocks,
+                ) = match slot {
+                    TableCellSlotConstruct::Primary {
+                        cell,
+                        vmerge,
+                        width_dxa,
+                    } => (
+                        cell.colspan,
+                        *width_dxa,
+                        *vmerge,
+                        &cell.borders,
+                        cell.fill.as_deref(),
+                        cell.inset,
+                        cell.valign,
+                        cell.blocks.as_slice(),
+                    ),
+                    TableCellSlotConstruct::VMergeContinue {
+                        colspan,
+                        width_dxa,
+                        fill,
+                        borders,
+                        inset,
+                        valign,
+                        ..
+                    } => (
+                        *colspan,
+                        *width_dxa,
+                        Some(VMergeState::Continue),
+                        borders,
+                        fill.as_deref(),
+                        *inset,
+                        *valign,
+                        &[][..],
+                    ),
+                };
+
                 out.push_str("<w:tc><w:tcPr>");
-                let span_cols = cell.colspan.max(1);
-                let cell_w_pt: f64 = table
-                    .col_widths_pt
-                    .iter()
-                    .skip(cell.x)
-                    .take(span_cols)
-                    .sum();
-                let cell_w_dxa = pt_to_dxa(cell_w_pt).max(144);
                 let _ = write!(out, r#"<w:tcW w:w="{cell_w_dxa}" w:type="dxa"/>"#);
 
-                if cell.colspan > 1 {
-                    let _ = write!(out, r#"<w:gridSpan w:val="{}"/>"#, cell.colspan);
+                if colspan > 1 {
+                    let _ = write!(out, r#"<w:gridSpan w:val="{colspan}"/>"#);
                 }
-                match cell.vmerge {
+                match vmerge {
                     Some(VMergeState::Restart) => {
                         out.push_str(r#"<w:vMerge w:val="restart"/>"#);
                     }
@@ -106,14 +137,14 @@ impl<'a> DocxWriter<'a> {
 
                 // Cell borders
                 out.push_str("<w:tcBorders>");
-                Self::render_tc_border("top", cell.borders.top.as_ref(), out);
-                Self::render_tc_border("left", cell.borders.left.as_ref(), out);
-                Self::render_tc_border("bottom", cell.borders.bottom.as_ref(), out);
-                Self::render_tc_border("right", cell.borders.right.as_ref(), out);
+                Self::render_tc_border("top", borders.top.as_ref(), out);
+                Self::render_tc_border("left", borders.left.as_ref(), out);
+                Self::render_tc_border("bottom", borders.bottom.as_ref(), out);
+                Self::render_tc_border("right", borders.right.as_ref(), out);
                 out.push_str("</w:tcBorders>");
 
                 // Cell shading / background fill
-                if let Some(fill_hex) = &cell.fill {
+                if let Some(fill_hex) = fill {
                     let _ = write!(
                         out,
                         r#"<w:shd w:val="clear" w:color="auto" w:fill="{fill_hex}"/>"#
@@ -121,14 +152,17 @@ impl<'a> DocxWriter<'a> {
                 }
 
                 // Cell padding / margins
-                let cell_role = resolve_table_cell_role(table_kind, &cell.blocks);
-                let margins = word_construct::WordCellMarginsDxa::solve(
-                    cell.inset.top,
-                    cell.inset.bottom,
-                    cell.inset.left,
-                    cell.inset.right,
+                let cell_role = resolve_table_cell_role(table_kind, blocks);
+                let mut margins = word_construct::WordCellMarginsDxa::solve(
+                    inset.top,
+                    inset.bottom,
+                    inset.left,
+                    inset.right,
                     cell_role,
                 );
+                if table_kind == TableKindIr::SemanticTable && row_idx + 1 == table.rows.len() {
+                    margins.bottom_dxa += 70;
+                }
                 let _ = write!(
                     out,
                     r#"<w:tcMar><w:top w:w="{}" w:type="dxa"/><w:left w:w="{}" w:type="dxa"/><w:bottom w:w="{}" w:type="dxa"/><w:right w:w="{}" w:type="dxa"/></w:tcMar>"#,
@@ -136,7 +170,7 @@ impl<'a> DocxWriter<'a> {
                 );
 
                 // Vertical alignment
-                let valign_str = match cell.valign {
+                let valign_str = match valign {
                     VAlignIr::Top => "top",
                     VAlignIr::Center => "center",
                     VAlignIr::Bottom => "bottom",
@@ -150,7 +184,7 @@ impl<'a> DocxWriter<'a> {
                 } else {
                     ""
                 };
-                if cell.blocks.is_empty() || cell.vmerge == Some(VMergeState::Continue) {
+                if blocks.is_empty() || vmerge == Some(VMergeState::Continue) {
                     let _ = write!(
                         out,
                         r#"<w:p><w:pPr>{keep_next_xml}<w:spacing w:before="0" w:after="0" w:line="220" w:lineRule="auto"/></w:pPr></w:p>"#
@@ -158,7 +192,7 @@ impl<'a> DocxWriter<'a> {
                 } else {
                     let mut cell_xml = String::new();
                     self.render_table_cell_blocks(
-                        &cell.blocks,
+                        blocks,
                         keep_rows_together,
                         table_kind,
                         &mut cell_xml,

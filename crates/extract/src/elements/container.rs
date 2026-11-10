@@ -204,8 +204,6 @@ impl<'a> ExtractorContext<'a> {
                         y: 0,
                         colspan: 1,
                         rowspan: 1,
-                        vmerge: None,
-                        hmerged_covered: false,
                         fill,
                         borders: cell_borders,
                         inset,

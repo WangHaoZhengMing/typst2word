@@ -51,7 +51,7 @@ pub use style::{
     BordersIr, DashPatternIr, HAlignIr, LineCapIr, LineJoinIr, LinebreaksIr, ParagraphStyleIr,
     SidesPtIr, StrokeIr, VAlignIr,
 };
-pub use table::{TableCellIr, TableIr, TableKindIr, TableRowIr, VMergeState};
+pub use table::{TableCellIr, TableIr, TableKindIr, TableRowIr};
 pub use text::{
     FontFamilyClassIr, ScriptKindIr, TextRunIr, TextScriptClassIr, is_cjk_char,
     is_east_asian_symbol_char,

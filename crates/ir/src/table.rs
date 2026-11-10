@@ -44,11 +44,6 @@ pub struct TableCellIr {
     pub y: usize,
     pub colspan: usize,
     pub rowspan: usize,
-    /// When `vmerge` is `Some(VMergeState::Restart)`, this cell starts a vertical span;
-    /// when `Some(VMergeState::Continue)`, this cell is a continuation placeholder in Word.
-    pub vmerge: Option<VMergeState>,
-    /// True if this slot is covered horizontally by a preceding cell's `colspan` in the same row.
-    pub hmerged_covered: bool,
     pub fill: Option<ColorHex>,
     pub borders: BordersIr,
     pub inset: SidesPtIr,
@@ -56,10 +51,4 @@ pub struct TableCellIr {
     pub valign: VAlignIr,
     pub is_header_cell: bool,
     pub blocks: Vec<BlockNode>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum VMergeState {
-    Restart,
-    Continue,
 }

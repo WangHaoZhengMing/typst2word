@@ -14,7 +14,7 @@ use crate::color::paint_to_hex;
 use crate::ExtractorContext;
 use crate::frame_tree::TreeNode;
 use ir::{
-    HAlignIr, SidesPtIr, TableCellIr, TableIr, TableKindIr, TableRowIr, VAlignIr, VMergeState,
+    HAlignIr, SidesPtIr, TableCellIr, TableIr, TableKindIr, TableRowIr, VAlignIr,
 };
 
 pub(super) type CellNodeMap = HashMap<(usize, usize), (Content, Vec<TreeNode>, Size)>;
@@ -153,7 +153,6 @@ impl<'a> ExtractorContext<'a> {
                 Entry::Cell(resolved_cell) => {
                     let colspan = resolved_cell.colspan.get();
                     let rowspan = resolved_cell.rowspan.get();
-                    let vmerge = (rowspan > 1).then_some(VMergeState::Restart);
 
                     if let Some(Paint::Tiling(_)) = &resolved_cell.fill {
                         self.record_unsupported_paint("table.cell.fill", resolved_cell.body.span());
@@ -217,8 +216,6 @@ impl<'a> ExtractorContext<'a> {
                         y,
                         colspan,
                         rowspan,
-                        vmerge,
-                        hmerged_covered: false,
                         fill,
                         borders,
                         inset,
@@ -228,35 +225,7 @@ impl<'a> ExtractorContext<'a> {
                         blocks: cell_blocks,
                     });
                 }
-                Entry::Merged { parent } => {
-                    let parent_x = *parent % num_cols;
-                    let parent_y = *parent / num_cols;
-                    let parent_cell = grid.cell(parent_x * factor, parent_y * factor);
-                    let colspan = parent_cell.map(|c| c.colspan.get()).unwrap_or(1);
-                    let fill = parent_cell.and_then(|c| c.fill.as_ref().and_then(paint_to_hex));
-                    let borders = parent_cell
-                        .map(|c| Self::extract_cell_borders(c, is_semantic_table))
-                        .unwrap_or_default();
-
-                    let hmerged_covered = x > parent_x;
-                    let vmerge = (y > parent_y && x == parent_x).then_some(VMergeState::Continue);
-
-                    row_cells.push(TableCellIr {
-                        x,
-                        y,
-                        colspan: if x == parent_x { colspan } else { 1 },
-                        rowspan: 1,
-                        vmerge,
-                        hmerged_covered,
-                        fill,
-                        borders,
-                        inset: SidesPtIr::default(),
-                        halign: HAlignIr::Left,
-                        valign: VAlignIr::Top,
-                        is_header_cell: is_header,
-                        blocks: Vec::new(),
-                    });
-                }
+                Entry::Merged { .. } => {}
             }
         }
 
