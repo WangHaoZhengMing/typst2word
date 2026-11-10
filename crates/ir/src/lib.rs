@@ -42,7 +42,10 @@ pub use normalize::{
     visit_document_inline_lists_mut,
 };
 pub use outline::OutlineEntryIr;
-pub use pdf::{BlockPdfSpanIr, EquationPdfMetricsIr, InterBlockFlowIr, ParagraphPdfMetricsIr};
+pub use pdf::{
+    BlockPdfSpanIr, EquationPdfMetricsIr, FlowMeasureIr, NextBlockKindIr, NextBlockMeasureIr,
+    ParagraphPdfMetricsIr,
+};
 pub use shape::{CurveSegmentIr, ShapeIr, ShapeKindIr};
 pub use style::{
     BordersIr, DashPatternIr, HAlignIr, LineCapIr, LineJoinIr, LinebreaksIr, ParagraphStyleIr,

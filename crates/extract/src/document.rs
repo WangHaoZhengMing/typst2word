@@ -10,7 +10,7 @@ use crate::color::paint_to_hex;
 use crate::ExtractorContext;
 use crate::frame_tree::TreeNode;
 use ir::{
-    BlockNode, HAlignIr, InterBlockFlowIr, MetadataIr, PageSetupIr, ParagraphPdfMetricsIr,
+    BlockNode, FlowMeasureIr, HAlignIr, MetadataIr, PageSetupIr, ParagraphPdfMetricsIr,
 };
 
 impl<'a> ExtractorContext<'a> {
@@ -127,8 +127,7 @@ impl<'a> ExtractorContext<'a> {
                 style.space_before_pt = 0.0;
                 style.space_after_pt = 0.0;
                 style.pdf_metrics = ParagraphPdfMetricsIr::Unmeasured;
-                style.inter_block_flow = InterBlockFlowIr::Standard;
-                style.extra_trailing_space_pt = 0.0;
+                style.flow_measure = FlowMeasureIr::default();
             }
         }
     }

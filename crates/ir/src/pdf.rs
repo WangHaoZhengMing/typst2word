@@ -1,7 +1,8 @@
 //! Exhaustive PDF physical measurement enums extracted from Typst's laid-out `Frame`s.
 //!
 //! Keeps physical PDF layout measurements (`width_pt`, `height_pt`, `top_y_pt`, `bottom_y_pt`,
-//! glyph size bounds, and inter-block vertical gaps) strictly separated from semantic AST definitions.
+//! glyph size bounds, and raw block spans) strictly separated from semantic AST definitions
+//! and Word-specific compensation rules.
 
 use serde::{Deserialize, Serialize};
 
@@ -85,7 +86,80 @@ pub enum BlockPdfSpanIr {
     },
 }
 
-/// PDF & Typst physical spacing parameters of a `ParElem` before Word line-box compensation.
+impl BlockPdfSpanIr {
+    /// Construct a [`BlockPdfSpanIr`] from optional `(page_idx, top_y_pt, x_pt)` and `(page_idx, bottom_y_pt, x_pt)`.
+    #[inline]
+    pub const fn from_start_end(
+        start: Option<(usize, f64, f64)>,
+        end: Option<(usize, f64, f64)>,
+    ) -> Self {
+        match (start, end) {
+            (Some((ps, top_y_pt, x_pt)), Some((pe, bottom_y_pt, _))) if ps == pe => {
+                Self::SinglePage {
+                    page_idx: ps,
+                    top_y_pt,
+                    bottom_y_pt,
+                    x_pt,
+                }
+            }
+            (Some((ps, top_y_pt, _)), Some((pe, bottom_y_pt, _))) => Self::MultiPage {
+                start_page_idx: ps,
+                top_y_pt,
+                end_page_idx: pe,
+                bottom_y_pt,
+            },
+            (Some((ps, top_y_pt, x_pt)), None) => Self::SinglePage {
+                page_idx: ps,
+                top_y_pt,
+                bottom_y_pt: top_y_pt,
+                x_pt,
+            },
+            (None, Some((pe, bottom_y_pt, x_pt))) => Self::SinglePage {
+                page_idx: pe,
+                top_y_pt: bottom_y_pt,
+                bottom_y_pt,
+                x_pt,
+            },
+            (None, None) => Self::Unmeasured,
+        }
+    }
+
+    /// Return `(start_page_idx, top_y_pt)` if measured.
+    #[inline]
+    pub const fn start_page_and_top_y(self) -> Option<(usize, f64)> {
+        match self {
+            Self::Unmeasured => None,
+            Self::SinglePage {
+                page_idx, top_y_pt, ..
+            } => Some((page_idx, top_y_pt)),
+            Self::MultiPage {
+                start_page_idx,
+                top_y_pt,
+                ..
+            } => Some((start_page_idx, top_y_pt)),
+        }
+    }
+
+    /// Return `(end_page_idx, bottom_y_pt)` if measured.
+    #[inline]
+    pub const fn end_page_and_bottom_y(self) -> Option<(usize, f64)> {
+        match self {
+            Self::Unmeasured => None,
+            Self::SinglePage {
+                page_idx,
+                bottom_y_pt,
+                ..
+            } => Some((page_idx, bottom_y_pt)),
+            Self::MultiPage {
+                end_page_idx,
+                bottom_y_pt,
+                ..
+            } => Some((end_page_idx, bottom_y_pt)),
+        }
+    }
+}
+
+/// PDF & Typst physical spacing parameters of a `ParElem` before layout compensation.
 #[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 pub enum ParagraphPdfMetricsIr {
     /// Synthetic or unmeasured paragraph (e.g. stray inline flush or header/footer); uses `space_after_pt` directly.
@@ -102,24 +176,45 @@ pub enum ParagraphPdfMetricsIr {
     },
 }
 
-/// Exhaustive classification of the vertical flow relationship between two consecutive blocks.
-#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
-pub enum InterBlockFlowIr {
-    /// Standard flow without special cross-block overrides.
+/// Semantic kind of the following sibling block in vertical flow measurements.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum NextBlockKindIr {
     #[default]
-    Standard,
-    /// Immediately precedes a tight `List` or `Enum` on the same page (`gap_pt <= 10.0`).
-    BeforeTightList { gap_pt: f64 },
-    /// Measured vertical gap between two consecutive paragraphs on the same page.
-    SamePageParagraphGap {
-        gap_pt: f64,
-        prev_font_pt: f64,
-        next_font_pt: f64,
+    Other,
+    Paragraph,
+    TightList,
+    HeadingFollowedByParagraph,
+    ListItemSibling {
+        list_level: usize,
+        active_columns: usize,
+        prev_item_block_count: usize,
+        next_item_starts_with_paragraph: bool,
     },
-    /// Measured vertical gap between this block and a non-paragraph block on the same page.
-    SamePageBlockGap {
-        gap_pt: f64,
-        prev_font_pt: f64,
-        next_font_pt: f64,
-    },
+}
+
+/// Raw physical measurement of the following block relative to a preceding block.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+pub struct NextBlockMeasureIr {
+    pub kind: NextBlockKindIr,
+    pub span: BlockPdfSpanIr,
+    pub prev_font_pt: f64,
+    pub next_font_pt: f64,
+}
+
+/// Raw PDF vertical flow measurements attached to a paragraph (`self_span` and `next` block measurement).
+/// ┌───────────────────────┐  <- 上一个块的 top_y_pt = 100pt
+/// │ 第一段文字……            │
+/// └───────────────────────┘  <- 上一个块的 bottom_y_pt = 130pt
+///           ↕ 这里的空白就是 gap_pt = 142 - 130 = 12pt
+/// ┌───────────────────────┐  <- 下一个块的 top_y_pt = 142pt
+/// │ 第二段文字（或者一个列表  │
+/// └───────────────────────┘
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct FlowMeasureIr {
+    pub self_span: BlockPdfSpanIr,
+    pub next: Option<NextBlockMeasureIr>,
+    /// Additional trailing block-to-block measurements (e.g. when a paragraph is the last block
+    /// of a list item followed by another list item or an outer block).
+    #[serde(default)]
+    pub trailing_transitions: Vec<(BlockPdfSpanIr, NextBlockMeasureIr)>,
 }

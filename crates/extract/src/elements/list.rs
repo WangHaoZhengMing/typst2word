@@ -233,38 +233,24 @@ impl<'a> ExtractorContext<'a> {
         }
 
         for i in 0..items.len().saturating_sub(1) {
-            if let (Some((pa, bottom_a, _xa)), Some((pb, top_b, _xb))) =
-                (items[i].last_y, items[i + 1].first_y)
-            {
-                if pa == pb && top_b >= bottom_a - 2.0 {
-                    let gap_pt = top_b - bottom_a;
-                    if gap_pt > 48.0 && gap_pt < 500.0 {
-                        Self::add_extra_space_after_to_last_block(
-                            &mut items[i].blocks,
-                            (gap_pt - 10.0).max(0.0),
-                        );
-                    }
-                } else if pb == pa + 1
-                    && list_level == 0
-                    && self.active_columns.0 <= 1
-                    && items[i].blocks.len() <= 2
-                    && bottom_a > 100.0
-                    && bottom_a < 660.0
-                    && matches!(items[i].blocks.last(), Some(BlockNode::Paragraph { .. }))
-                    && matches!(
+            let span_a = ir::BlockPdfSpanIr::from_start_end(items[i].first_y, items[i].last_y);
+            let span_b =
+                ir::BlockPdfSpanIr::from_start_end(items[i + 1].first_y, items[i + 1].last_y);
+            let measure = ir::NextBlockMeasureIr {
+                kind: ir::NextBlockKindIr::ListItemSibling {
+                    list_level,
+                    active_columns: self.active_columns.0,
+                    prev_item_block_count: items[i].blocks.len(),
+                    next_item_starts_with_paragraph: matches!(
                         items[i + 1].blocks.first(),
                         Some(BlockNode::Paragraph { .. })
-                    )
-                {
-                    let gap_pt = (760.0 - bottom_a) + (top_b - 71.0).max(0.0);
-                    if gap_pt > 60.0 && gap_pt < 500.0 {
-                        Self::add_extra_space_after_to_last_block(
-                            &mut items[i].blocks,
-                            (gap_pt - 15.0).max(0.0),
-                        );
-                    }
-                }
-            }
+                    ),
+                },
+                span: span_b,
+                prev_font_pt: 11.0,
+                next_font_pt: 11.0,
+            };
+            Self::record_trailing_transition_on_last_block(&mut items[i].blocks, span_a, measure);
         }
 
         (items, max_label_w_pt)

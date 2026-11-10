@@ -1,8 +1,11 @@
-//! Inter-block PDF vertical gap measurements (`InterBlockFlowIr` and `extra_trailing_space_pt`).
+//! Raw inter-block PDF vertical span measurements (`FlowMeasureIr` / `BlockPdfSpanIr`).
+//!
+//! Records physical `(page_idx, top_y_pt, bottom_y_pt)` spans on `ParagraphStyleIr::flow_measure`
+//! without embedding Word-specific spacing thresholds.
 
 use crate::ExtractorContext;
 use crate::frame_tree::{TreeNode, decode_page_and_local_y};
-use ir::{BlockNode, InterBlockFlowIr};
+use ir::{BlockNode, BlockPdfSpanIr, NextBlockKindIr, NextBlockMeasureIr};
 
 impl<'a> ExtractorContext<'a> {
     pub(crate) fn nodes_first_page_top_y(nodes: &[TreeNode]) -> Option<(usize, f64, f64)> {
@@ -83,20 +86,35 @@ impl<'a> ExtractorContext<'a> {
         None
     }
 
-    pub(crate) fn add_extra_space_after_to_last_block(blocks: &mut [BlockNode], extra_pt: f64) {
+    pub(crate) fn record_trailing_transition_on_last_block(
+        blocks: &mut [BlockNode],
+        span_a: BlockPdfSpanIr,
+        measure: NextBlockMeasureIr,
+    ) {
         if let Some(last) = blocks.last_mut() {
             match last {
                 BlockNode::Paragraph { style, .. } => {
-                    style.extra_trailing_space_pt += extra_pt;
+                    style
+                        .flow_measure
+                        .trailing_transitions
+                        .push((span_a, measure));
                 }
                 BlockNode::Enum { items, .. } => {
                     if let Some(last_item) = items.last_mut() {
-                        Self::add_extra_space_after_to_last_block(&mut last_item.blocks, extra_pt);
+                        Self::record_trailing_transition_on_last_block(
+                            &mut last_item.blocks,
+                            span_a,
+                            measure,
+                        );
                     }
                 }
                 BlockNode::List { items, .. } => {
                     if let Some(last_item) = items.last_mut() {
-                        Self::add_extra_space_after_to_last_block(&mut last_item.blocks, extra_pt);
+                        Self::record_trailing_transition_on_last_block(
+                            &mut last_item.blocks,
+                            span_a,
+                            measure,
+                        );
                     }
                 }
                 _ => {}
@@ -109,60 +127,48 @@ impl<'a> ExtractorContext<'a> {
         blocks: &mut [BlockNode],
         spans: &[(usize, Option<(usize, f64, f64)>, Option<(usize, f64, f64)>)],
     ) {
+        for &(idx, start, end) in spans {
+            if let Some(BlockNode::Paragraph { style, .. }) = blocks.get_mut(idx) {
+                style.flow_measure.self_span = BlockPdfSpanIr::from_start_end(start, end);
+            }
+        }
+
         for win in spans.windows(2) {
-            let (idx_a, _, end_a) = win[0];
-            let (idx_b, start_b, _) = win[1];
+            let (idx_a, start_a, end_a) = win[0];
+            let (idx_b, start_b, end_b) = win[1];
             if idx_a >= blocks.len() || idx_b >= blocks.len() || idx_b != idx_a + 1 {
                 continue;
             }
-            let (Some((page_a, bottom_a, _x_a)), Some((page_b, top_b, _x_b))) = (end_a, start_b)
-            else {
-                continue;
-            };
-            if page_b == page_a + 1
-                && bottom_a > 100.0
-                && bottom_a < 560.0
-                && top_b < 110.0
-                && matches!(&blocks[idx_a], BlockNode::Paragraph { .. })
-                && (matches!(&blocks[idx_b], BlockNode::Paragraph { .. })
-                    || (matches!(&blocks[idx_b], BlockNode::Heading { .. })
-                        && matches!(blocks.get(idx_b + 1), Some(BlockNode::Paragraph { .. }))))
-            {
-                let extra_pt = (755.0 - bottom_a).max(0.0);
-                Self::add_extra_space_after_to_last_block(&mut blocks[..=idx_a], extra_pt);
-                continue;
-            }
-            if page_a != page_b || top_b < bottom_a - 2.0 {
-                continue;
-            }
-            let gap_pt = top_b - bottom_a;
+            let span_a = BlockPdfSpanIr::from_start_end(start_a, end_a);
+            let span_b = BlockPdfSpanIr::from_start_end(start_b, end_b);
             let font_a = Self::block_primary_font_size_pt(&blocks[idx_a]);
             let font_b = Self::block_primary_font_size_pt(&blocks[idx_b]);
-            let next_is_tight_list = matches!(
-                &blocks[idx_b],
-                BlockNode::List { tight: true, .. } | BlockNode::Enum { tight: true, .. }
-            );
-            let next_is_paragraph = matches!(&blocks[idx_b], BlockNode::Paragraph { .. });
-            if next_is_tight_list && gap_pt <= 10.0 {
-                if let BlockNode::Paragraph { style, .. } = &mut blocks[idx_a] {
-                    style.inter_block_flow = InterBlockFlowIr::BeforeTightList { gap_pt };
+            let kind = match &blocks[idx_b] {
+                BlockNode::List { tight: true, .. } | BlockNode::Enum { tight: true, .. } => {
+                    NextBlockKindIr::TightList
                 }
-            } else if next_is_paragraph
-                && (font_a >= 15.0 || font_b >= 15.0)
-                && gap_pt > 10.0
-                && gap_pt < 60.0
-            {
-                if let BlockNode::Paragraph { style, .. } = &mut blocks[idx_a] {
-                    style.inter_block_flow = InterBlockFlowIr::SamePageParagraphGap {
-                        gap_pt,
-                        prev_font_pt: font_a,
-                        next_font_pt: font_b,
-                    };
+                BlockNode::Paragraph { .. } => NextBlockKindIr::Paragraph,
+                BlockNode::Heading { .. }
+                    if matches!(blocks.get(idx_b + 1), Some(BlockNode::Paragraph { .. })) =>
+                {
+                    NextBlockKindIr::HeadingFollowedByParagraph
                 }
-            } else if gap_pt > 48.0 && gap_pt < 500.0 {
-                Self::add_extra_space_after_to_last_block(
+                _ => NextBlockKindIr::Other,
+            };
+            let measure = NextBlockMeasureIr {
+                kind,
+                span: span_b,
+                prev_font_pt: font_a,
+                next_font_pt: font_b,
+            };
+            if let BlockNode::Paragraph { style, .. } = &mut blocks[idx_a] {
+                style.flow_measure.self_span = span_a;
+                style.flow_measure.next = Some(measure);
+            } else {
+                Self::record_trailing_transition_on_last_block(
                     &mut blocks[..=idx_a],
-                    (gap_pt - 12.0).max(0.0),
+                    span_a,
+                    measure,
                 );
             }
         }
