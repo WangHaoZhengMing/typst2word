@@ -6,7 +6,7 @@ use std::fmt::Write as _;
 
 use word_construct::list::{ListSequenceSource, solve_list_sequence_construct};
 use crate::writer::DocxWriter;
-use ir::{BlockNode, EnumItemIr, InlineNode, ListItemIr, TermItemIr, TextRunIr};
+use word_construct::model::{BlockNode, EnumItemIr, InlineNode, ListItemIr, TermItemIr, TextRunIr};
 
 impl<'a> DocxWriter<'a> {
     /// `BlockNode::List` -> bullet-numbered paragraphs (`numId` 1).

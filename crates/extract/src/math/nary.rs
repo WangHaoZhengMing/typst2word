@@ -47,10 +47,6 @@ pub(crate) fn extract_nary_operator(
         }
         let (base_chr, base_force_limits) = extract_nary_base_char(&merged.base, styles)?;
         let force = base_force_limits.or(ctx.force_limits);
-        let und_ovr = match force {
-            Some(v) => v,
-            None => ctx.is_display && !is_integral_char(base_chr),
-        };
         let sub = merged
             .b
             .get_cloned(styles)
@@ -59,6 +55,13 @@ pub(crate) fn extract_nary_operator(
             .t
             .get_cloned(styles)
             .or_else(|| merged.tr.get_cloned(styles));
+        let und_ovr = match force {
+            Some(v) => v,
+            None => {
+                ctx.is_display
+                    && (!is_integral_char(base_chr) || (sub.is_some() && sup.is_some()))
+            }
+        };
         return Some(NaryInfo {
             chr: base_chr,
             und_ovr,

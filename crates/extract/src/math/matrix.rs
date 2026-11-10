@@ -21,6 +21,9 @@ pub(crate) fn extract_vec(
         .iter()
         .map(|item| vec![extract_math_child(item, styles, ctx)])
         .collect();
+    if open.is_empty() && close.is_empty() {
+        return MathNodeIr::Matrix { rows };
+    }
     MathNodeIr::Delimited {
         open,
         close,
@@ -46,6 +49,9 @@ pub(crate) fn extract_mat(
                 .collect()
         })
         .collect();
+    if open.is_empty() && close.is_empty() {
+        return MathNodeIr::Matrix { rows };
+    }
     MathNodeIr::Delimited {
         open,
         close,
@@ -83,6 +89,9 @@ pub(crate) fn extract_cases(
                 .collect()
         })
         .collect();
+    if open.is_empty() && close.is_empty() {
+        return MathNodeIr::Matrix { rows };
+    }
     MathNodeIr::Delimited {
         open,
         close,

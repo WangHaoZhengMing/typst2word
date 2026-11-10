@@ -3,7 +3,7 @@
 use std::fmt::Write as _;
 
 use crate::writer::DocxWriter;
-use ir::{BlockNode, InlineNode, TextRunIr};
+use word_construct::model::{BlockNode, InlineNode, TextRunIr};
 
 impl<'a> DocxWriter<'a> {
     // =========================================================================
@@ -30,7 +30,7 @@ impl<'a> DocxWriter<'a> {
         }
         if let Some(attr) = attribution {
             out.push_str(
-                r#"<w:p><w:pPr><w:pStyle w:val="Quote"/><w:ind w:left="440" w:right="440"/><w:jc w:val="right"/><w:spacing w:before="60" w:after="280" w:line="240" w:lineRule="auto"/></w:pPr>"#,
+                r#"<w:p><w:pPr><w:pStyle w:val="Quote"/><w:ind w:left="220" w:right="220"/><w:jc w:val="right"/><w:spacing w:before="60" w:after="310" w:line="240" w:lineRule="auto"/></w:pPr>"#,
             );
             let plain_attr = Self::plain_text_of_inlines(attr);
             let trimmed_attr = plain_attr.trim_start();

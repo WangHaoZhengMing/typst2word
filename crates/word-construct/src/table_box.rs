@@ -27,7 +27,7 @@ impl TableCellRole {
             Self::StyledContainer if inset_top_pt > 0.5 => -1.5,
             Self::StyledContainer => 0.0,
             Self::SemanticTable { has_list: true } | Self::LayoutGrid { has_list: true } => 3.8,
-            Self::SemanticTable { has_list: false } => 1.1,
+            Self::SemanticTable { has_list: false } => 0.6,
             Self::LayoutGrid { has_list: false } => 2.2,
         }
     }
@@ -38,6 +38,9 @@ impl TableCellRole {
         match (self, inset_bottom_pt > 0.5) {
             (Self::StyledContainer, true) => pt_to_dxa((inset_bottom_pt - 1.0).max(0.0)),
             (Self::StyledContainer, false) => 0,
+            (Self::SemanticTable { has_list: false }, _) => {
+                pt_to_dxa((inset_bottom_pt - 5.4).max(0.0))
+            }
             (role, _) => {
                 let v_sub = role.vertical_top_trim_pt(inset_top_pt);
                 pt_to_dxa((inset_bottom_pt - v_sub).max(0.0))
@@ -51,8 +54,8 @@ impl TableCellRole {
         match self {
             Self::StyledContainer => (inset_left_pt.max(0.0), inset_right_pt + 3.0),
             Self::SemanticTable { .. } => (
-                (inset_left_pt - 1.2).max(0.0),
-                (inset_right_pt - 1.2).max(0.0),
+                (inset_left_pt - 0.2).max(0.0),
+                (inset_right_pt - 0.2).max(0.0),
             ),
             Self::LayoutGrid { .. } => (inset_left_pt.max(0.0), inset_right_pt.max(0.0)),
         }

@@ -121,6 +121,8 @@ pub fn solve_list_sequence_construct<'a>(
                         idx > 0 && matches!(items[idx - 1].blocks.last(), Some(BlockNode::Table(_)));
                     let before_dxa = if prev_ended_with_table && item_gap_dxa > 0 {
                         item_gap_dxa + 64
+                    } else if idx == 0 && level == 0 && trailing_after_dxa.is_none() {
+                        104
                     } else {
                         0
                     };

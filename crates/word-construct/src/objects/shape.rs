@@ -14,11 +14,16 @@ pub struct ShapeBlockConstruct {
 
 impl ShapeBlockConstruct {
     pub fn solve(shape: &ShapeIr, left_indent_dxa: usize) -> Self {
+        let (before_dxa, after_dxa) = if shape.width_pt >= 350.0 {
+            (0, 100)
+        } else {
+            (70, 210)
+        };
         Self {
             align: shape.align,
             left_indent_dxa,
-            before_dxa: 20,
-            after_dxa: 80,
+            before_dxa,
+            after_dxa,
             line_dxa: 240,
         }
     }

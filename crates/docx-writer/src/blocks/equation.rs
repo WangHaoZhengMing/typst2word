@@ -68,7 +68,7 @@ impl<'a> DocxWriter<'a> {
                         r#"<w:tc><w:tcPr><w:tcW w:w="{side_dxa}" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr>"#,
                         r#"<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/></w:pPr></w:p></w:tc>"#,
                         r#"<w:tc><w:tcPr><w:tcW w:w="{center_dxa}" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr>"#,
-                        r#"<w:p><w:pPr><w:jc w:val="center"/><w:spacing w:before="50" w:after="50" w:line="240" w:lineRule="auto"/></w:pPr>"#,
+                        r#"<w:p><w:pPr><w:jc w:val="center"/><w:spacing w:before="120" w:after="120" w:line="240" w:lineRule="auto"/></w:pPr>"#,
                     ),
                     total_dxa = total_dxa,
                     side_dxa = side_dxa,

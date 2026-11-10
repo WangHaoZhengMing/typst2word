@@ -4,7 +4,7 @@ use crate::drawingml::geometry::build_cust_geom_xml;
 use crate::drawingml::line::build_ln_xml;
 use crate::drawingml::next_drawing_id;
 use crate::drawingml::textbox::render_textbox_blocks;
-use ir::{CurveSegmentIr, ShapeIr, ShapeKindIr};
+use word_construct::model::{CurveSegmentIr, ShapeIr, ShapeKindIr};
 use word_construct::units::pt_to_emu;
 
 /// Build a `<w:r><w:drawing>...</w:drawing></w:r>` XML fragment for a `ShapeIr`.
