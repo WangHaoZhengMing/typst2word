@@ -8,7 +8,7 @@ use crate::drawingml::textbox::render_inline_nodes_as_txbx_para;
 use ir::{
     CetzCanvasIr, CetzLabelDrawableIr, CetzPathDrawableIr, HAlignIr, ShapeIr, ShapeKindIr,
 };
-use ir::units::pt_to_emu;
+use word_construct::units::pt_to_emu;
 
 /// Build a `<w:r><w:drawing>...</w:drawing></w:r>` XML fragment for a `CetzCanvasIr`
 /// using a native WordprocessingGroup (`<wpg:wgp>`).

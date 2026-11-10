@@ -14,7 +14,8 @@
 //!    Decoupled `AnchorLineIr` and LCS-based `compare_line_anchors` diagnostic comparator.
 //! 5. **Paragraph, List, and Table Box Solvers ([`paragraph_box`], [`list_box`], [`table_box`], [`units`])**.
 
-pub use ir::{anchor, policy, units};
+pub use ir::{anchor, policy};
+pub mod units;
 pub mod equation_box;
 pub mod font_metrics;
 pub mod linebreak;
@@ -68,8 +69,8 @@ pub use policy::{
 };
 pub use table_box::{TableCellRole, WordCellMarginsDxa};
 pub use units::{
-    Dxa, EighthPt, Emu, HalfPt, Pt, WLine, dxa_to_pt, pt_to_dxa, pt_to_eighth_pt, pt_to_emu,
-    pt_to_half_pt,
+    Dxa, EighthPt, Emu, HalfPt, Pt, PtWordExt, WLine, dxa_to_pt, pt_to_dxa, pt_to_eighth_pt,
+    pt_to_emu, pt_to_half_pt,
 };
 
 #[cfg(test)]

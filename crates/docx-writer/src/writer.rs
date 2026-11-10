@@ -4,7 +4,7 @@
 use std::fmt::Write as _;
 
 use ir::{BlockNode, DocumentIr, HAlignIr, ImageFormatIr, ImageIr};
-use ir::units::pt_to_dxa;
+use word_construct::units::pt_to_dxa;
 
 pub(crate) struct MediaAsset {
     pub(crate) part: String,

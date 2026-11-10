@@ -10,7 +10,7 @@ use crate::writer::DocxWriter;
 use ir::{
     BlockNode, DashPatternIr, StrokeIr, TableIr, TableKindIr, VAlignIr, VMergeState,
 };
-use ir::units::pt_to_dxa;
+use word_construct::units::pt_to_dxa;
 use crate::xml::escape_xml;
 
 impl<'a> DocxWriter<'a> {

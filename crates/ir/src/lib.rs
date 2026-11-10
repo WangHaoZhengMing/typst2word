@@ -61,10 +61,7 @@ pub use text::{
     FontFamilyClassIr, ScriptKindIr, TextRunIr, TextScriptClassIr, is_cjk_char,
     is_east_asian_symbol_char,
 };
-pub use units::{
-    Dxa, EighthPt, Emu, HalfPt, Pt, WLine, dxa_to_pt, pt_to_dxa, pt_to_eighth_pt, pt_to_emu,
-    pt_to_half_pt,
-};
+pub use units::Pt;
 pub use unsupported::UnsupportedIr;
 
 /// 6-digit uppercase hex RGB color string (e.g., `"1A2B3C"`).

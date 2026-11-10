@@ -1,7 +1,7 @@
 //! Curve segments -> `<a:custGeom>` path lists and bounding boxes.
 
 use ir::CurveSegmentIr;
-use ir::units::pt_to_emu;
+use word_construct::units::pt_to_emu;
 
 pub(crate) fn compute_segments_bbox(segments: &[CurveSegmentIr]) -> (f64, f64, f64, f64) {
     let mut min_x = f64::INFINITY;

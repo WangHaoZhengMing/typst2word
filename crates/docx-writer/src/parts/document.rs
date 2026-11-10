@@ -4,7 +4,7 @@ use std::fmt::Write as _;
 
 use crate::writer::DocxWriter;
 use ir::{BlockNode, InlineNode};
-use ir::units::pt_to_dxa;
+use word_construct::units::pt_to_dxa;
 
 impl<'a> DocxWriter<'a> {
     // =========================================================================

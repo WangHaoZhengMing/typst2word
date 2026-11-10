@@ -1,7 +1,7 @@
 //! `StrokeIr` -> `<a:ln>` outline (width, color, dash, cap, join).
 
 use ir::{DashPatternIr, LineCapIr, LineJoinIr, StrokeIr};
-use ir::units::pt_to_emu;
+use word_construct::units::pt_to_emu;
 
 pub(crate) fn build_ln_xml(stroke: Option<&StrokeIr>) -> String {
     let Some(s) = stroke else {

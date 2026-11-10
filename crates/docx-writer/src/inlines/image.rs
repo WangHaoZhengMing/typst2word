@@ -4,7 +4,7 @@ use std::fmt::Write as _;
 
 use crate::writer::DocxWriter;
 use ir::{ImageFormatIr, ImageIr};
-use ir::units::pt_to_emu;
+use word_construct::units::pt_to_emu;
 use crate::xml::escape_xml;
 
 impl<'a> DocxWriter<'a> {

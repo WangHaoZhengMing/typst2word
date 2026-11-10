@@ -5,7 +5,7 @@ use crate::drawingml::line::build_ln_xml;
 use crate::drawingml::next_drawing_id;
 use crate::drawingml::textbox::render_textbox_blocks;
 use ir::{CurveSegmentIr, ShapeIr, ShapeKindIr};
-use ir::units::pt_to_emu;
+use word_construct::units::pt_to_emu;
 
 /// Build a `<w:r><w:drawing>...</w:drawing></w:r>` XML fragment for a `ShapeIr`.
 pub fn shape_to_drawingml_run(shape: &ShapeIr) -> String {
