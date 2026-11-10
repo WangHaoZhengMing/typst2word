@@ -1,13 +1,11 @@
-//! Calibrated `EquationIr` & `MathNodeIr` -> Office Math (`<m:oMath>`) XML serializer.
+//! Calibrated `EquationIr` & `WordMathNode` -> Office Math (`<m:oMath>`) XML serializer.
 //!
 //! Pure OMML XML writer that delegates 2-DoF box calibration to [`word_construct::equation`].
 
 use std::fmt::Write as _;
 
-use word_construct::equation::calibrate_equation_body;
-use ir::{
-    EquationIr, MathFracStyleIr, MathNodeIr, MathRunIr, MathScriptIr, MathStyleIr,
-};
+use word_construct::equation::{WordMathNode, WordMathRun, calibrate_equation_body};
+use ir::{EquationIr, MathFracStyleIr, MathScriptIr, MathStyleIr};
 use crate::xml::{escape_xml_attr, escape_xml_text};
 
 const EMPTY_MATH_RUN: &str = "<m:r><m:t>&#x200B;</m:t></m:r>";
@@ -19,8 +17,8 @@ pub(crate) fn render_equation_omml(eq: &EquationIr, out: &mut String) {
     render_math_omml(&calibrated_body, out);
 }
 
-/// Render a slice of `MathNodeIr` into a complete `<m:oMath>...</m:oMath>` XML element.
-pub(crate) fn render_math_omml(nodes: &[MathNodeIr], out: &mut String) {
+/// Render a slice of `WordMathNode` into a complete `<m:oMath>...</m:oMath>` XML element.
+pub(crate) fn render_math_omml(nodes: &[WordMathNode], out: &mut String) {
     out.push_str("<m:oMath>");
     let start_len = out.len();
     for node in nodes {
@@ -32,7 +30,7 @@ pub(crate) fn render_math_omml(nodes: &[MathNodeIr], out: &mut String) {
     out.push_str("</m:oMath>");
 }
 
-fn render_non_empty_node(node: &MathNodeIr, out: &mut String) {
+fn render_non_empty_node(node: &WordMathNode, out: &mut String) {
     let start_len = out.len();
     render_math_node(node, out);
     if out.len() == start_len {
@@ -40,14 +38,14 @@ fn render_non_empty_node(node: &MathNodeIr, out: &mut String) {
     }
 }
 
-fn render_math_node(node: &MathNodeIr, out: &mut String) {
+fn render_math_node(node: &WordMathNode, out: &mut String) {
     match node {
-        MathNodeIr::Sequence(children) => {
+        WordMathNode::Sequence(children) => {
             for child in children {
                 render_math_node(child, out);
             }
         }
-        MathNodeIr::Fraction { num, denom, style } => {
+        WordMathNode::Fraction { num, denom, style } => {
             let frac_type = match style {
                 MathFracStyleIr::Vertical => "bar",
                 MathFracStyleIr::Skewed => "skw",
@@ -63,7 +61,7 @@ fn render_math_node(node: &MathNodeIr, out: &mut String) {
             render_non_empty_node(denom, out);
             out.push_str("</m:den></m:f>");
         }
-        MathNodeIr::Radical { degree, radicand } => {
+        WordMathNode::Radical { degree, radicand } => {
             if let Some(deg) = degree {
                 out.push_str(r#"<m:rad><m:radPr><m:degHide m:val="0"/></m:radPr><m:deg>"#);
                 render_non_empty_node(deg, out);
@@ -76,7 +74,7 @@ fn render_math_node(node: &MathNodeIr, out: &mut String) {
                 out.push_str("</m:e></m:rad>");
             }
         }
-        MathNodeIr::SubSup { base, sub, sup } => match (sub, sup) {
+        WordMathNode::SubSup { base, sub, sup } => match (sub, sup) {
             (Some(sub_n), Some(sup_n)) => {
                 out.push_str("<m:sSubSup><m:e>");
                 render_non_empty_node(base, out);
@@ -104,7 +102,7 @@ fn render_math_node(node: &MathNodeIr, out: &mut String) {
                 render_non_empty_node(base, out);
             }
         },
-        MathNodeIr::PreSubSup { base, sub, sup } => {
+        WordMathNode::PreSubSup { base, sub, sup } => {
             out.push_str("<m:sPre><m:sub>");
             if let Some(sub_n) = sub {
                 render_non_empty_node(sub_n, out);
@@ -117,7 +115,7 @@ fn render_math_node(node: &MathNodeIr, out: &mut String) {
             render_non_empty_node(base, out);
             out.push_str("</m:e></m:sPre>");
         }
-        MathNodeIr::Limit { base, lower, upper } => {
+        WordMathNode::Limit { base, lower, upper } => {
             let mut current = String::new();
             render_non_empty_node(base, &mut current);
             if let Some(low_n) = lower {
@@ -134,7 +132,7 @@ fn render_math_node(node: &MathNodeIr, out: &mut String) {
             }
             out.push_str(&current);
         }
-        MathNodeIr::Nary {
+        WordMathNode::Nary {
             chr,
             limits_under_over,
             sub,
@@ -166,7 +164,7 @@ fn render_math_node(node: &MathNodeIr, out: &mut String) {
             render_non_empty_node(operand, out);
             out.push_str("</m:e></m:nary>");
         }
-        MathNodeIr::Delimited {
+        WordMathNode::Delimited {
             open,
             close,
             separator,
@@ -192,7 +190,7 @@ fn render_math_node(node: &MathNodeIr, out: &mut String) {
             }
             out.push_str("</m:d>");
         }
-        MathNodeIr::Matrix { rows } => {
+        WordMathNode::Matrix { rows } => {
             out.push_str("<m:m>");
             for row in rows {
                 out.push_str("<m:mr>");
@@ -205,7 +203,7 @@ fn render_math_node(node: &MathNodeIr, out: &mut String) {
             }
             out.push_str("</m:m>");
         }
-        MathNodeIr::EquationArray { rows } => {
+        WordMathNode::EquationArray { rows } => {
             out.push_str(r#"<m:eqArr><m:eqArrPr><m:maxDist m:val="1"/></m:eqArrPr>"#);
             for row in rows {
                 out.push_str("<m:e>");
@@ -214,7 +212,7 @@ fn render_math_node(node: &MathNodeIr, out: &mut String) {
             }
             out.push_str("</m:eqArr>");
         }
-        MathNodeIr::Accent { chr, base } => {
+        WordMathNode::Accent { chr, base } => {
             let mut buf = [0u8; 4];
             let chr_str = escape_xml_attr(chr.encode_utf8(&mut buf));
             let _ = write!(
@@ -224,7 +222,7 @@ fn render_math_node(node: &MathNodeIr, out: &mut String) {
             render_non_empty_node(base, out);
             out.push_str("</m:e></m:acc>");
         }
-        MathNodeIr::Bar { pos_bottom, body } => {
+        WordMathNode::Bar { pos_bottom, body } => {
             let pos = if *pos_bottom { "bot" } else { "top" };
             let _ = write!(
                 out,
@@ -233,7 +231,7 @@ fn render_math_node(node: &MathNodeIr, out: &mut String) {
             render_non_empty_node(body, out);
             out.push_str("</m:e></m:bar>");
         }
-        MathNodeIr::GroupChar {
+        WordMathNode::GroupChar {
             chr,
             is_bottom,
             body,
@@ -268,7 +266,7 @@ fn render_math_node(node: &MathNodeIr, out: &mut String) {
                 out.push_str(&group_xml);
             }
         }
-        MathNodeIr::Cancel {
+        WordMathNode::Cancel {
             body,
             cross,
             inverted,
@@ -288,20 +286,20 @@ fn render_math_node(node: &MathNodeIr, out: &mut String) {
             render_non_empty_node(body, out);
             out.push_str("</m:e></m:borderBox>");
         }
-        MathNodeIr::AlignPoint => {
+        WordMathNode::AlignPoint => {
             out.push_str("<m:r><m:t>&amp;</m:t></m:r>");
         }
-        MathNodeIr::Run(run) => {
+        WordMathNode::Run(run) => {
             render_math_run(run, out);
         }
     }
 }
 
-fn render_math_run(run: &MathRunIr, out: &mut String) {
+fn render_math_run(run: &WordMathRun, out: &mut String) {
     if run.text.is_empty() {
         return;
     }
-    let has_cjk = run.text_script.has_cjk();
+    let has_cjk = run.has_cjk;
     out.push_str("<m:r>");
     if has_cjk || run.script.is_some() || run.style.is_some() {
         out.push_str("<m:rPr>");

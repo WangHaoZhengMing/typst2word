@@ -2,10 +2,100 @@
 //!
 //! Bridges [`EquationIr`] (pure Typst AST + PDF physical measurements) to
 //! [`crate::WordEquationBox`] and solves the block equation container construct
-//! ([`EquationBlockConstruct`]: centered display paragraph vs 3-column borderless numbered row).
+//! ([`EquationBlockConstruct`]: centered display paragraph vs 3-column borderless numbered row)
+//! and calibrated Office Math nodes ([`WordMathNode`], [`WordMathRun`]).
 
-use ir::{EquationIr, EquationPdfMetricsIr, MathFracStyleIr, MathNodeIr};
+use ir::{
+    ColorHex, EquationIr, EquationPdfMetricsIr, MathFracStyleIr, MathNodeIr, MathScriptIr,
+    MathStyleIr,
+};
+
+use crate::pipeline::lang_script::TextScriptClassIr;
 use crate::units::pt_to_dxa;
+
+/// Calibrated Word Office Math (`<m:oMath>`) AST node solved by [`crate::WordEquationBox`].
+#[derive(Debug, Clone)]
+pub enum WordMathNode {
+    Sequence(Vec<WordMathNode>),
+    Fraction {
+        num: Box<WordMathNode>,
+        denom: Box<WordMathNode>,
+        style: MathFracStyleIr,
+    },
+    Radical {
+        degree: Option<Box<WordMathNode>>,
+        radicand: Box<WordMathNode>,
+    },
+    SubSup {
+        base: Box<WordMathNode>,
+        sub: Option<Box<WordMathNode>>,
+        sup: Option<Box<WordMathNode>>,
+    },
+    PreSubSup {
+        base: Box<WordMathNode>,
+        sub: Option<Box<WordMathNode>>,
+        sup: Option<Box<WordMathNode>>,
+    },
+    Limit {
+        base: Box<WordMathNode>,
+        lower: Option<Box<WordMathNode>>,
+        upper: Option<Box<WordMathNode>>,
+    },
+    Nary {
+        chr: char,
+        limits_under_over: bool,
+        sub: Option<Box<WordMathNode>>,
+        sup: Option<Box<WordMathNode>>,
+        operand: Box<WordMathNode>,
+    },
+    Delimited {
+        open: String,
+        close: String,
+        separator: String,
+        elements: Vec<WordMathNode>,
+    },
+    Matrix {
+        rows: Vec<Vec<WordMathNode>>,
+    },
+    EquationArray {
+        rows: Vec<WordMathNode>,
+    },
+    Accent {
+        chr: char,
+        base: Box<WordMathNode>,
+    },
+    Bar {
+        pos_bottom: bool,
+        body: Box<WordMathNode>,
+    },
+    GroupChar {
+        chr: char,
+        is_bottom: bool,
+        body: Box<WordMathNode>,
+        annotation: Option<Box<WordMathNode>>,
+    },
+    Cancel {
+        body: Box<WordMathNode>,
+        cross: bool,
+        inverted: bool,
+    },
+    AlignPoint,
+    Run(WordMathRun),
+}
+
+/// Calibrated Word math leaf run (`<m:r>`) carrying solved font size, horizontal scaling (`<w:w>`),
+/// and CJK normal-text flag (`<m:nor/>`).
+#[derive(Debug, Clone, Default)]
+pub struct WordMathRun {
+    pub text: String,
+    pub script: Option<MathScriptIr>,
+    pub style: Option<MathStyleIr>,
+    pub color: Option<ColorHex>,
+    pub font_family: Option<String>,
+    pub font_size_pt: Option<f64>,
+    pub width_scale_pct: Option<u32>,
+    pub has_cjk: bool,
+}
 
 /// Exhaustive block equation container construct in WordprocessingML.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -124,18 +214,16 @@ pub fn solve_word_equation_box(eq: &EquationIr) -> crate::WordEquationBox {
     })
 }
 
-/// Return a calibrated copy of `eq.body` with `run_font_size_pt`, `fraction_font_size_pt`,
-/// and `width_scale_pct` solved by [`crate::WordEquationBox`].
-pub fn calibrate_equation_body(eq: &EquationIr) -> Vec<MathNodeIr> {
+/// Return a calibrated [`WordMathNode`] tree for `eq.body` with `run_font_size_pt`,
+/// `fraction_font_size_pt`, and `width_scale_pct` solved by [`crate::WordEquationBox`].
+pub fn calibrate_equation_body(eq: &EquationIr) -> Vec<WordMathNode> {
     let eq_box = solve_word_equation_box(eq);
-    let mut calibrated_body = eq.body.clone();
-    apply_calibrated_box(
-        &mut calibrated_body,
+    calibrate_math_nodes(
+        &eq.body,
         eq_box.run_font_size_pt,
         eq_box.fraction_font_size_pt,
         eq_box.width_scale_pct,
-    );
-    calibrated_body
+    )
 }
 
 pub fn analyze_math_slice(nodes: &[MathNodeIr], is_block: bool) -> MathAstStructure {
@@ -165,243 +253,334 @@ pub fn analyze_math_slice(nodes: &[MathNodeIr], is_block: bool) -> MathAstStruct
     }
 }
 
-pub fn apply_calibrated_box(
-    nodes: &mut [MathNodeIr],
+pub fn calibrate_math_nodes(
+    nodes: &[MathNodeIr],
     run_font_size_pt: f64,
     fraction_font_size_pt: Option<f64>,
     width_scale_pct: Option<u32>,
-) {
-    for node in nodes {
-        apply_calibrated_box_inner(
-            node,
-            run_font_size_pt,
-            fraction_font_size_pt,
-            width_scale_pct,
-            false,
-        );
-    }
+) -> Vec<WordMathNode> {
+    nodes
+        .iter()
+        .map(|node| {
+            calibrate_math_node_inner(
+                node,
+                run_font_size_pt,
+                fraction_font_size_pt,
+                width_scale_pct,
+                false,
+            )
+        })
+        .collect()
 }
 
-fn apply_calibrated_box_inner(
-    node: &mut MathNodeIr,
+fn calibrate_math_node_inner(
+    node: &MathNodeIr,
     run_font_size_pt: f64,
     fraction_font_size_pt: Option<f64>,
     width_scale_pct: Option<u32>,
     in_vertical_fraction: bool,
-) {
+) -> WordMathNode {
     match node {
-        MathNodeIr::Sequence(children) => {
-            for ch in children {
-                apply_calibrated_box_inner(
-                    ch,
-                    run_font_size_pt,
-                    fraction_font_size_pt,
-                    width_scale_pct,
-                    in_vertical_fraction,
-                );
-            }
-        }
+        MathNodeIr::Sequence(children) => WordMathNode::Sequence(
+            children
+                .iter()
+                .map(|ch| {
+                    calibrate_math_node_inner(
+                        ch,
+                        run_font_size_pt,
+                        fraction_font_size_pt,
+                        width_scale_pct,
+                        in_vertical_fraction,
+                    )
+                })
+                .collect(),
+        ),
         MathNodeIr::Fraction { num, denom, style } => {
             let is_vert = matches!(style, MathFracStyleIr::Vertical | MathFracStyleIr::NoBar);
             let next_in_frac = in_vertical_fraction || is_vert;
-            apply_calibrated_box_inner(
-                num,
-                run_font_size_pt,
-                fraction_font_size_pt,
-                width_scale_pct,
-                next_in_frac,
-            );
-            apply_calibrated_box_inner(
-                denom,
-                run_font_size_pt,
-                fraction_font_size_pt,
-                width_scale_pct,
-                next_in_frac,
-            );
+            WordMathNode::Fraction {
+                num: Box::new(calibrate_math_node_inner(
+                    num,
+                    run_font_size_pt,
+                    fraction_font_size_pt,
+                    width_scale_pct,
+                    next_in_frac,
+                )),
+                denom: Box::new(calibrate_math_node_inner(
+                    denom,
+                    run_font_size_pt,
+                    fraction_font_size_pt,
+                    width_scale_pct,
+                    next_in_frac,
+                )),
+                style: *style,
+            }
         }
-        MathNodeIr::Radical { degree, radicand } => {
-            if let Some(deg) = degree {
-                apply_calibrated_box_inner(
+        MathNodeIr::Radical { degree, radicand } => WordMathNode::Radical {
+            degree: degree.as_ref().map(|deg| {
+                Box::new(calibrate_math_node_inner(
                     deg,
                     run_font_size_pt,
                     fraction_font_size_pt,
                     width_scale_pct,
                     in_vertical_fraction,
-                );
-            }
-            apply_calibrated_box_inner(
+                ))
+            }),
+            radicand: Box::new(calibrate_math_node_inner(
                 radicand,
                 run_font_size_pt,
                 fraction_font_size_pt,
                 width_scale_pct,
                 in_vertical_fraction,
-            );
-        }
-        MathNodeIr::SubSup { base, sub, sup } | MathNodeIr::PreSubSup { base, sub, sup } => {
-            apply_calibrated_box_inner(
+            )),
+        },
+        MathNodeIr::SubSup { base, sub, sup } => WordMathNode::SubSup {
+            base: Box::new(calibrate_math_node_inner(
                 base,
                 run_font_size_pt,
                 fraction_font_size_pt,
                 width_scale_pct,
                 in_vertical_fraction,
-            );
-            if let Some(s) = sub {
-                apply_calibrated_box_inner(
+            )),
+            sub: sub.as_ref().map(|s| {
+                Box::new(calibrate_math_node_inner(
                     s,
                     run_font_size_pt,
                     fraction_font_size_pt,
                     width_scale_pct,
                     in_vertical_fraction,
-                );
-            }
-            if let Some(s) = sup {
-                apply_calibrated_box_inner(
+                ))
+            }),
+            sup: sup.as_ref().map(|s| {
+                Box::new(calibrate_math_node_inner(
                     s,
                     run_font_size_pt,
                     fraction_font_size_pt,
                     width_scale_pct,
                     in_vertical_fraction,
-                );
-            }
-        }
-        MathNodeIr::Limit { base, lower, upper } => {
-            apply_calibrated_box_inner(
+                ))
+            }),
+        },
+        MathNodeIr::PreSubSup { base, sub, sup } => WordMathNode::PreSubSup {
+            base: Box::new(calibrate_math_node_inner(
                 base,
                 run_font_size_pt,
                 fraction_font_size_pt,
                 width_scale_pct,
                 in_vertical_fraction,
-            );
-            if let Some(l) = lower {
-                apply_calibrated_box_inner(
+            )),
+            sub: sub.as_ref().map(|s| {
+                Box::new(calibrate_math_node_inner(
+                    s,
+                    run_font_size_pt,
+                    fraction_font_size_pt,
+                    width_scale_pct,
+                    in_vertical_fraction,
+                ))
+            }),
+            sup: sup.as_ref().map(|s| {
+                Box::new(calibrate_math_node_inner(
+                    s,
+                    run_font_size_pt,
+                    fraction_font_size_pt,
+                    width_scale_pct,
+                    in_vertical_fraction,
+                ))
+            }),
+        },
+        MathNodeIr::Limit { base, lower, upper } => WordMathNode::Limit {
+            base: Box::new(calibrate_math_node_inner(
+                base,
+                run_font_size_pt,
+                fraction_font_size_pt,
+                width_scale_pct,
+                in_vertical_fraction,
+            )),
+            lower: lower.as_ref().map(|l| {
+                Box::new(calibrate_math_node_inner(
                     l,
                     run_font_size_pt,
                     fraction_font_size_pt,
                     width_scale_pct,
                     in_vertical_fraction,
-                );
-            }
-            if let Some(u) = upper {
-                apply_calibrated_box_inner(
+                ))
+            }),
+            upper: upper.as_ref().map(|u| {
+                Box::new(calibrate_math_node_inner(
                     u,
                     run_font_size_pt,
                     fraction_font_size_pt,
                     width_scale_pct,
                     in_vertical_fraction,
-                );
-            }
-        }
+                ))
+            }),
+        },
         MathNodeIr::Nary {
-            sub, sup, operand, ..
-        } => {
-            if let Some(s) = sub {
-                apply_calibrated_box_inner(
+            chr,
+            limits_under_over,
+            sub,
+            sup,
+            operand,
+        } => WordMathNode::Nary {
+            chr: *chr,
+            limits_under_over: *limits_under_over,
+            sub: sub.as_ref().map(|s| {
+                Box::new(calibrate_math_node_inner(
                     s,
                     run_font_size_pt,
                     fraction_font_size_pt,
                     width_scale_pct,
                     in_vertical_fraction,
-                );
-            }
-            if let Some(s) = sup {
-                apply_calibrated_box_inner(
+                ))
+            }),
+            sup: sup.as_ref().map(|s| {
+                Box::new(calibrate_math_node_inner(
                     s,
                     run_font_size_pt,
                     fraction_font_size_pt,
                     width_scale_pct,
                     in_vertical_fraction,
-                );
-            }
-            apply_calibrated_box_inner(
+                ))
+            }),
+            operand: Box::new(calibrate_math_node_inner(
                 operand,
                 run_font_size_pt,
                 fraction_font_size_pt,
                 width_scale_pct,
                 in_vertical_fraction,
-            );
-        }
-        MathNodeIr::Delimited { elements, .. } => {
-            for el in elements {
-                apply_calibrated_box_inner(
-                    el,
-                    run_font_size_pt,
-                    fraction_font_size_pt,
-                    width_scale_pct,
-                    in_vertical_fraction,
-                );
-            }
-        }
-        MathNodeIr::Matrix { rows } => {
-            for row in rows {
-                for cell in row {
-                    apply_calibrated_box_inner(
-                        cell,
+            )),
+        },
+        MathNodeIr::Delimited {
+            open,
+            close,
+            separator,
+            elements,
+        } => WordMathNode::Delimited {
+            open: open.clone(),
+            close: close.clone(),
+            separator: separator.clone(),
+            elements: elements
+                .iter()
+                .map(|el| {
+                    calibrate_math_node_inner(
+                        el,
                         run_font_size_pt,
                         fraction_font_size_pt,
                         width_scale_pct,
                         in_vertical_fraction,
-                    );
-                }
-            }
-        }
-        MathNodeIr::EquationArray { rows } => {
-            for row in rows {
-                apply_calibrated_box_inner(
-                    row,
-                    run_font_size_pt,
-                    fraction_font_size_pt,
-                    width_scale_pct,
-                    in_vertical_fraction,
-                );
-            }
-        }
-        MathNodeIr::Accent { base, .. } => {
-            apply_calibrated_box_inner(
+                    )
+                })
+                .collect(),
+        },
+        MathNodeIr::Matrix { rows } => WordMathNode::Matrix {
+            rows: rows
+                .iter()
+                .map(|row| {
+                    row.iter()
+                        .map(|cell| {
+                            calibrate_math_node_inner(
+                                cell,
+                                run_font_size_pt,
+                                fraction_font_size_pt,
+                                width_scale_pct,
+                                in_vertical_fraction,
+                            )
+                        })
+                        .collect()
+                })
+                .collect(),
+        },
+        MathNodeIr::EquationArray { rows } => WordMathNode::EquationArray {
+            rows: rows
+                .iter()
+                .map(|row| {
+                    calibrate_math_node_inner(
+                        row,
+                        run_font_size_pt,
+                        fraction_font_size_pt,
+                        width_scale_pct,
+                        in_vertical_fraction,
+                    )
+                })
+                .collect(),
+        },
+        MathNodeIr::Accent { chr, base } => WordMathNode::Accent {
+            chr: *chr,
+            base: Box::new(calibrate_math_node_inner(
                 base,
                 run_font_size_pt,
                 fraction_font_size_pt,
                 width_scale_pct,
                 in_vertical_fraction,
-            );
-        }
-        MathNodeIr::Bar { body, .. } | MathNodeIr::Cancel { body, .. } => {
-            apply_calibrated_box_inner(
+            )),
+        },
+        MathNodeIr::Bar { pos_bottom, body } => WordMathNode::Bar {
+            pos_bottom: *pos_bottom,
+            body: Box::new(calibrate_math_node_inner(
                 body,
                 run_font_size_pt,
                 fraction_font_size_pt,
                 width_scale_pct,
                 in_vertical_fraction,
-            );
-        }
+            )),
+        },
         MathNodeIr::GroupChar {
-            body, annotation, ..
-        } => {
-            apply_calibrated_box_inner(
+            chr,
+            is_bottom,
+            body,
+            annotation,
+        } => WordMathNode::GroupChar {
+            chr: *chr,
+            is_bottom: *is_bottom,
+            body: Box::new(calibrate_math_node_inner(
                 body,
                 run_font_size_pt,
                 fraction_font_size_pt,
                 width_scale_pct,
                 in_vertical_fraction,
-            );
-            if let Some(ann) = annotation {
-                apply_calibrated_box_inner(
+            )),
+            annotation: annotation.as_ref().map(|ann| {
+                Box::new(calibrate_math_node_inner(
                     ann,
                     run_font_size_pt,
                     fraction_font_size_pt,
                     width_scale_pct,
                     in_vertical_fraction,
-                );
-            }
-        }
-        MathNodeIr::AlignPoint => {}
+                ))
+            }),
+        },
+        MathNodeIr::Cancel {
+            body,
+            cross,
+            inverted,
+        } => WordMathNode::Cancel {
+            body: Box::new(calibrate_math_node_inner(
+                body,
+                run_font_size_pt,
+                fraction_font_size_pt,
+                width_scale_pct,
+                in_vertical_fraction,
+            )),
+            cross: *cross,
+            inverted: *inverted,
+        },
+        MathNodeIr::AlignPoint => WordMathNode::AlignPoint,
         MathNodeIr::Run(run) => {
             let target_sz = if in_vertical_fraction {
                 fraction_font_size_pt.unwrap_or(run_font_size_pt)
             } else {
                 run_font_size_pt
             };
-            run.font_size_pt = Some(target_sz);
-            run.width_scale_pct = width_scale_pct;
+            WordMathNode::Run(WordMathRun {
+                text: run.text.clone(),
+                script: run.script,
+                style: run.style,
+                color: run.color.clone(),
+                font_family: run.font_family.clone(),
+                font_size_pt: Some(target_sz),
+                width_scale_pct,
+                has_cjk: TextScriptClassIr::classify(&run.text).has_cjk(),
+            })
         }
     }
 }

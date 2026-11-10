@@ -14,7 +14,7 @@
 //!    Decoupled `AnchorLineIr` and LCS-based `compare_line_anchors` diagnostic comparator.
 //! 5. **Paragraph, List, and Table Box Solvers ([`paragraph_box`], [`list_box`], [`table_box`], [`units`])**.
 
-pub use ir::anchor;
+pub mod anchor;
 pub mod policy;
 pub mod units;
 pub mod equation_box;

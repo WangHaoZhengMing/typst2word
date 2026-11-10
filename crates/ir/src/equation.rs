@@ -1,15 +1,12 @@
 //! Semantic Intermediate Representation for Mathematical Equations (`EquationIr` & `MathNodeIr`).
 //!
-//! Pure data definitions decoupling Typst's `typst::math` AST from Microsoft Word's Office Math (`<m:oMath>`):
-//! - `crate::extract::math` converts Typst `Content` -> `Vec<MathNodeIr>`
-//! - `crate::ir::pdf::EquationPdfMetricsIr` records laid-out PDF frame bounds
-//! - `crate::docx::math` solves `word_construct::WordEquationBox` and renders `<m:oMath>...</m:oMath>`
+//! Pure data definitions capturing Typst's `typst::math` AST and laid-out PDF frame bounds
+//! (`EquationPdfMetricsIr`).
 
 use serde::{Deserialize, Serialize};
 
 use crate::ColorHex;
 use crate::pdf::EquationPdfMetricsIr;
-use crate::text::TextScriptClassIr;
 
 /// Mathematical equation IR.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,36 +33,36 @@ pub struct EquationIr {
 pub enum MathNodeIr {
     /// A horizontal sequence of math nodes.
     Sequence(Vec<MathNodeIr>),
-    /// Fraction or binomial stack (`<m:f>`).
+    /// Fraction or binomial stack (`frac`, `skewed`, `binom`).
     Fraction {
         num: Box<MathNodeIr>,
         denom: Box<MathNodeIr>,
         style: MathFracStyleIr,
     },
-    /// Square root or $n$-th root (`<m:rad>`).
+    /// Square root or $n$-th root (`sqrt`, `root`).
     Radical {
         degree: Option<Box<MathNodeIr>>,
         radicand: Box<MathNodeIr>,
     },
-    /// Right subscript and/or superscript (`<m:sSub>`, `<m:sSup>`, `<m:sSubSup>`).
+    /// Right subscript and/or superscript (`attach`).
     SubSup {
         base: Box<MathNodeIr>,
         sub: Option<Box<MathNodeIr>>,
         sup: Option<Box<MathNodeIr>>,
     },
-    /// Pre-subscript and/or pre-superscript (`<m:sPre>`).
+    /// Pre-subscript and/or pre-superscript (`attach(base, tl: ..., bl: ...)`).
     PreSubSup {
         base: Box<MathNodeIr>,
         sub: Option<Box<MathNodeIr>>,
         sup: Option<Box<MathNodeIr>>,
     },
-    /// Under-limit and/or over-limit on an operator (`<m:limLow>`, `<m:limUpp>`).
+    /// Under-limit and/or over-limit on an operator (`limits(...)`).
     Limit {
         base: Box<MathNodeIr>,
         lower: Option<Box<MathNodeIr>>,
         upper: Option<Box<MathNodeIr>>,
     },
-    /// Big $n$-ary operator such as $\sum$, $\prod$, $\int$ (`<m:nary>`).
+    /// Big $n$-ary operator such as $\sum$, $\prod$, $\int$.
     Nary {
         chr: char,
         limits_under_over: bool,
@@ -73,32 +70,32 @@ pub enum MathNodeIr {
         sup: Option<Box<MathNodeIr>>,
         operand: Box<MathNodeIr>,
     },
-    /// Left/right fenced expression (`lr(...)`, `binom`, `vec`, `mat`, `cases`) (`<m:d>`).
+    /// Left/right fenced expression (`lr(...)`, `binom`, `vec`, `mat`, `cases`).
     Delimited {
         open: String,
         close: String,
         separator: String,
         elements: Vec<MathNodeIr>,
     },
-    /// 2D matrix grid (`<m:m>`).
+    /// 2D matrix grid (`mat`, `vec`, `cases`).
     Matrix { rows: Vec<Vec<MathNodeIr>> },
-    /// Multi-line aligned equation array (`<m:eqArr>`).
+    /// Multi-line aligned equation array.
     EquationArray { rows: Vec<MathNodeIr> },
-    /// Diacritical accent above a base (`hat`, `tilde`, `vec`, `dot`, ...) (`<m:acc>`).
+    /// Diacritical accent above a base (`hat`, `tilde`, `vec`, `dot`, ...).
     Accent { chr: char, base: Box<MathNodeIr> },
-    /// Overbar or underbar (`overline`, `underline`) (`<m:bar>`).
+    /// Overbar or underbar (`overline`, `underline`).
     Bar {
         pos_bottom: bool,
         body: Box<MathNodeIr>,
     },
-    /// Horizontal grouping brace/bracket/paren/shell with optional annotation (`<m:groupChr>`).
+    /// Horizontal grouping brace/bracket/paren/shell with optional annotation (`overbrace`, `underbrace`, ...).
     GroupChar {
         chr: char,
         is_bottom: bool,
         body: Box<MathNodeIr>,
         annotation: Option<Box<MathNodeIr>>,
     },
-    /// Diagonal strike/cancellation box (`cancel`) (`<m:borderBox>`).
+    /// Diagonal strike/cancellation box (`cancel`).
     Cancel {
         body: Box<MathNodeIr>,
         cross: bool,
@@ -106,24 +103,24 @@ pub enum MathNodeIr {
     },
     /// Alignment point (`&`) inside an `EquationArray`.
     AlignPoint,
-    /// Styled math text/symbol run (`<m:r>`).
+    /// Styled math text/symbol run.
     Run(MathRunIr),
 }
 
-/// Fraction bar rendering style (`<m:fPr><m:type>`).
+/// Fraction bar rendering style.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MathFracStyleIr {
-    /// Standard horizontal fraction bar (`bar`).
+    /// Standard horizontal fraction bar.
     Vertical,
-    /// Skewed / diagonal fraction (`skw`).
+    /// Skewed / diagonal fraction.
     Skewed,
-    /// Inline linear fraction (`lin`).
+    /// Inline linear fraction.
     Horizontal,
-    /// Barless stack (used inside `binom`) (`noBar`).
+    /// Barless stack (used inside `binom`).
     NoBar,
 }
 
-/// Math script/font family variant (`<m:scr>`).
+/// Math script/font family variant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MathScriptIr {
     DoubleStruck,
@@ -133,16 +130,16 @@ pub enum MathScriptIr {
     SansSerif,
 }
 
-/// Math character style (`<m:sty>`).
+/// Math character style.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MathStyleIr {
-    /// Plain / upright (`p`).
+    /// Plain / upright (`upright`).
     Plain,
-    /// Bold upright (`b`).
+    /// Bold upright (`bold(upright(...))`).
     Bold,
-    /// Italic (`i`).
+    /// Italic (`italic`).
     Italic,
-    /// Bold italic (`bi`).
+    /// Bold italic (`bold(italic(...))`).
     BoldItalic,
 }
 
@@ -157,8 +154,4 @@ pub struct MathRunIr {
     pub font_family: Option<String>,
     #[serde(default)]
     pub font_size_pt: Option<f64>,
-    #[serde(default)]
-    pub width_scale_pct: Option<u32>,
-    #[serde(default)]
-    pub text_script: TextScriptClassIr,
 }

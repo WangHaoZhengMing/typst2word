@@ -27,9 +27,7 @@ mod text;
 pub mod units;
 mod unsupported;
 
-pub use anchor::{
-    AnchorDiffEntry, AnchorDiffReport, AnchorLineIr, AnchorMismatchKind, compare_line_anchors,
-};
+pub use anchor::AnchorLineIr;
 pub use bibliography::BibEntryIr;
 pub use cetz::{CetzCanvasIr, CetzLabelDrawableIr, CetzPathDrawableIr};
 pub use document::{ConversionReport, MetadataIr, PageSetupIr};
@@ -52,10 +50,7 @@ pub use style::{
     SidesPtIr, StrokeIr, VAlignIr,
 };
 pub use table::{TableCellIr, TableIr, TableKindIr, TableRowIr};
-pub use text::{
-    FontFamilyClassIr, ScriptKindIr, TextRunIr, TextScriptClassIr, is_cjk_char,
-    is_east_asian_symbol_char,
-};
+pub use text::{ScriptKindIr, TextRunIr, is_cjk_char};
 pub use units::Pt;
 pub use unsupported::UnsupportedIr;
 
@@ -198,7 +193,7 @@ pub enum BlockNode {
     },
     /// Display / block equation (`$ ... $`).
     EquationBlock(EquationIr),
-    /// Native Word shape object (`rect`, `square`, `circle`, `ellipse`, `line`, `polygon`, `path`, `curve`).
+    /// Typst shape object (`rect`, `square`, `circle`, `ellipse`, `line`, `polygon`, `path`, `curve`).
     ShapeBlock(ShapeIr),
     /// CeTZ vector drawing canvas (`cetz.canvas(...)`).
     CetzCanvas(CetzCanvasIr),
@@ -230,11 +225,11 @@ pub enum BlockNode {
         gutter_pt: f64,
         body: Vec<BlockNode>,
     },
-    /// Unsupported Typst element rendered visibly in Word.
+    /// Unsupported Typst element marker.
     UnsupportedBlock(UnsupportedIr),
 }
 
-/// Dynamic Word field, with a cached display value retained from Typst.
+/// Dynamic document field (`counter(page)`, page-ref), with a cached display value retained from Typst.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum FieldKindIr {
     Page,
@@ -245,7 +240,11 @@ pub enum FieldKindIr {
 /// Inline-level document node inside paragraphs, headings, captions, etc.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum InlineNode {
-    Field { kind: FieldKindIr, format: Option<String>, content: Vec<InlineNode> },
+    Field {
+        kind: FieldKindIr,
+        format: Option<String>,
+        content: Vec<InlineNode>,
+    },
     /// Styled text run.
     Text(TextRunIr),
     /// Inline math equation (`$...$`).
@@ -283,6 +282,6 @@ pub enum InlineNode {
     Tab,
     /// Explicit horizontal spacing (`#h(12pt)`).
     HorizontalSpace { width_pt: f64 },
-    /// Unsupported inline element rendered visibly (`[不支持的元素: ...]`).
+    /// Unsupported inline element marker.
     UnsupportedInline(UnsupportedIr),
 }

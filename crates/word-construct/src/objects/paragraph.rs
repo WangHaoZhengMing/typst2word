@@ -223,14 +223,14 @@ pub fn compute_line_spacing_dxa(content: &[InlineNode], line_spacing_pt: Option<
 
 pub fn content_has_cjk_chars(content: &[InlineNode]) -> bool {
     content.iter().any(|inl| match inl {
-        InlineNode::Text(r) => r.text_script.has_cjk(),
+        InlineNode::Text(r) => crate::objects::text_run::run_has_cjk_chars(r),
         _ => false,
     })
 }
 
 pub fn content_has_cjk(content: &[InlineNode]) -> bool {
     content.iter().any(|inl| match inl {
-        InlineNode::Text(r) => r.text_script.has_cjk() || r.font_class.is_cjk_font(),
+        InlineNode::Text(r) => crate::objects::text_run::run_has_cjk(r),
         _ => false,
     })
 }

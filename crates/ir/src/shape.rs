@@ -1,10 +1,10 @@
-//! Native shapes (`rect`, `circle`, `line`, `polygon`, `path`, `curve`, styled boxes).
+//! Native Typst shapes (`rect`, `circle`, `line`, `polygon`, `path`, `curve`, styled boxes).
 
 use serde::{Deserialize, Serialize};
 
 use super::{BlockNode, BordersIr, ColorHex, HAlignIr, SidesPtIr, StrokeIr};
 
-/// Native Word DrawingML shape representation (`rect`, `square`, `circle`, `ellipse`,
+/// Typst shape representation (`rect`, `square`, `circle`, `ellipse`,
 /// `line`, `polygon`, `path`, `curve`, or styled `block`/`box`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ShapeIr {
@@ -20,15 +20,14 @@ pub struct ShapeIr {
     pub rotation_deg: f64,
     pub scale_x: f64,
     pub scale_y: f64,
-    /// Optional content inside the shape (e.g. `#rect[Hello]` or `#circle[A]`),
-    /// rendered inside `<wps:txbx><w:txbxContent>` in Word.
+    /// Optional content inside the shape (e.g. `#rect[Hello]` or `#circle[A]`).
     pub body: Vec<BlockNode>,
     pub align: HAlignIr,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ShapeKindIr {
-    /// Rectangle (`rect` or `square`), optionally with rounded corners (`roundRect`).
+    /// Rectangle (`rect` or `square`), optionally with rounded corners (`radius`).
     Rect,
     /// Circle or ellipse (`circle` or `ellipse`).
     Ellipse,

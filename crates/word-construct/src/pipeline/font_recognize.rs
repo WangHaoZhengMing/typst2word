@@ -1,48 +1,47 @@
 //! Pass 1 (`WordPipelinePassKind::FontRecognition`):
-//! Classifies each `TextRunIr`'s [`FontFamilyClassIr`] without altering or substituting
+//! Classifies font families into [`FontFamilyClassIr`] without altering or substituting
 //! the original `font_family` string extracted from Typst.
 
-use ir::{
-    BlockNode, DocumentIr, FontFamilyClassIr, InlineNode, TextRunIr,
-    visit_document_block_lists_mut, visit_document_inline_lists_mut,
-};
+use serde::{Deserialize, Serialize};
+
+use ir::DocumentIr;
 
 use crate::{FontParadigm, lookup_known_font};
 
-/// Run Pass 1 (`FontRecognition`) across all text runs and code blocks in `doc`.
-pub fn run_font_recognition_pass(doc: &mut DocumentIr) {
-    visit_document_inline_lists_mut(doc, &mut |inlines| {
-        for inline in inlines.iter_mut() {
-            if let InlineNode::Text(run) = inline {
-                classify_text_run_font(run);
-            }
-        }
-    });
-
-    visit_document_block_lists_mut(doc, &mut |blocks| {
-        for block in blocks.iter_mut() {
-            if let BlockNode::CodeBlock { lines, .. } = block {
-                for line in lines.iter_mut() {
-                    for run in line.iter_mut() {
-                        classify_text_run_font(run);
-                    }
-                }
-            }
-        }
-    });
+/// Exhaustive classification of a run's font family in Microsoft Word.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum FontFamilyClassIr {
+    /// Default or Western proportional font (`Libertinus Serif`, `Times New Roman`, `Arial`).
+    #[default]
+    LatinProportional,
+    /// Modern CJK UI sans-serif font (`PingFang SC`, `Heiti SC`, `Microsoft YaHei`, `SimHei`).
+    CjkUiSans,
+    /// Traditional CJK serif/script font (`Songti SC`, `SimSun`, `Kaiti SC`, `FangSong`).
+    CjkSerif,
+    /// Fixed-width monospace font (`Consolas`, `SF Mono`, `Menlo`, `DejaVu Sans Mono`, `Courier New`).
+    Monospace,
 }
 
-/// Classify a single `TextRunIr`'s `font_class` without modifying `run.font_family`.
-pub fn classify_text_run_font(run: &mut TextRunIr) {
-    // 不改变原字体：原文档使用什么字体（包括 "Hei"、"STHeiti"、"Song"、"STSong"、"DejaVu Sans Mono" 等），
-    // 转换器均严格保留 `run.font_family` 原始字体名称，绝不在代码中篡改或替换原字体。
-    // 但是：在识别 Word 字体分类（`FontFamilyClassIr`）与行盒度量模型（`FontParadigm`）时，
-    // 需要将传统中文字体简称（如 `"Hei"` -> `"Heiti SC"`、`"Song"` -> `"Songti SC"`）仅用于内部度量与分类查询。
-    run.font_class = classify_font_family(run.font_family.as_deref(), run.is_code);
+impl FontFamilyClassIr {
+    #[inline]
+    pub const fn is_cjk_font(self) -> bool {
+        matches!(self, Self::CjkUiSans | Self::CjkSerif)
+    }
 }
+
+/// Run Pass 1 (`FontRecognition`).
+///
+/// Font classification is now evaluated on-demand by [`classify_font_family`] without mutating
+/// `DocumentIr` in place.
+pub fn run_font_recognition_pass(_doc: &mut DocumentIr) {}
 
 /// Resolve a font family alias solely for internal metric/classification lookup
 /// (never written back to `TextRunIr::font_family`).
+///
+/// 不改变原字体：原文档使用什么字体（包括 `"Hei"`、`"STHeiti"`、`"Song"`、`"STSong"`、`"DejaVu Sans Mono"` 等），
+/// 转换器均严格保留 `run.font_family` 原始字体名称，绝不在代码中篡改或替换原字体。
+/// 但是：在识别 Word 字体分类（[`FontFamilyClassIr`]）与行盒度量模型（[`FontParadigm`]）时，
+/// 需要将传统中文字体简称（如 `"Hei"` -> `"Heiti SC"`、`"Song"` -> `"Songti SC"`）仅用于内部度量与分类查询。
 pub fn resolve_font_alias_for_metrics(family: &str) -> &str {
     match family.trim() {
         "Hei" | "STHeiti" => "Heiti SC",

@@ -12,8 +12,6 @@ pub struct CetzCanvasIr {
     pub background: Option<ColorHex>,
     pub paths: Vec<CetzPathDrawableIr>,
     pub labels: Vec<CetzLabelDrawableIr>,
-    /// Optional rendered SVG fallback bytes if needed by viewers.
-    pub svg_fallback: Option<Vec<u8>>,
     pub align: HAlignIr,
 }
 

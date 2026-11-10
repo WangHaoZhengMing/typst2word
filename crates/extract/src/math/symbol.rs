@@ -174,11 +174,16 @@ pub(crate) fn build_math_run(
         _ => None,
     };
 
+    let is_typst_default_upright_symbol = text
+        .chars()
+        .all(|c| ('\u{0391}'..='\u{03A9}').contains(&c) || c == '\u{2207}');
+    let effective_upright = default_upright || is_typst_default_upright_symbol;
+
     let style = match (bold, italic) {
         (true, Some(true)) => Some(MathStyleIr::BoldItalic),
         (true, Some(false)) => Some(MathStyleIr::Bold),
         (true, None) => {
-            if default_upright {
+            if effective_upright {
                 Some(MathStyleIr::Bold)
             } else {
                 Some(MathStyleIr::BoldItalic)
@@ -187,7 +192,7 @@ pub(crate) fn build_math_run(
         (false, Some(false)) => Some(MathStyleIr::Plain),
         (false, Some(true)) => Some(MathStyleIr::Italic),
         (false, None) => {
-            if default_upright {
+            if effective_upright {
                 Some(MathStyleIr::Plain)
             } else {
                 None
@@ -207,8 +212,7 @@ pub(crate) fn build_math_run(
         _ => None,
     };
 
-    let text_script = ir::TextScriptClassIr::classify(&text);
-    let has_cjk = text_script.has_cjk();
+    let has_cjk = text.chars().any(ir::is_cjk_char);
     let font_family = if has_cjk {
         ctx.cjk_font.map(str::to_string).or_else(|| {
             styles
@@ -228,7 +232,5 @@ pub(crate) fn build_math_run(
         color,
         font_family,
         font_size_pt: ctx.base_font_size_pt,
-        width_scale_pct: None,
-        text_script,
     })
 }

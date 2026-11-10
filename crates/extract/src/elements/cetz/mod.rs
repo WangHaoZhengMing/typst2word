@@ -167,7 +167,6 @@ impl<'a> ExtractorContext<'a> {
             background,
             paths,
             labels,
-            svg_fallback: None,
             align,
         })
     }

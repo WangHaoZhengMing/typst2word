@@ -1,124 +1,72 @@
 //! Pass 2 (`WordPipelinePassKind::LanguageAndScriptRecognition`):
-//! Populates `TextScriptClassIr` across `TextRunIr` and `MathNodeIr` (`MathRunIr::text_script`).
+//! Exhaustive script/character classification ([`TextScriptClassIr`]) for Word `<w:rFonts w:hint="eastAsia"/>`
+//! and Office Math `<m:nor/>` routing.
 
-use ir::{
-    BlockNode, DocumentIr, InlineNode, MathNodeIr, TextScriptClassIr,
-    visit_document_block_lists_mut, visit_document_inline_lists_mut,
-};
+use serde::{Deserialize, Serialize};
 
-/// Run Pass 2 (`LanguageAndScriptRecognition`) across all text runs, code blocks, and equations in `doc`.
-pub fn run_language_and_script_pass(doc: &mut DocumentIr) {
-    visit_document_inline_lists_mut(doc, &mut |inlines| {
-        for inline in inlines.iter_mut() {
-            match inline {
-                InlineNode::Text(run) => {
-                    run.text_script = TextScriptClassIr::classify(&run.text);
-                }
-                InlineNode::EquationInline(eq) => {
-                    classify_math_nodes_script(&mut eq.body);
-                }
-                _ => {}
-            }
-        }
-    });
+use ir::{DocumentIr, is_cjk_char};
 
-    visit_document_block_lists_mut(doc, &mut |blocks| {
-        for block in blocks.iter_mut() {
-            match block {
-                BlockNode::CodeBlock { lines, .. } => {
-                    for line in lines.iter_mut() {
-                        for run in line.iter_mut() {
-                            run.text_script = TextScriptClassIr::classify(&run.text);
-                        }
-                    }
-                }
-                BlockNode::EquationBlock(eq) => {
-                    classify_math_nodes_script(&mut eq.body);
-                }
-                _ => {}
-            }
-        }
-    });
+/// Check if a character is a general punctuation / arrow / mathematical symbol (`U+2000..=U+2BFF`)
+/// that requires `w:hint="eastAsia"` when rendered with a CJK font in Word.
+#[inline]
+pub const fn is_east_asian_symbol_char(c: char) -> bool {
+    matches!(c, '\u{2000}'..='\u{2BFF}')
 }
 
-fn classify_math_nodes_script(nodes: &mut [MathNodeIr]) {
-    for node in nodes {
-        classify_math_node_script(node);
+/// Exhaustive script/character classification of a text run in Microsoft Word.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum TextScriptClassIr {
+    /// Pure ASCII / Western Latin without CJK ideographs or `U+2000..=U+2BFF` East Asian symbols.
+    #[default]
+    LatinOnly,
+    /// Contains `U+2000..=U+2BFF` symbols (e.g. `“`, `”`, `—`, `…`, `→`) without CJK ideographs.
+    LatinWithEastAsianSymbols,
+    /// Contains CJK ideographs / fullwidth forms without `U+2000..=U+2BFF` symbols.
+    CjkIdeographs,
+    /// Contains both CJK ideographs / fullwidth forms AND `U+2000..=U+2BFF` symbols.
+    CjkWithEastAsianSymbols,
+}
+
+impl TextScriptClassIr {
+    /// Exhaustively classify a text string into one of the four [`TextScriptClassIr`] variants.
+    #[inline]
+    pub fn classify(text: &str) -> Self {
+        let mut has_cjk = false;
+        let mut has_ea_symbol = false;
+        for ch in text.chars() {
+            if is_cjk_char(ch) {
+                has_cjk = true;
+            } else if is_east_asian_symbol_char(ch) {
+                has_ea_symbol = true;
+            }
+            if has_cjk && has_ea_symbol {
+                return Self::CjkWithEastAsianSymbols;
+            }
+        }
+        match (has_cjk, has_ea_symbol) {
+            (true, true) => Self::CjkWithEastAsianSymbols,
+            (true, false) => Self::CjkIdeographs,
+            (false, true) => Self::LatinWithEastAsianSymbols,
+            (false, false) => Self::LatinOnly,
+        }
+    }
+
+    #[inline]
+    pub const fn has_cjk(self) -> bool {
+        matches!(self, Self::CjkIdeographs | Self::CjkWithEastAsianSymbols)
+    }
+
+    #[inline]
+    pub const fn has_east_asian_symbol(self) -> bool {
+        matches!(
+            self,
+            Self::LatinWithEastAsianSymbols | Self::CjkWithEastAsianSymbols
+        )
     }
 }
 
-fn classify_math_node_script(node: &mut MathNodeIr) {
-    match node {
-        MathNodeIr::Sequence(children) => {
-            classify_math_nodes_script(children);
-        }
-        MathNodeIr::Fraction { num, denom, .. } => {
-            classify_math_node_script(num);
-            classify_math_node_script(denom);
-        }
-        MathNodeIr::Radical { degree, radicand } => {
-            if let Some(d) = degree {
-                classify_math_node_script(d);
-            }
-            classify_math_node_script(radicand);
-        }
-        MathNodeIr::SubSup { base, sub, sup } | MathNodeIr::PreSubSup { base, sub, sup } => {
-            classify_math_node_script(base);
-            if let Some(s) = sub {
-                classify_math_node_script(s);
-            }
-            if let Some(s) = sup {
-                classify_math_node_script(s);
-            }
-        }
-        MathNodeIr::Limit { base, lower, upper } => {
-            classify_math_node_script(base);
-            if let Some(l) = lower {
-                classify_math_node_script(l);
-            }
-            if let Some(u) = upper {
-                classify_math_node_script(u);
-            }
-        }
-        MathNodeIr::Nary {
-            sub, sup, operand, ..
-        } => {
-            if let Some(s) = sub {
-                classify_math_node_script(s);
-            }
-            if let Some(s) = sup {
-                classify_math_node_script(s);
-            }
-            classify_math_node_script(operand);
-        }
-        MathNodeIr::Delimited { elements, .. } => {
-            classify_math_nodes_script(elements);
-        }
-        MathNodeIr::Matrix { rows } => {
-            for row in rows {
-                classify_math_nodes_script(row);
-            }
-        }
-        MathNodeIr::EquationArray { rows } => {
-            classify_math_nodes_script(rows);
-        }
-        MathNodeIr::Accent { base, .. } => {
-            classify_math_node_script(base);
-        }
-        MathNodeIr::Bar { body, .. } | MathNodeIr::Cancel { body, .. } => {
-            classify_math_node_script(body);
-        }
-        MathNodeIr::GroupChar {
-            body, annotation, ..
-        } => {
-            classify_math_node_script(body);
-            if let Some(ann) = annotation {
-                classify_math_node_script(ann);
-            }
-        }
-        MathNodeIr::AlignPoint => {}
-        MathNodeIr::Run(r) => {
-            r.text_script = TextScriptClassIr::classify(&r.text);
-        }
-    }
-}
+/// Run Pass 2 (`LanguageAndScriptRecognition`).
+///
+/// Script classification is evaluated on-demand by [`TextScriptClassIr::classify`] without mutating
+/// `DocumentIr` in place.
+pub fn run_language_and_script_pass(_doc: &mut DocumentIr) {}

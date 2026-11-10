@@ -4,9 +4,8 @@
 //! bold numbering prefix run.
 
 use crate::objects::paragraph::compute_line_spacing_dxa;
-use crate::pipeline::font_recognize::classify_font_family;
 use crate::units::pt_to_dxa;
-use ir::{HAlignIr, InlineNode, TextRunIr, TextScriptClassIr};
+use ir::{HAlignIr, InlineNode, TextRunIr};
 
 /// Solved Word construct for a `Heading` (`Heading1`..`Heading6`) paragraph.
 #[derive(Debug, Clone)]
@@ -95,13 +94,9 @@ impl HeadingConstruct {
                     }
                 })
                 .or_else(|| Some("Libertinus Serif".to_string()));
-            let font_class = classify_font_family(font_family.as_deref(), false);
-            let text_script = TextScriptClassIr::classify(&text);
             TextRunIr {
                 text,
                 font_family,
-                font_class,
-                text_script,
                 font_size_pt: Some(sz_pt),
                 bold: true,
                 ..Default::default()

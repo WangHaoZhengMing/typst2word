@@ -9,7 +9,7 @@ impl<'a> DocxWriter<'a> {
     pub(crate) fn document_has_cjk(&self) -> bool {
         fn inlines_have_cjk(inlines: &[InlineNode]) -> bool {
             inlines.iter().any(|inl| match inl {
-                InlineNode::Text(r) => r.text_script.has_cjk() || r.font_class.is_cjk_font(),
+                InlineNode::Text(r) => word_construct::text_run::run_has_cjk(r),
                 InlineNode::Field { content, .. }
                 | InlineNode::Link { content, .. }
                 | InlineNode::Ref { content, .. }
@@ -39,10 +39,9 @@ impl<'a> DocxWriter<'a> {
                     blocks_have_cjk(body)
                         || attribution.as_deref().is_some_and(inlines_have_cjk)
                 }
-                BlockNode::CodeBlock { lines, .. } => lines.iter().any(|line| {
-                    line.iter()
-                        .any(|r| r.text_script.has_cjk() || r.font_class.is_cjk_font())
-                }),
+                BlockNode::CodeBlock { lines, .. } => lines
+                    .iter()
+                    .any(|line| line.iter().any(word_construct::text_run::run_has_cjk)),
                 BlockNode::Figure { body, caption, .. } => {
                     blocks_have_cjk(body) || caption.as_deref().is_some_and(inlines_have_cjk)
                 }

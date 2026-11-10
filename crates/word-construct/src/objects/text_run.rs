@@ -2,9 +2,25 @@
 //!
 //! Solves `<w:rFonts>` (`w:hint="eastAsia"` policy) and `<w:sz>` / `<w:spacing>`
 //! (including inline code `DejaVu Sans Mono` -> `Consolas` advance-width compensation)
-//! from pipeline-annotated [`TextRunIr`].
+//! from [`TextRunIr`].
 
 use ir::{ScriptKindIr, TextRunIr};
+
+use crate::pipeline::font_recognize::classify_font_family;
+use crate::pipeline::lang_script::TextScriptClassIr;
+
+/// Whether a [`TextRunIr`] contains CJK ideographs/fullwidth characters.
+#[inline]
+pub fn run_has_cjk_chars(run: &TextRunIr) -> bool {
+    TextScriptClassIr::classify(&run.text).has_cjk()
+}
+
+/// Whether a [`TextRunIr`] uses a CJK typeface or contains CJK characters.
+#[inline]
+pub fn run_has_cjk(run: &TextRunIr) -> bool {
+    run_has_cjk_chars(run)
+        || classify_font_family(run.font_family.as_deref(), run.is_code).is_cjk_font()
+}
 
 /// Exhaustive East Asian font hint policy for `<w:rFonts>`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,8 +68,10 @@ pub struct TextRunConstruct<'a> {
 
 impl<'a> TextRunConstruct<'a> {
     pub fn solve(run: &'a TextRunIr) -> Self {
+        let font_class = classify_font_family(run.font_family.as_deref(), run.is_code);
+        let text_script = TextScriptClassIr::classify(&run.text);
         let east_asia_hint =
-            if run.font_class.is_cjk_font() && run.text_script.has_east_asian_symbol() {
+            if font_class.is_cjk_font() && text_script.has_east_asian_symbol() {
                 EastAsiaHintPolicy::EmitEastAsia
             } else {
                 EastAsiaHintPolicy::Omit
