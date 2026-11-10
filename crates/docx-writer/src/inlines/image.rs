@@ -3,7 +3,7 @@
 use std::fmt::Write as _;
 
 use crate::writer::DocxWriter;
-use ir::{ImageFormatIr, ImageIr};
+use word_construct::model::{ImageFormatIr, ImageIr};
 use word_construct::units::pt_to_emu;
 use crate::xml::escape_xml;
 

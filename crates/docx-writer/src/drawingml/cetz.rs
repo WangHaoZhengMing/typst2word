@@ -5,7 +5,7 @@ use crate::drawingml::line::build_ln_xml;
 use crate::drawingml::next_drawing_id;
 use crate::drawingml::shape::build_wsp_xml;
 use crate::drawingml::textbox::render_inline_nodes_as_txbx_para;
-use ir::{
+use word_construct::model::{
     CetzCanvasIr, CetzLabelDrawableIr, CetzPathDrawableIr, HAlignIr, ShapeIr, ShapeKindIr,
 };
 use word_construct::units::pt_to_emu;
@@ -182,14 +182,14 @@ pub(crate) fn build_cetz_path_wsp(drawable: &CetzPathDrawableIr) -> String {
 
 pub(crate) fn build_cetz_label_wsp(label: &CetzLabelDrawableIr, canvas_height_pt: f64) -> String {
     let sp_id = next_drawing_id();
-    let nobreak_content: Vec<ir::InlineNode> = label
+    let nobreak_content: Vec<word_construct::model::InlineNode> = label
         .content
         .iter()
         .map(|node| match node {
-            ir::InlineNode::Text(run) => {
+            word_construct::model::InlineNode::Text(run) => {
                 let mut r = run.clone();
                 r.text = r.text.replace(' ', "\u{00A0}");
-                ir::InlineNode::Text(r)
+                word_construct::model::InlineNode::Text(r)
             }
             other => other.clone(),
         })

@@ -4,7 +4,7 @@ use std::fmt::Write as _;
 
 use word_construct::code::CodeBlockConstruct;
 use crate::writer::DocxWriter;
-use ir::{StrokeIr, TextRunIr};
+use word_construct::model::{StrokeIr, TextRunIr};
 
 impl<'a> DocxWriter<'a> {
     pub(crate) fn render_code_block(

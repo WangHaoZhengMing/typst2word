@@ -2,7 +2,7 @@
 
 use crate::inlines::text::render_text_run_xml;
 use crate::math::render_equation_omml;
-use ir::{BlockNode, HAlignIr, InlineNode, TextRunIr};
+use word_construct::model::{BlockNode, HAlignIr, InlineNode, TextRunIr};
 
 pub(crate) fn render_textbox_blocks(blocks: &[BlockNode]) -> String {
     let mut out = String::new();

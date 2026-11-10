@@ -4,7 +4,7 @@ use std::fmt::Write as _;
 
 use word_construct::heading::HeadingConstruct;
 use crate::writer::DocxWriter;
-use ir::{HAlignIr, InlineNode};
+use word_construct::model::{HAlignIr, InlineNode};
 
 impl<'a> DocxWriter<'a> {
     /// `BlockNode::Title` -> `Title` styled paragraph.

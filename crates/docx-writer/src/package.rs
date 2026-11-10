@@ -12,8 +12,8 @@ use crate::xml::escape_xml;
 
 impl<'a> DocxWriter<'a> {
     pub(crate) fn build(&mut self) -> Result<Vec<u8>, String> {
-        let setups: Vec<_> = std::iter::once(self.ir.page_setup.clone())
-            .chain(self.ir.sections.iter().map(|s| s.page_setup.clone())).collect();
+        let setups: Vec<_> = std::iter::once(self.doc.page_setup.clone())
+            .chain(self.doc.sections.iter().map(|s| s.page_setup.clone())).collect();
         for setup in &setups {
             // An explicit empty part prevents inheriting the previous section's furniture.
             let header = if setups.len() > 1 || !setup.header.is_empty() { Some(self.alloc_rel_id()) } else { None };
@@ -187,10 +187,10 @@ impl<'a> DocxWriter<'a> {
     }
 
     pub(crate) fn render_core_props_xml(&self) -> String {
-        let title = escape_xml(self.ir.metadata.title.as_deref().unwrap_or(""));
-        let creator = escape_xml(&self.ir.metadata.authors.join("; "));
-        let description = escape_xml(self.ir.metadata.description.as_deref().unwrap_or(""));
-        let keywords = escape_xml(&self.ir.metadata.keywords.join(", "));
+        let title = escape_xml(self.doc.metadata.title.as_deref().unwrap_or(""));
+        let creator = escape_xml(&self.doc.metadata.authors.join("; "));
+        let description = escape_xml(self.doc.metadata.description.as_deref().unwrap_or(""));
+        let keywords = escape_xml(&self.doc.metadata.keywords.join(", "));
         format!(
             r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">

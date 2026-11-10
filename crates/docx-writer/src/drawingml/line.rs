@@ -1,6 +1,6 @@
 //! `StrokeIr` -> `<a:ln>` outline (width, color, dash, cap, join).
 
-use ir::{DashPatternIr, LineCapIr, LineJoinIr, StrokeIr};
+use word_construct::model::{DashPatternIr, LineCapIr, LineJoinIr, StrokeIr};
 use word_construct::units::pt_to_emu;
 
 pub(crate) fn build_ln_xml(stroke: Option<&StrokeIr>) -> String {

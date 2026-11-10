@@ -5,7 +5,7 @@
 use std::fmt::Write as _;
 
 use word_construct::equation::{WordMathNode, WordMathRun, calibrate_equation_body};
-use ir::{EquationIr, MathFracStyleIr, MathScriptIr, MathStyleIr};
+use word_construct::model::{EquationIr, MathFracStyleIr, MathScriptIr, MathStyleIr};
 use crate::xml::{escape_xml_attr, escape_xml_text};
 
 const EMPTY_MATH_RUN: &str = "<m:r><m:t>&#x200B;</m:t></m:r>";

@@ -3,7 +3,7 @@
 use std::fmt::Write as _;
 
 use crate::writer::DocxWriter;
-use ir::UnsupportedIr;
+use word_construct::model::UnsupportedIr;
 use crate::xml::escape_xml;
 
 impl<'a> DocxWriter<'a> {

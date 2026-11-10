@@ -5,7 +5,7 @@ use std::fmt::Write as _;
 use word_construct::cetz::CetzCanvasConstruct;
 use crate::writer::DocxWriter;
 use crate::drawingml::cetz_canvas_to_drawingml_run;
-use ir::CetzCanvasIr;
+use word_construct::model::CetzCanvasIr;
 
 impl<'a> DocxWriter<'a> {
     pub(crate) fn render_cetz_block(&mut self, canvas: &CetzCanvasIr, out: &mut String) {

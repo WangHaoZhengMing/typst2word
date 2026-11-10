@@ -4,7 +4,7 @@ use crate::writer::DocxWriter;
 
 impl<'a> DocxWriter<'a> {
     pub(crate) fn render_styles_xml(&self) -> String {
-        let has_cjk = self.document_has_cjk();
+        let has_cjk = self.doc.has_cjk;
         let lang_xml = if has_cjk {
             "\n        <w:lang w:val=\"en-US\" w:eastAsia=\"zh-CN\" w:bidi=\"ar-SA\"/>"
         } else {

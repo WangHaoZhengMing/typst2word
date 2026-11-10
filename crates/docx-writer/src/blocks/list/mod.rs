@@ -110,15 +110,23 @@ impl<'a> DocxWriter<'a> {
         for (idx, item) in items.iter().enumerate() {
             let is_last = idx + 1 == num_items;
             let after = if is_last {
-                110
+                90
             } else if tight {
-                15
+                0
             } else {
                 110
             };
+            let jc_xml = match item.description.first() {
+                Some(BlockNode::Paragraph { style, .. })
+                    if style.align == word_construct::model::HAlignIr::Justify =>
+                {
+                    r#"<w:jc w:val="both"/>"#
+                }
+                _ => "",
+            };
             let _ = write!(
                 out,
-                r#"<w:p><w:pPr><w:spacing w:before="10" w:after="{after}" w:line="246" w:lineRule="auto"/><w:ind w:left="440" w:hanging="440"/></w:pPr>"#
+                r#"<w:p><w:pPr>{jc_xml}<w:spacing w:before="0" w:after="{after}" w:line="270" w:lineRule="auto"/><w:ind w:left="440" w:hanging="440"/></w:pPr>"#
             );
             for inline in &item.term {
                 if let InlineNode::Text(r) = inline {
@@ -129,9 +137,27 @@ impl<'a> DocxWriter<'a> {
                     self.render_inline(inline, out);
                 }
             }
+            let inherited_font = item
+                .description
+                .first()
+                .and_then(|b| match b {
+                    BlockNode::Paragraph { content, .. } => content.iter().find_map(|inl| match inl
+                    {
+                        InlineNode::Text(r) => r.font_family.clone(),
+                        _ => None,
+                    }),
+                    _ => None,
+                })
+                .or_else(|| {
+                    item.term.iter().find_map(|inl| match inl {
+                        InlineNode::Text(r) => r.font_family.clone(),
+                        _ => None,
+                    })
+                })
+                .or_else(|| Some("Libertinus Serif".to_string()));
             let sep_run = TextRunIr {
                 text: "  ".to_string(),
-                font_family: Some("Libertinus Serif".to_string()),
+                font_family: inherited_font,
                 font_size_pt: Some(11.0),
                 ..Default::default()
             };

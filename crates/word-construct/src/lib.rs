@@ -14,7 +14,9 @@
 //!    Decoupled `AnchorLineIr` and LCS-based `compare_line_anchors` diagnostic comparator.
 //! 5. **Paragraph, List, and Table Box Solvers ([`paragraph_box`], [`list_box`], [`table_box`], [`units`])**.
 
+pub use ir as model;
 pub mod anchor;
+pub mod document;
 pub mod policy;
 pub mod units;
 pub mod equation_box;
@@ -31,6 +33,7 @@ pub mod table_box;
 pub use anchor::{
     AnchorDiffEntry, AnchorDiffReport, AnchorLineIr, AnchorMismatchKind, compare_line_anchors,
 };
+pub use document::{WordDocument, build_word_document};
 pub use equation_box::{
     EquationBoxInput, EquationVerticalProfile, FractionScaleMode, WordEquationBox,
 };

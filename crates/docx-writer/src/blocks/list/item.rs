@@ -8,7 +8,7 @@ use word_construct::paragraph::{
 };
 use word_construct::table::solve_list_item_child_table;
 use crate::writer::DocxWriter;
-use ir::{BlockNode, InlineNode, ParagraphStyleIr, TableIr, TableKindIr};
+use word_construct::model::{BlockNode, InlineNode, ParagraphStyleIr, TableIr, TableKindIr};
 use crate::xml::escape_xml;
 
 impl<'a> DocxWriter<'a> {

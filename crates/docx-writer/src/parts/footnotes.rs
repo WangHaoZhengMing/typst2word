@@ -3,7 +3,7 @@
 use std::fmt::Write as _;
 
 use crate::writer::DocxWriter;
-use ir::BlockNode;
+use word_construct::model::BlockNode;
 
 impl<'a> DocxWriter<'a> {
     // =========================================================================

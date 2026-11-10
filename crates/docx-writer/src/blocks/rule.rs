@@ -3,7 +3,7 @@
 use std::fmt::Write as _;
 
 use crate::writer::DocxWriter;
-use ir::StrokeIr;
+use word_construct::model::StrokeIr;
 
 impl<'a> DocxWriter<'a> {
     /// `BlockNode::HorizontalRule` -> empty paragraph with a bottom border.

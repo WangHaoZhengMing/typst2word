@@ -13,7 +13,7 @@ use std::fmt::Write as _;
 
 use crate::writer::DocxWriter;
 use crate::drawingml::{cetz_canvas_to_drawingml_run, shape_to_drawingml_run};
-use ir::InlineNode;
+use word_construct::model::InlineNode;
 
 impl<'a> DocxWriter<'a> {
     // =========================================================================
@@ -29,9 +29,9 @@ impl<'a> DocxWriter<'a> {
         match inline {
             InlineNode::Field { kind, format, content } => {
                 let mut instruction = match kind {
-                    ir::FieldKindIr::Page => "PAGE".to_string(),
-                    ir::FieldKindIr::NumPages => "NUMPAGES".to_string(),
-                    ir::FieldKindIr::PageRef { bookmark } => format!("PAGEREF {bookmark} \\h"),
+                    word_construct::model::FieldKindIr::Page => "PAGE".to_string(),
+                    word_construct::model::FieldKindIr::NumPages => "NUMPAGES".to_string(),
+                    word_construct::model::FieldKindIr::PageRef { bookmark } => format!("PAGEREF {bookmark} \\h"),
                 };
                 if let Some(format) = format { instruction.push_str(&format!(" \\* {format}")); }
                 let _ = write!(out, r#"<w:fldSimple w:instr="{}" w:dirty="true">"#, crate::xml::escape_xml(&instruction));

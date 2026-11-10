@@ -1,4 +1,4 @@
-//! OpenXML `.docx` Writer (`DocumentIr` -> `.docx` ZIP package).
+//! OpenXML `.docx` Writer (`WordDocument` -> `.docx` ZIP package).
 //!
 //! Generates a complete, valid Microsoft Word `.docx` archive with:
 //! - Native Word DrawingML shapes (`<wps:wsp>`) and CeTZ vector groups (`<wpg:wgp>`)
@@ -13,8 +13,8 @@
 //! - `writer`: shared state (`DocxWriter`) and helpers
 //! - `package`: zip / OPC package assembly
 //! - `parts`: fixed XML parts (`styles.xml`, `numbering.xml`, ...)
-//! - `blocks`: one file per block-level Typst object
-//! - `inlines`: one file per inline-level Typst object
+//! - `blocks`: one file per block-level Word object
+//! - `inlines`: one file per inline-level Word object
 //! - `drawingml`: shapes and CeTZ canvases as native DrawingML
 
 mod blocks;
@@ -30,12 +30,13 @@ use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 
-use crate::writer::DocxWriter;
-use ir::DocumentIr;
+use word_construct::WordDocument;
 
-/// Write `DocumentIr` to a `.docx` file on disk.
-pub fn write_docx_to_path(ir: &DocumentIr, output_path: &Path) -> Result<(), String> {
-    let bytes = write_docx_to_bytes(ir)?;
+use crate::writer::DocxWriter;
+
+/// Write a solved [`WordDocument`] to a `.docx` file on disk.
+pub fn write_docx_to_path(doc: &WordDocument, output_path: &Path) -> Result<(), String> {
+    let bytes = write_docx_to_bytes(doc)?;
     if let Some(parent) = output_path.parent() {
         if !parent.as_os_str().is_empty() {
             std::fs::create_dir_all(parent)
@@ -49,9 +50,9 @@ pub fn write_docx_to_path(ir: &DocumentIr, output_path: &Path) -> Result<(), Str
     Ok(())
 }
 
-/// Serialize `DocumentIr` into an in-memory `.docx` byte vector.
-pub fn write_docx_to_bytes(ir: &DocumentIr) -> Result<Vec<u8>, String> {
-    let mut builder = DocxWriter::new(ir);
+/// Serialize a solved [`WordDocument`] into an in-memory `.docx` byte vector.
+pub fn write_docx_to_bytes(doc: &WordDocument) -> Result<Vec<u8>, String> {
+    let mut builder = DocxWriter::new(doc);
     builder.build()
 }
 
@@ -61,8 +62,11 @@ pub struct DocxWriteOptions {
     pub page_margin_calibration: word_construct::page_calibration::PageMarginCalibration,
 }
 
-pub fn write_docx_to_bytes_with_options(ir: &DocumentIr, options: DocxWriteOptions) -> Result<Vec<u8>, String> {
-    let mut builder = DocxWriter::new(ir);
+pub fn write_docx_to_bytes_with_options(
+    doc: &WordDocument,
+    options: DocxWriteOptions,
+) -> Result<Vec<u8>, String> {
+    let mut builder = DocxWriter::new(doc);
     builder.options = options;
     builder.build()
 }

@@ -5,7 +5,7 @@ use std::fmt::Write as _;
 use word_construct::shape::ShapeBlockConstruct;
 use crate::writer::DocxWriter;
 use crate::drawingml::shape_to_drawingml_run;
-use ir::ShapeIr;
+use word_construct::model::ShapeIr;
 
 impl<'a> DocxWriter<'a> {
     pub(crate) fn render_shape_block(&mut self, shape: &ShapeIr, out: &mut String) {

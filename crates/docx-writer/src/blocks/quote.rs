@@ -15,12 +15,12 @@ impl<'a> DocxWriter<'a> {
         attribution: Option<&[InlineNode]>,
         out: &mut String,
     ) {
-        let after_body = if attribution.is_some() { 130 } else { 240 };
+        let after_body = if attribution.is_some() { 100 } else { 240 };
         for block in body {
             if let BlockNode::Paragraph { content, .. } = block {
                 let _ = write!(
                     out,
-                    r#"<w:p><w:pPr><w:pStyle w:val="Quote"/><w:ind w:left="440" w:right="440"/><w:spacing w:before="340" w:after="{after_body}" w:line="260" w:lineRule="auto"/></w:pPr>"#,
+                    r#"<w:p><w:pPr><w:pStyle w:val="Quote"/><w:ind w:left="220" w:right="220"/><w:spacing w:before="400" w:after="{after_body}" w:line="274" w:lineRule="auto"/></w:pPr>"#,
                 );
                 self.render_inlines(content, out);
                 out.push_str("</w:p>");

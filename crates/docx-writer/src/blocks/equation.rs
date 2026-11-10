@@ -5,12 +5,12 @@ use std::fmt::Write as _;
 use word_construct::equation::EquationBlockConstruct;
 use crate::writer::DocxWriter;
 use crate::math::render_equation_omml;
-use ir::EquationIr;
+use word_construct::model::EquationIr;
 use crate::xml::escape_xml;
 
 impl<'a> DocxWriter<'a> {
     pub(crate) fn render_equation_block(&mut self, eq: &EquationIr, out: &mut String) {
-        self.render_equation_block_with_layout(eq, 80, 80, 0, out);
+        self.render_equation_block_with_layout(eq, 115, 155, 0, out);
     }
 
     pub(crate) fn render_equation_block_with_layout(

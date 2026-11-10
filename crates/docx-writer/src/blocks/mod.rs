@@ -22,7 +22,7 @@ mod unsupported;
 use word_construct::WordBlockObjectKind;
 use word_construct::paragraph::ParagraphConstruct;
 use crate::writer::DocxWriter;
-use ir::BlockNode;
+use word_construct::model::BlockNode;
 
 impl<'a> DocxWriter<'a> {
     pub(crate) fn render_blocks(&mut self, blocks: &[BlockNode], out: &mut String) {

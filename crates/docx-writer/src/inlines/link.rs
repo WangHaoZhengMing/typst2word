@@ -3,7 +3,7 @@
 use std::fmt::Write as _;
 
 use crate::writer::DocxWriter;
-use ir::{InlineNode, LinkTargetIr, StrokeIr};
+use word_construct::model::{InlineNode, LinkTargetIr, StrokeIr};
 use crate::xml::escape_xml;
 
 impl<'a> DocxWriter<'a> {

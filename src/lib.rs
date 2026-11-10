@@ -7,13 +7,13 @@
 //! 2. [`extract`]: Pure Typst semantic & PDF physical layout extractor producing structurally
 //!    normalized [`DocumentIr`] (zero Word-specific logic).
 //! 3. [`ir`]: Exhaustive enum-driven Semantic + PDF Metrics Intermediate Representation (`DocumentIr`,
-//!    `ir::pdf`, `ir::normalize`, `ir::policy`, `ir::units`, `ir::anchor`).
-//! 4. [`word_construct`]: Two-stage Word layout engine:
-//!    - `word_construct::pipeline`: Sequential Word recognition & spacing passes (`FontRecognition`,
+//!    `ir::pdf`, `ir::normalize`, `ir::units`, `ir::anchor`).
+//! 4. [`word_construct`]: Word layout & compensation engine (`build_word_document(&DocumentIr) -> WordDocument`):
+//!    - `word_construct::pipeline`: Word recognition & spacing solvers (`FontRecognition`,
 //!      `LanguageAndScriptRecognition`, `InterBlockFlowAndSpacing`).
 //!    - `word_construct::objects`: Per-object Word Construct builders (`paragraph`, `heading`, `list`,
 //!      `table`, `equation`, `figure`, `code`, `text_run`, `shape`, `cetz`).
-//! 5. [`docx_writer`]: Pure OpenXML & ZIP package writer (`DocxWriter`).
+//! 5. [`docx_writer`]: Pure OpenXML & ZIP package writer (`DocxWriter` consuming `&WordDocument`).
 
 pub use compiler;
 pub use docx_writer;
@@ -27,24 +27,20 @@ use compiler::{TypstWorld, compile_world};
 use docx_writer::{write_docx_to_bytes, write_docx_to_path};
 use extract::extract_document_ir;
 use ir::DocumentIr;
-use word_construct::run_word_construct_pipeline;
+use word_construct::build_word_document;
 
-/// Compile a Typst `.typ` file and extract its pipeline-processed `DocumentIr`.
+/// Compile a Typst `.typ` file and extract its pure `DocumentIr` (never mutated by Word passes).
 pub fn compile_file_to_ir(input_path: &Path) -> Result<DocumentIr, String> {
     let world = TypstWorld::from_file(input_path)?;
     let compiled = compile_world(&world)?;
-    let mut ir = extract_document_ir(&compiled, &world);
-    run_word_construct_pipeline(&mut ir);
-    Ok(ir)
+    Ok(extract_document_ir(&compiled, &world))
 }
 
-/// Compile an in-memory Typst source string and extract its pipeline-processed `DocumentIr`.
+/// Compile an in-memory Typst source string and extract its pure `DocumentIr` (never mutated by Word passes).
 pub fn compile_str_to_ir(source: &str, root_dir: Option<&Path>) -> Result<DocumentIr, String> {
     let world = TypstWorld::from_str(source, root_dir.map(|p| p.to_path_buf()));
     let compiled = compile_world(&world)?;
-    let mut ir = extract_document_ir(&compiled, &world);
-    run_word_construct_pipeline(&mut ir);
-    Ok(ir)
+    Ok(extract_document_ir(&compiled, &world))
 }
 
 /// Convert a Typst `.typ` file directly to a `.docx` file on disk, returning the `DocumentIr`.
@@ -53,7 +49,8 @@ pub fn convert_typst_file_to_docx(
     output_path: &Path,
 ) -> Result<DocumentIr, String> {
     let ir = compile_file_to_ir(input_path)?;
-    write_docx_to_path(&ir, output_path)?;
+    let word_doc = build_word_document(&ir);
+    write_docx_to_path(&word_doc, output_path)?;
     Ok(ir)
 }
 
@@ -63,6 +60,7 @@ pub fn convert_typst_str_to_docx_bytes(
     root_dir: Option<&Path>,
 ) -> Result<(Vec<u8>, DocumentIr), String> {
     let ir = compile_str_to_ir(source, root_dir)?;
-    let bytes = write_docx_to_bytes(&ir)?;
+    let word_doc = build_word_document(&ir);
+    let bytes = write_docx_to_bytes(&word_doc)?;
     Ok((bytes, ir))
 }

@@ -3,7 +3,7 @@
 use std::fmt::Write as _;
 
 use crate::writer::DocxWriter;
-use ir::{BlockNode, InlineNode};
+use word_construct::model::{BlockNode, InlineNode};
 use word_construct::units::pt_to_dxa;
 
 impl<'a> DocxWriter<'a> {
@@ -44,8 +44,8 @@ impl<'a> DocxWriter<'a> {
             out.push_str("<w:body>");
         }
 
-        let sections: Vec<_> = std::iter::once((self.ir.page_setup.clone(), self.ir.blocks.clone()))
-            .chain(self.ir.sections.iter().map(|s| (s.page_setup.clone(), s.blocks.clone()))).collect();
+        let sections: Vec<_> = std::iter::once((self.doc.page_setup.clone(), self.doc.blocks.clone()))
+            .chain(self.doc.sections.iter().map(|s| (s.page_setup.clone(), s.blocks.clone()))).collect();
         for (index, (setup, blocks)) in sections.iter().enumerate() {
             self.current_setup = setup.clone();
             self.current_blocks = blocks.clone();

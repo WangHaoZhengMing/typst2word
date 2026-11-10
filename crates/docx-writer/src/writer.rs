@@ -3,7 +3,8 @@
 
 use std::fmt::Write as _;
 
-use ir::{BlockNode, DocumentIr, HAlignIr, ImageFormatIr, ImageIr};
+use word_construct::WordDocument;
+use word_construct::model::{BlockNode, HAlignIr, ImageFormatIr, ImageIr, PageSetupIr};
 use word_construct::units::pt_to_dxa;
 
 pub(crate) struct MediaAsset {
@@ -28,11 +29,11 @@ pub(crate) struct FootnoteRecord {
 
 pub(crate) struct DocxWriter<'a> {
     pub(crate) options: crate::DocxWriteOptions,
-    pub(crate) current_setup: ir::PageSetupIr,
+    pub(crate) current_setup: PageSetupIr,
     pub(crate) current_blocks: Vec<BlockNode>,
     pub(crate) section_furniture: Vec<(Option<String>, Option<String>)>,
     pub(crate) active_part: String,
-    pub(crate) ir: &'a DocumentIr,
+    pub(crate) doc: &'a WordDocument,
     pub(crate) next_rel_id: usize,
     pub(crate) next_drawing_id: u32,
     pub(crate) next_bookmark_id: u32,
@@ -48,13 +49,13 @@ pub(crate) struct DocxWriter<'a> {
 }
 
 impl<'a> DocxWriter<'a> {
-    pub(crate) fn new(ir: &'a DocumentIr) -> Self {
+    pub(crate) fn new(doc: &'a WordDocument) -> Self {
         Self {
             options: Default::default(),
-            current_setup: ir.page_setup.clone(),
-            current_blocks: ir.blocks.clone(),
+            current_setup: doc.page_setup.clone(),
+            current_blocks: doc.blocks.clone(),
             section_furniture: Vec::new(),
-            ir,
+            doc,
             active_part: "document".into(),
             // Reserve rId1..rId5 for styles, numbering, settings, footnotes, fontTable
             next_rel_id: 6,
@@ -104,7 +105,11 @@ impl<'a> DocxWriter<'a> {
     }
 
     pub(crate) fn register_hyperlink(&mut self, url: &str) -> String {
-        if let Some(existing) = self.hyperlinks.iter().find(|h| h.url == url && h.part == self.active_part) {
+        if let Some(existing) = self
+            .hyperlinks
+            .iter()
+            .find(|h| h.url == url && h.part == self.active_part)
+        {
             return existing.rel_id.clone();
         }
         let rel_id = self.alloc_rel_id();

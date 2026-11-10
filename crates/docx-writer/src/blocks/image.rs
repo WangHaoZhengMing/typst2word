@@ -3,7 +3,7 @@
 use std::fmt::Write as _;
 
 use crate::writer::DocxWriter;
-use ir::ImageIr;
+use word_construct::model::ImageIr;
 
 impl<'a> DocxWriter<'a> {
     /// `BlockNode::ImageBlock` -> centered paragraph holding an inline picture.

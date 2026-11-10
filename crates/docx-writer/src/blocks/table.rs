@@ -7,7 +7,7 @@ use word_construct::table::{
     resolve_table_cell_role, solve_table_cell_paragraph_style,
 };
 use crate::writer::DocxWriter;
-use ir::{
+use word_construct::model::{
     BlockNode, DashPatternIr, StrokeIr, TableIr, TableKindIr, VAlignIr,
 };
 use crate::xml::escape_xml;

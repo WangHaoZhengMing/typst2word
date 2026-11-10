@@ -4,7 +4,7 @@ use std::fmt::Write as _;
 
 use word_construct::figure::{FigureConstruct, solve_indented_figure_table};
 use crate::writer::DocxWriter;
-use ir::{BlockNode, CaptionPositionIr, InlineNode};
+use word_construct::model::{BlockNode, CaptionPositionIr, InlineNode};
 
 impl<'a> DocxWriter<'a> {
     /// `BlockNode::Figure` -> body blocks plus a `Caption` paragraph.

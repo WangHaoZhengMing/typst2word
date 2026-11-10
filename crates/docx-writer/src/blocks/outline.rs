@@ -3,7 +3,7 @@
 use std::fmt::Write as _;
 
 use crate::writer::DocxWriter;
-use ir::{InlineNode, OutlineEntryIr, TextRunIr};
+use word_construct::model::{InlineNode, OutlineEntryIr, TextRunIr};
 use word_construct::units::pt_to_dxa;
 use crate::xml::escape_xml;
 
@@ -49,7 +49,7 @@ impl<'a> DocxWriter<'a> {
                 self.render_inlines(&entry.title, out);
                 out.push_str(r#"<w:r><w:tab/></w:r>"#);
                 self.render_inline(&InlineNode::Field {
-                    kind: ir::FieldKindIr::PageRef { bookmark: bm.clone() },
+                    kind: word_construct::model::FieldKindIr::PageRef { bookmark: bm.clone() },
                     format: None,
                     content: vec![InlineNode::Text(page_run.clone())],
                 }, out);

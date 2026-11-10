@@ -3,7 +3,7 @@
 use std::fmt::Write as _;
 
 use crate::writer::{DocxWriter, FootnoteRecord};
-use ir::BlockNode;
+use word_construct::model::BlockNode;
 
 impl<'a> DocxWriter<'a> {
     /// `InlineNode::Footnote` -> registers the footnote body and emits a `<w:footnoteReference>` run.

@@ -4,7 +4,7 @@ use std::fmt::Write as _;
 
 use word_construct::paragraph::{ParagraphConstruct, ParagraphIndentationConstruct};
 use crate::writer::DocxWriter;
-use ir::{InlineNode, ParagraphStyleIr};
+use word_construct::model::{InlineNode, ParagraphStyleIr};
 
 impl<'a> DocxWriter<'a> {
     /// `BlockNode::Paragraph` -> `<w:p>` with spacing / indentation.

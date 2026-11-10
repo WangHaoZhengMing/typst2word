@@ -183,10 +183,46 @@ pub(crate) fn build_wsp_xml(
     let txbx_and_body_pr = if shape.body.is_empty() {
         r#"<wps:bodyPr/>"#.to_string()
     } else {
-        let l_ins = pt_to_emu(shape.inset.left.max(0.0));
-        let t_ins = pt_to_emu(shape.inset.top.max(0.0));
-        let r_ins = pt_to_emu(shape.inset.right.max(0.0));
-        let b_ins = pt_to_emu(shape.inset.bottom.max(0.0));
+        let (l_ins, t_ins, r_ins, b_ins) = match &shape.kind {
+            ShapeKindIr::Ellipse => {
+                if shape.width_pt < 80.0 {
+                    (0, 0, 0, 0)
+                } else {
+                    let h_pad = (shape.inset.left - 2.0).max(0.0);
+                    let v_pad = (shape.inset.top - 2.0).max(0.0);
+                    (
+                        pt_to_emu(h_pad),
+                        pt_to_emu(v_pad),
+                        pt_to_emu((shape.inset.right - 2.0).max(0.0)),
+                        pt_to_emu((shape.inset.bottom - 2.0).max(0.0)),
+                    )
+                }
+            }
+            ShapeKindIr::Rect => {
+                let radius_pt = shape.corner_radius_pt.unwrap_or(0.0);
+                let horiz_comp = 0.55 * radius_pt;
+                let top_comp = if shape.width_pt >= 350.0 {
+                    3.5 + 0.35 * radius_pt
+                } else if radius_pt > 0.1 {
+                    0.35 * radius_pt
+                } else {
+                    0.0
+                };
+                let bot_comp = 0.35 * radius_pt;
+                (
+                    pt_to_emu((shape.inset.left - horiz_comp).max(0.0)),
+                    pt_to_emu((shape.inset.top - top_comp).max(0.0)),
+                    pt_to_emu((shape.inset.right - horiz_comp).max(0.0)),
+                    pt_to_emu((shape.inset.bottom - bot_comp).max(0.0)),
+                )
+            }
+            _ => (
+                pt_to_emu(shape.inset.left.max(0.0)),
+                pt_to_emu(shape.inset.top.max(0.0)),
+                pt_to_emu(shape.inset.right.max(0.0)),
+                pt_to_emu(shape.inset.bottom.max(0.0)),
+            ),
+        };
         let anchor = if matches!(shape.kind, ShapeKindIr::Rect) {
             "t"
         } else {

@@ -4,7 +4,7 @@ use std::fmt::Write as _;
 
 use word_construct::text_run::{RunFontSizeConstruct, TextRunConstruct};
 use crate::writer::DocxWriter;
-use ir::{DashPatternIr, ScriptKindIr, TextRunIr};
+use word_construct::model::{DashPatternIr, ScriptKindIr, TextRunIr};
 use crate::xml::escape_xml;
 
 pub(crate) fn render_text_run_xml(run: &TextRunIr, out: &mut String) {
