@@ -35,6 +35,20 @@ pub(crate) fn render_textbox_blocks(blocks: &[BlockNode]) -> String {
                     out.push_str(&render_textbox_blocks(&item.blocks));
                 }
             }
+            BlockNode::CodeBlock { lines, .. } => {
+                for line_runs in lines {
+                    let inlines: Vec<InlineNode> = line_runs
+                        .iter()
+                        .cloned()
+                        .map(InlineNode::Text)
+                        .collect();
+                    out.push_str(&render_inline_nodes_as_txbx_para(
+                        &inlines,
+                        HAlignIr::Left,
+                        None,
+                    ));
+                }
+            }
             BlockNode::UnsupportedBlock(u) => {
                 let run = TextRunIr {
                     text: u.display_badge(),

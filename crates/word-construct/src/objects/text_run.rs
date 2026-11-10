@@ -84,13 +84,16 @@ impl<'a> TextRunConstruct<'a> {
                     && matches!(
                         run.font_family.as_deref(),
                         None | Some("Consolas" | "DejaVu Sans Mono")
-                    )
-                    && (sz_pt - 8.8).abs() < 0.15;
-                if is_consolas_fallback {
+                    );
+                if is_consolas_fallback && (sz_pt - 8.8).abs() < 0.15 {
                     RunFontSizeConstruct::ConsolasInlineCodeCompensated {
                         half_pts: 19,
                         char_spacing_dxa: 1,
                     }
+                } else if is_consolas_fallback {
+                    RunFontSizeConstruct::StandardHalfPts(
+                        ((sz_pt * 1.09 * 2.0).round() as u32).clamp(10, 288),
+                    )
                 } else {
                     // Typst's `SubElem` / `SuperElem` pre-scales `item.size` by the font's OS/2
                     // `ySubscriptYSize` / `ySuperscriptYSize` ratio (`1331/2048 = 0.65`), and

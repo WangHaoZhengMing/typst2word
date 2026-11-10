@@ -39,7 +39,11 @@ impl<'a> ExtractorContext<'a> {
 
         let col_w = self.current_column_width_pt();
         let (count, gutter_pt) = self.active_columns;
-        let (left_bound, right_bound) = if min_x >= self.content_left_pt - 8.0 {
+        let (left_bound, right_bound) = if let Some(gw) = self.active_group_width_pt
+            && min_x < self.content_left_pt - 8.0
+        {
+            (0.0, gw.max(40.0))
+        } else if min_x >= self.content_left_pt - 8.0 {
             if count > 1 && width <= col_w + 12.0 {
                 let col_idx = (((min_x - self.content_left_pt + 4.0).max(0.0))
                     / (col_w + gutter_pt).max(1.0))
@@ -54,7 +58,7 @@ impl<'a> ExtractorContext<'a> {
             (0.0, col_w.max(100.0))
         };
 
-        let span_width = (right_bound - left_bound).max(100.0);
+        let span_width = (right_bound - left_bound).max(40.0);
 
         // Multi-line per-line edge analysis: accurately distinguishes Right and Center
         // alignment from Left/Justified even when the first line fills >85% of the column width.

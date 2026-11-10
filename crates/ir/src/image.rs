@@ -13,6 +13,8 @@ pub struct ImageIr {
     pub height_pt: f64,
     pub alt: Option<String>,
     pub align: HAlignIr,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placed_offset_pt: Option<(f64, f64)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

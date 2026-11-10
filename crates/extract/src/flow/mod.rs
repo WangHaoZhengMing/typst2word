@@ -41,17 +41,53 @@ impl<'a> ExtractorContext<'a> {
         )> = Vec::new();
 
         for (idx, node) in nodes.iter().enumerate() {
+            if matches!(blocks.last(), Some(BlockNode::CodeBlock { .. }))
+                && stray_inlines.is_empty()
+                && matches!(node, TreeNode::Element { elem, .. } if elem.is::<typst::text::LinebreakElem>())
+            {
+                continue;
+            }
             if Self::is_stray_inline_node_at(nodes, idx, !stray_inlines.is_empty()) {
                 stray_inlines.push(node.clone());
                 continue;
             }
             if !stray_inlines.is_empty() {
-                let first_y = Self::nodes_first_page_top_y(&stray_inlines);
-                let last_y = Self::nodes_last_page_bottom_y(&stray_inlines);
-                let before_len = blocks.len();
-                self.flush_stray_inlines(&mut stray_inlines, &mut blocks, inherited_align);
-                if blocks.len() > before_len {
-                    block_source_spans.push((blocks.len() - 1, first_y, last_y));
+                let is_raw_line = matches!(
+                    node,
+                    TreeNode::Element { elem, .. } if elem.is::<typst::text::RawLine>()
+                );
+                if is_raw_line {
+                    let only_breaks = stray_inlines.iter().all(|n| {
+                        matches!(n, TreeNode::Element { elem, .. } if elem.is::<typst::text::LinebreakElem>())
+                    });
+                    if !only_breaks {
+                        let mut runs = Vec::new();
+                        Self::collect_raw_line_runs(&stray_inlines, &mut runs);
+                        if !runs.is_empty() {
+                            if let Some(BlockNode::CodeBlock { lines, .. }) = blocks.last_mut() {
+                                lines.push(runs);
+                                Self::normalize_empty_code_line_metrics(lines);
+                            } else {
+                                let mut lines = vec![runs];
+                                Self::normalize_empty_code_line_metrics(&mut lines);
+                                blocks.push(BlockNode::CodeBlock {
+                                    lang: None,
+                                    lines,
+                                    fill: None,
+                                    stroke: None,
+                                });
+                            }
+                        }
+                    }
+                    stray_inlines.clear();
+                } else {
+                    let first_y = Self::nodes_first_page_top_y(&stray_inlines);
+                    let last_y = Self::nodes_last_page_bottom_y(&stray_inlines);
+                    let before_len = blocks.len();
+                    self.flush_stray_inlines(&mut stray_inlines, &mut blocks, inherited_align);
+                    if blocks.len() > before_len {
+                        block_source_spans.push((blocks.len() - 1, first_y, last_y));
+                    }
                 }
             }
             let before_len = blocks.len();
@@ -107,7 +143,42 @@ impl<'a> ExtractorContext<'a> {
                 return true;
             }
         }
+        if let Some((x, y)) = Self::small_inline_shape_pos(node) {
+            let prev_same_row = idx > 0
+                && has_preceding_inline
+                && Self::small_inline_shape_pos(&nodes[idx - 1])
+                    .is_some_and(|(px, py)| (y - py).abs() <= 10.0 && (x - px).abs() > 1.0);
+            let next_same_row = nodes
+                .get(idx + 1)
+                .and_then(Self::small_inline_shape_pos)
+                .is_some_and(|(nx, ny)| (y - ny).abs() <= 10.0 && (nx - x).abs() > 1.0);
+            if prev_same_row || next_same_row {
+                return true;
+            }
+        }
         false
+    }
+
+    fn small_inline_shape_pos(node: &TreeNode) -> Option<(f64, f64)> {
+        if let TreeNode::Element {
+            elem,
+            pos,
+            children,
+            ..
+        } = node
+            && Self::is_native_shape_elem(elem)
+            && !elem.is::<LineElem>()
+        {
+            for ch in children {
+                if let TreeNode::Shape { shape, .. } = ch {
+                    let sz = shape.geometry.bbox(None).size();
+                    if sz.x.to_pt().abs() <= 26.0 && sz.y.to_pt().abs() <= 26.0 {
+                        return Some((pos.x.to_pt(), pos.y.to_pt()));
+                    }
+                }
+            }
+        }
+        None
     }
 
     pub(crate) fn is_inline_box_group(group: &GroupItem, children: &[TreeNode]) -> bool {
@@ -195,6 +266,7 @@ impl<'a> ExtractorContext<'a> {
                             .unwrap()
                             .block
                             .get(StyleChain::default()))
+                    || elem.is::<typst::text::LinebreakElem>()
             }
             _ => false,
         }

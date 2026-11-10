@@ -52,16 +52,24 @@ impl<'a> DocxWriter<'a> {
                 };
                 for (idx, line_runs) in lines.iter().enumerate() {
                     let is_last = idx + 1 == num_lines;
-                    let before = if idx == 0 { 40 } else { 0 };
-                    let after = if is_last { 100 } else { 0 };
+                    let before = if idx == 0 { 20 } else { 0 };
+                    let after = if is_last { 20 } else { 0 };
                     let keep_xml = if is_last && keep_last_with_next {
                         "<w:keepNext/>"
                     } else {
                         ""
                     };
+                    let mark_rpr = line_runs
+                        .first()
+                        .and_then(|r| r.font_size_pt)
+                        .map(|sz| {
+                            let hp = ((sz * 2.0).round() as u32).clamp(8, 72);
+                            format!(r#"<w:rPr><w:sz w:val="{hp}"/><w:szCs w:val="{hp}"/></w:rPr>"#)
+                        })
+                        .unwrap_or_default();
                     let _ = write!(
                         out,
-                        r#"<w:p><w:pPr>{keep_xml}<w:spacing w:before="{before}" w:after="{after}" w:line="276" w:lineRule="auto"/>{ind_xml}</w:pPr>"#,
+                        r#"<w:p><w:pPr>{keep_xml}<w:spacing w:before="{before}" w:after="{after}" w:line="240" w:lineRule="auto"/>{ind_xml}{mark_rpr}</w:pPr>"#,
                     );
                     for run in line_runs {
                         self.render_text_run(run, out);

@@ -132,6 +132,7 @@ impl<'a> ExtractorContext<'a> {
 
         let mut line_starts = Vec::new();
         Self::collect_line_left_edges(&content_nodes, Point::zero(), &mut line_starts);
+        Self::collect_shape_left_edges(&content_nodes, Point::zero(), &mut line_starts);
         let inferred_pad = line_starts
             .iter()
             .map(|(_, lx)| if min_shape_x > 10.0 { *lx - min_shape_x } else { *lx })
@@ -141,16 +142,6 @@ impl<'a> ExtractorContext<'a> {
             .unwrap_or(6.0);
         let v_pad = inferred_pad.clamp(4.0, 12.0);
 
-        let prev_inset = self.container_inset_pt;
-        self.container_inset_pt += 2.0 * inferred_pad + 3.0;
-        let body_blocks =
-            self.extract_blocks_from_nodes(&content_nodes, list_level, inherited_align);
-        self.container_inset_pt = prev_inset;
-
-        if body_blocks.is_empty() {
-            return None;
-        }
-
         let width_pt = frame_size
             .map(|sz| sz.x.to_pt())
             .unwrap_or(max_w_pt)
@@ -159,6 +150,35 @@ impl<'a> ExtractorContext<'a> {
             .map(|sz| sz.y.to_pt())
             .unwrap_or(max_h_pt)
             .max(20.0);
+
+        let has_full_width_child_group = content_nodes.iter().any(|n| {
+            let mut cur = n;
+            while let TreeNode::Element { children, .. } = cur {
+                if children.len() == 1 {
+                    cur = &children[0];
+                } else {
+                    break;
+                }
+            }
+            matches!(
+                cur,
+                TreeNode::Group { group, pos, .. }
+                    if pos.x.to_pt().abs() <= 2.0
+                        && (group.frame.size().x.to_pt() - width_pt).abs() <= 4.0
+            )
+        });
+        let prev_inset = self.container_inset_pt;
+        if !has_full_width_child_group {
+            self.container_inset_pt += 2.0 * inferred_pad + 3.0;
+        }
+        let mut body_blocks =
+            self.extract_blocks_from_nodes(&content_nodes, list_level, inherited_align);
+        self.container_inset_pt = prev_inset;
+
+        if body_blocks.is_empty() {
+            return None;
+        }
+
         let inset = SidesPtIr {
             top: v_pad,
             bottom: v_pad,
@@ -167,8 +187,8 @@ impl<'a> ExtractorContext<'a> {
         };
 
         // If the styled `#block(stroke: ..., fill: ...)[...]` has a left-only accent border,
-        // or contains tables, lists, enums, figures, rules, CeTZ canvases, or more than 3 blocks,
-        // represent it as a breakable 1-cell bordered `BlockNode::Table` (`is_styled_container: true`).
+        // or contains tables, lists, enums, figures, rules, code blocks, CeTZ canvases, or more than 3 blocks,
+        // represent it as a breakable bordered `BlockNode::Table` (`kind: StyledContainer`).
         let needs_table_container = (left_accent_border.is_some() && stroke.is_none())
             || body_blocks.iter().any(|b| {
                 !matches!(
@@ -176,7 +196,6 @@ impl<'a> ExtractorContext<'a> {
                     BlockNode::Paragraph { .. }
                         | BlockNode::Heading { .. }
                         | BlockNode::EquationBlock(_)
-                        | BlockNode::CodeBlock { .. }
                 )
             })
             || body_blocks.len() > 3;
@@ -189,8 +208,105 @@ impl<'a> ExtractorContext<'a> {
                     ..Default::default()
                 }
             } else {
-                BordersIr::splat(stroke)
+                BordersIr::splat(stroke.clone())
             };
+
+            // Detect 2-part card container (`#block(inset: 0pt, fill: F_body)[ #block(fill: F_hdr)[...] #block[...]]`)
+            let header_bar = match body_blocks.first() {
+                Some(BlockNode::ShapeBlock(hdr))
+                    if hdr.fill.is_some()
+                        && hdr.fill != fill
+                        && (hdr.width_pt - width_pt).abs() <= 6.0 =>
+                {
+                    let Some(BlockNode::ShapeBlock(hdr)) = body_blocks.remove(0).into() else {
+                        unreachable!()
+                    };
+                    Some((hdr.fill, hdr.inset, hdr.stroke, hdr.body))
+                }
+                Some(BlockNode::Table(hdr_tbl))
+                    if hdr_tbl.kind == TableKindIr::StyledContainer
+                        && hdr_tbl.rows.len() == 1
+                        && hdr_tbl.rows[0].cells.len() == 1
+                        && hdr_tbl.rows[0].cells[0].fill.is_some()
+                        && hdr_tbl.rows[0].cells[0].fill != fill =>
+                {
+                    let BlockNode::Table(mut hdr_tbl) = body_blocks.remove(0) else {
+                        unreachable!()
+                    };
+                    let cell = hdr_tbl.rows.remove(0).cells.remove(0);
+                    Some((cell.fill, cell.inset, cell.borders.bottom, cell.blocks))
+                }
+                _ => None,
+            };
+
+            if let Some((hdr_fill, hdr_inset, hdr_stroke, hdr_blocks)) = header_bar {
+                let divider = hdr_stroke.or_else(|| stroke.clone());
+                let hdr_cell = TableCellIr {
+                    x: 0,
+                    y: 0,
+                    colspan: 1,
+                    rowspan: 1,
+                    fill: hdr_fill,
+                    borders: BordersIr {
+                        top: cell_borders.top.clone(),
+                        left: cell_borders.left.clone(),
+                        right: cell_borders.right.clone(),
+                        bottom: divider.clone(),
+                    },
+                    inset: SidesPtIr {
+                        top: 4.5,
+                        bottom: 4.5,
+                        left: hdr_inset.left.clamp(6.0, 12.0),
+                        right: hdr_inset.right.clamp(6.0, 12.0),
+                    },
+                    halign: inherited_align,
+                    valign: VAlignIr::Center,
+                    is_header_cell: false,
+                    blocks: hdr_blocks,
+                };
+                let mut rows = vec![TableRowIr {
+                    height_pt: None,
+                    is_header: false,
+                    cells: vec![hdr_cell],
+                }];
+                if !body_blocks.is_empty() {
+                    let body_cell = TableCellIr {
+                        x: 0,
+                        y: 1,
+                        colspan: 1,
+                        rowspan: 1,
+                        fill,
+                        borders: BordersIr {
+                            top: divider,
+                            left: cell_borders.left,
+                            right: cell_borders.right,
+                            bottom: cell_borders.bottom,
+                        },
+                        inset,
+                        halign: inherited_align,
+                        valign: VAlignIr::Top,
+                        is_header_cell: false,
+                        blocks: body_blocks,
+                    };
+                    rows.push(TableRowIr {
+                        height_pt: None,
+                        is_header: false,
+                        cells: vec![body_cell],
+                    });
+                }
+                let row_heights_pt = vec![0.0; rows.len()];
+                return Some(BlockNode::Table(TableIr {
+                    kind: TableKindIr::StyledContainer,
+                    col_widths_pt: vec![width_pt],
+                    row_heights_pt,
+                    header_rows: 0,
+                    rows,
+                    align: inherited_align,
+                    left_indent_pt: 0.0,
+                    summary: None,
+                }));
+            }
+
             return Some(BlockNode::Table(TableIr {
                 kind: TableKindIr::StyledContainer,
                 col_widths_pt: vec![width_pt],
@@ -250,6 +366,7 @@ impl<'a> ExtractorContext<'a> {
             scale_y: 1.0,
             body: body_blocks,
             align: inherited_align,
+            placed_offset_pt: None,
         }))
     }
 
@@ -267,5 +384,34 @@ impl<'a> ExtractorContext<'a> {
             }
         }
         false
+    }
+
+    fn collect_shape_left_edges(
+        nodes: &[TreeNode],
+        offset: Point,
+        lines: &mut Vec<(f64, f64)>,
+    ) {
+        for node in nodes {
+            match node {
+                TreeNode::Shape { pos, .. } => {
+                    let x = (offset.x + pos.x).to_pt();
+                    let y = (offset.y + pos.y).to_pt();
+                    if x >= 2.0 {
+                        if let Some(existing) = lines.iter_mut().find(|(ly, _)| (*ly - y).abs() < 3.0) {
+                            existing.1 = existing.1.min(x);
+                        } else {
+                            lines.push((y, x));
+                        }
+                    }
+                }
+                TreeNode::Group { pos, children, .. } => {
+                    Self::collect_shape_left_edges(children, offset + *pos, lines);
+                }
+                TreeNode::Element { children, .. } => {
+                    Self::collect_shape_left_edges(children, offset, lines);
+                }
+                _ => {}
+            }
+        }
     }
 }

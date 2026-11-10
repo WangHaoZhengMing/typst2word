@@ -362,7 +362,7 @@ dependencies = [
 
 [[package]]
 name = "compiler"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "comemo",
  "dirs 7.0.0",
@@ -587,7 +587,7 @@ dependencies = [
 
 [[package]]
 name = "docx-writer"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "word-construct",
  "zip",
@@ -665,7 +665,7 @@ dependencies = [
 
 [[package]]
 name = "extract"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "compiler",
  "ecow",
@@ -1381,7 +1381,7 @@ dependencies = [
 
 [[package]]
 name = "ir"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "serde",
 ]
@@ -3029,7 +3029,7 @@ dependencies = [
 
 [[package]]
 name = "typst2word"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "compiler",
  "docx-writer",
@@ -3495,7 +3495,7 @@ dependencies = [
 
 [[package]]
 name = "word-construct"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "ir",
  "serde",

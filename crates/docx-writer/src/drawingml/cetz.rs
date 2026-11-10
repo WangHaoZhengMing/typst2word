@@ -36,6 +36,7 @@ pub fn cetz_canvas_to_drawingml_run(canvas: &CetzCanvasIr) -> String {
             scale_y: 1.0,
             body: Vec::new(),
             align: HAlignIr::Left,
+            placed_offset_pt: None,
         };
         children_xml.push_str(&build_wsp_xml(&bg_shape, Some((0, 0)), cx, cy));
     }
@@ -67,6 +68,7 @@ pub fn cetz_canvas_to_drawingml_run(canvas: &CetzCanvasIr) -> String {
             scale_y: 1.0,
             body: Vec::new(),
             align: HAlignIr::Left,
+            placed_offset_pt: None,
         };
         children_xml.push_str(&build_wsp_xml(&empty_shape, Some((0, 0)), cx, cy));
     }

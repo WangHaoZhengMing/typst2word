@@ -202,7 +202,47 @@ fn custom_realize<'a>(
     };
 
     let is_document = matches!(kind, RealizationKind::Document { .. });
+    let is_par = matches!(kind, RealizationKind::Par);
     let pairs = typst_realize::realize(kind, engine, locator, arenas, target_content, styles)?;
+    if is_par {
+        use typst::introspection::{Tag, TagElem, TagFlags};
+        use typst::model::StrongElem;
+        use typst::text::{FontWeight, TextElem};
+        if pairs.iter().any(|(item, chain)| {
+            item.is::<TextElem>() && chain.get(TextElem::weight) >= FontWeight::SEMIBOLD
+        }) {
+            let mut tagged = Vec::with_capacity(pairs.len() + 4);
+            for (item, chain) in pairs {
+                if item.is::<TextElem>() && chain.get(TextElem::weight) >= FontWeight::SEMIBOLD {
+                    let mut marker = StrongElem::new(Content::empty()).pack();
+                    let key = typst_utils::hash128(&(item, &marker));
+                    let loc = locator.next_location(engine, key, item.span());
+                    marker.set_location(loc);
+                    let flags = TagFlags {
+                        introspectable: false,
+                        tagged: true,
+                    };
+                    tagged.push((
+                        &*arenas
+                            .content
+                            .alloc(TagElem::packed(Tag::Start(marker, flags))),
+                        chain,
+                    ));
+                    tagged.push((item, chain));
+                    tagged.push((
+                        &*arenas
+                            .content
+                            .alloc(TagElem::packed(Tag::End(loc, key, flags))),
+                        chain,
+                    ));
+                } else {
+                    tagged.push((item, chain));
+                }
+            }
+            return Ok(tagged);
+        }
+        return Ok(pairs);
+    }
     if !is_document { return Ok(pairs); }
     // Keep resolved page styles alongside root flow items. These zero-size tags
     // survive layout without changing line breaking, including generated content.

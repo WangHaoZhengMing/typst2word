@@ -141,10 +141,11 @@ impl<'a> TableConstruct<'a> {
                                 matches!(b, BlockNode::Table(_) | BlockNode::Figure { .. })
                             })
                     });
-                let keep_rows_together = kind != TableKindIr::StyledContainer
-                    && !next_row_is_complex_layout
-                    && num_rows <= 15
-                    && row_idx + 1 < num_rows;
+                let keep_rows_together = if kind == TableKindIr::StyledContainer {
+                    num_rows == 2 && row_idx == 0 && row.cells.iter().all(|c| c.blocks.len() <= 1)
+                } else {
+                    !next_row_is_complex_layout && num_rows <= 15 && row_idx + 1 < num_rows
+                };
                 let split_policy =
                     if (kind == TableKindIr::StyledContainer && row.height_pt.is_none())
                         || row_is_complex_layout

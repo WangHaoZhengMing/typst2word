@@ -29,11 +29,16 @@ impl<'a> DocxWriter<'a> {
             let _ = write!(out, r#"<w:ind w:left="{left_indent_dxa}"/>"#);
         }
         Self::render_jc(construct.align, out);
+        let after_dxa = if keep_with_next {
+            80
+        } else {
+            construct.after_dxa
+        };
         let _ = write!(
             out,
             r#"<w:spacing w:before="{}" w:after="{}" w:line="{}" w:lineRule="auto"/><w:rPr><w:sz w:val="{}"/><w:szCs w:val="{}"/></w:rPr></w:pPr>"#,
             construct.before_dxa,
-            construct.after_dxa,
+            after_dxa,
             construct.line_dxa,
             construct.mark_sz_half_pt,
             construct.mark_sz_half_pt

@@ -67,6 +67,17 @@ impl<'a> ExtractorContext<'a> {
                     return;
                 }
 
+                // 2.5. 2D `#place(dx, dy, ...)` positioned canvas group (`#block(width: 100%, height: ...)[ #place(...) ]`).
+                if let Some(placed_para) = self.try_extract_placed_canvas_group(
+                    group,
+                    children,
+                    list_level,
+                    inherited_align,
+                ) {
+                    blocks.push(placed_para);
+                    return;
+                }
+
                 // 3. Regular layout group: extract inner blocks and propagate horizontal offset.
                 let mut inner =
                     self.extract_blocks_from_nodes(children, list_level, inherited_align);
@@ -283,13 +294,39 @@ impl<'a> ExtractorContext<'a> {
             return;
         }
 
-        // 10. Fenced / Block Code (`RawElem`).
+        // 10. Fenced / Block Code (`RawElem`) or Cross-Page Split `RawLine`.
         if let Some(raw) = elem.to_packed::<RawElem>()
             && raw.block.get(StyleChain::default())
         {
             let code_block = self.extract_code_block(raw, children);
             self.report.code_blocks_count += 1;
             blocks.push(code_block);
+            return;
+        }
+        if let Some(raw_line) = elem.to_packed::<typst::text::RawLine>() {
+            let mut runs = Vec::new();
+            Self::collect_raw_line_runs(children, &mut runs);
+            if runs.is_empty() {
+                runs.push(ir::TextRunIr {
+                    text: raw_line.text.to_string(),
+                    font_family: None,
+                    is_code: true,
+                    ..Default::default()
+                });
+            }
+            if let Some(BlockNode::CodeBlock { lines, .. }) = blocks.last_mut() {
+                lines.push(runs);
+                Self::normalize_empty_code_line_metrics(lines);
+            } else {
+                let mut lines = vec![runs];
+                Self::normalize_empty_code_line_metrics(&mut lines);
+                blocks.push(BlockNode::CodeBlock {
+                    lang: None,
+                    lines,
+                    fill: None,
+                    stroke: None,
+                });
+            }
             return;
         }
 
@@ -439,5 +476,199 @@ impl<'a> ExtractorContext<'a> {
             }
         }
         blocks.extend(child_blocks);
+    }
+
+    fn unwrap_placed_child(mut node: &TreeNode) -> &TreeNode {
+        while let TreeNode::Element { elem, children, .. } = node {
+            if elem.is::<ImageElem>() || Self::is_native_shape_elem(elem) || children.len() != 1 {
+                break;
+            }
+            node = &children[0];
+        }
+        node
+    }
+
+    fn try_extract_placed_canvas_group(
+        &mut self,
+        group: &typst::layout::GroupItem,
+        children: &[TreeNode],
+        list_level: usize,
+        inherited_align: HAlignIr,
+    ) -> Option<BlockNode> {
+        let gw_pt = group.frame.size().x.to_pt();
+        let gh_pt = group.frame.size().y.to_pt();
+        if gw_pt < 200.0 || gh_pt < 40.0 || children.len() < 3 {
+            return None;
+        }
+
+        // Check if children represent 2D `#place(dx, dy)` items (overlapping Y spans with distinct X offsets >= 60pt).
+        let mut item_boxes: Vec<(f64, f64, f64, f64)> = Vec::new();
+        for raw_ch in children {
+            match Self::unwrap_placed_child(raw_ch) {
+                TreeNode::Group { group: cg, pos, .. } => {
+                    item_boxes.push((
+                        pos.x.to_pt(),
+                        pos.y.to_pt(),
+                        cg.frame.size().x.to_pt(),
+                        cg.frame.size().y.to_pt(),
+                    ));
+                }
+                TreeNode::Element { elem, pos, children: ec, .. } => {
+                    if elem.is::<ImageElem>() {
+                        let (bx, by, bw, bh) = Self::estimate_nodes_bbox(ec);
+                        item_boxes.push((bx, by, bw.max(10.0), bh.max(2.0)));
+                    } else if Self::is_native_shape_elem(elem) {
+                        let sh = ec.iter().find_map(|n| match n {
+                            TreeNode::Shape { shape, pos: sp, .. } => {
+                                let bsz = shape.geometry.bbox(None).size();
+                                Some((
+                                    sp.x.to_pt(),
+                                    sp.y.to_pt(),
+                                    bsz.x.to_pt().abs(),
+                                    bsz.y.to_pt().abs(),
+                                ))
+                            }
+                            _ => None,
+                        });
+                        let (bx, by, bw, bh) =
+                            sh.unwrap_or((pos.x.to_pt(), pos.y.to_pt(), 10.0, 2.0));
+                        item_boxes.push((bx, by, bw.max(10.0), bh.max(2.0)));
+                    } else {
+                        return None;
+                    }
+                }
+                _ => return None,
+            }
+        }
+
+        let has_2d_overlap = item_boxes.iter().enumerate().any(|(i, &(xa, ya, _wa, ha))| {
+            item_boxes.iter().skip(i + 1).any(|&(xb, yb, _wb, hb)| {
+                (xa - xb).abs() >= 60.0
+                    && (xa >= 60.0 || xb >= 60.0)
+                    && ya < yb + hb - 2.0
+                    && yb < ya + ha - 2.0
+            })
+        });
+        if !has_2d_overlap {
+            return None;
+        }
+
+        let mut inlines: Vec<ir::InlineNode> = Vec::new();
+        // Invisible inline spacer reserving `gh_pt` vertical height in normal flow.
+        inlines.push(ir::InlineNode::ShapeInline(ir::ShapeIr {
+            kind: ir::ShapeKindIr::Rect,
+            width_pt: 1.0,
+            height_pt: gh_pt,
+            fill: None,
+            fill_rule_even_odd: false,
+            stroke: None,
+            borders: ir::BordersIr::default(),
+            corner_radius_pt: None,
+            inset: ir::SidesPtIr::zero(),
+            rotation_deg: 0.0,
+            scale_x: 1.0,
+            scale_y: 1.0,
+            body: Vec::new(),
+            align: HAlignIr::Left,
+            placed_offset_pt: None,
+        }));
+
+        for raw_ch in children {
+            match Self::unwrap_placed_child(raw_ch) {
+                TreeNode::Element {
+                    elem,
+                    pos,
+                    children: ec,
+                    ..
+                } if elem.is::<ImageElem>() => {
+                    if let Some(img_elem) = elem.to_packed::<ImageElem>()
+                        && let Some(mut img_ir) =
+                            self.extract_image_elem(img_elem, ec, HAlignIr::Left)
+                    {
+                        let img_pos = ec
+                            .iter()
+                            .find_map(|n| match n {
+                                TreeNode::Image { pos: ip, .. } => Some(*ip),
+                                _ => None,
+                            })
+                            .unwrap_or(*pos);
+                        img_ir.placed_offset_pt = Some((img_pos.x.to_pt(), img_pos.y.to_pt()));
+                        self.report.images_count += 1;
+                        inlines.push(ir::InlineNode::ImageInline(img_ir));
+                    }
+                }
+                TreeNode::Element {
+                    elem,
+                    pos,
+                    children: ec,
+                    ..
+                } if Self::is_native_shape_elem(elem) => {
+                    if let Some(mut shape_ir) = self.extract_native_shape_elem(
+                        elem,
+                        *pos,
+                        ec,
+                        list_level,
+                        HAlignIr::Left,
+                        0.0,
+                        (1.0, 1.0),
+                    ) {
+                        let sh_pos = ec
+                            .iter()
+                            .find_map(|n| match n {
+                                TreeNode::Shape { pos: sp, .. } => Some(*sp),
+                                _ => None,
+                            })
+                            .unwrap_or(*pos);
+                        shape_ir.placed_offset_pt = Some((sh_pos.x.to_pt(), sh_pos.y.to_pt()));
+                        self.report.shapes_count += 1;
+                        inlines.push(ir::InlineNode::ShapeInline(shape_ir));
+                    }
+                }
+                TreeNode::Group {
+                    group: cg,
+                    pos: cpos,
+                    children: cchildren,
+                } => {
+                    let cw_pt = cg.frame.size().x.to_pt();
+                    let ch_pt = cg.frame.size().y.to_pt();
+                    let prev_gw = self.active_group_width_pt;
+                    self.active_group_width_pt = Some(cw_pt);
+                    let sub_blocks =
+                        self.extract_blocks_from_nodes(cchildren, list_level, inherited_align);
+                    self.active_group_width_pt = prev_gw;
+                    self.report.shapes_count += 1;
+                    inlines.push(ir::InlineNode::ShapeInline(ir::ShapeIr {
+                        kind: ir::ShapeKindIr::Rect,
+                        width_pt: cw_pt.max(20.0),
+                        height_pt: (ch_pt + 20.0).max(24.0),
+                        fill: None,
+                        fill_rule_even_odd: false,
+                        stroke: None,
+                        borders: ir::BordersIr::default(),
+                        corner_radius_pt: None,
+                        inset: ir::SidesPtIr::zero(),
+                        rotation_deg: 0.0,
+                        scale_x: 1.0,
+                        scale_y: 1.0,
+                        body: sub_blocks,
+                        align: HAlignIr::Left,
+                        placed_offset_pt: Some((cpos.x.to_pt(), cpos.y.to_pt())),
+                    }));
+                }
+                _ => {}
+            }
+        }
+
+        Some(BlockNode::Paragraph {
+            content: inlines,
+            style: ir::ParagraphStyleIr {
+                align: HAlignIr::Left,
+                space_before_pt: 0.0,
+                space_after_pt: 0.0,
+                line_spacing_pt: None,
+                ..Default::default()
+            },
+            bookmark: None,
+        })
     }
 }

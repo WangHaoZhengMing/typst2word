@@ -157,6 +157,15 @@ impl<'a> ExtractorContext<'a> {
                         continue;
                     }
 
+                    if let (Some(prev_y), Some(prev_x_end)) = (*last_y, *last_x_end)
+                        && (pos.y.to_pt() - prev_y).abs() <= 12.0
+                    {
+                        let gap_pt = pos.x.to_pt() - prev_x_end;
+                        if gap_pt > 2.0 {
+                            out.push(InlineNode::HorizontalSpace { width_pt: gap_pt });
+                        }
+                    }
+
                     if self.try_extract_inline_box_group(
                         group, *pos, children, out, state, last_y, last_x_end,
                     ) {
@@ -303,9 +312,19 @@ impl<'a> ExtractorContext<'a> {
                 (1.0, 1.0),
             )
         {
+            if let (Some(prev_y), Some(prev_x_end)) = (*last_y, *last_x_end)
+                && (pos.y.to_pt() - prev_y).abs() <= 10.0
+            {
+                let gap_pt = pos.x.to_pt() - prev_x_end;
+                if gap_pt > 1.5 {
+                    out.push(InlineNode::HorizontalSpace { width_pt: gap_pt });
+                }
+            }
+            let w_pt = shape_ir.width_pt;
             self.report.shapes_count += 1;
             out.push(InlineNode::ShapeInline(shape_ir));
-            *last_x_end = None;
+            *last_y = Some(pos.y.to_pt());
+            *last_x_end = Some(pos.x.to_pt() + w_pt);
             return;
         }
 

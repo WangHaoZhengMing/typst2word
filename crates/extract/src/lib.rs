@@ -84,6 +84,8 @@ pub(crate) struct ExtractorContext<'a> {
     pub(crate) pending_split_group: Option<frame_tree::PendingSplitGroup>,
     /// Recursion depth inside `FrameItem::Group` frames during `build_frame_tree`.
     pub(crate) group_tree_depth: usize,
+    /// Width of the currently active local `Group` frame (for alignment inference inside sub-frames).
+    pub(crate) active_group_width_pt: Option<f64>,
 }
 
 impl<'a> ExtractorContext<'a> {
@@ -112,6 +114,7 @@ impl<'a> ExtractorContext<'a> {
             pending_list_marker: None,
             pending_split_group: None,
             group_tree_depth: 0,
+            active_group_width_pt: None,
         }
     }
 

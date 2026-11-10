@@ -13,6 +13,7 @@ impl<'a> DocxWriter<'a> {
   <w:doNotExpandShiftReturn/>
   <w:compat>
     <w:useFELayout/>
+    <w:doNotExpandShiftReturn/>
     <w:noColumnBalance/>
     <w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="15"/>
   </w:compat>
@@ -48,6 +49,7 @@ impl<'a> DocxWriter<'a> {
   <w:autoSpaceDN w:val="1"/>
   <w:doNotExpandShiftReturn/>
   <w:compat>
+    <w:doNotExpandShiftReturn/>
     <w:noColumnBalance/>{compat_mode}
   </w:compat>
   <m:mathPr>

@@ -125,6 +125,7 @@ impl<'a> ExtractorContext<'a> {
             scale_y: 1.0,
             body,
             align,
+            placed_offset_pt: None,
         })
     }
 }

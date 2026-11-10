@@ -52,37 +52,60 @@ pub fn coalesce_adjacent_text_runs(inlines: &mut Vec<InlineNode>) {
     }
 }
 
-/// Merge adjacent 1-cell styled container tables produced when a single
+/// Merge adjacent styled container tables produced when a single
 /// `#block(stroke: ..., fill: ...)[...]` broke across columns or pages in Typst.
 pub fn merge_split_styled_containers(blocks: &mut Vec<BlockNode>) {
     let mut i = 1;
     while i < blocks.len() {
-        let can_merge = match (&blocks[i - 1], &blocks[i]) {
-            (BlockNode::Table(a), BlockNode::Table(b)) => {
-                a.kind == TableKindIr::StyledContainer
+        let merge_mode = match (&blocks[i - 1], &blocks[i]) {
+            (BlockNode::Table(a), BlockNode::Table(b))
+                if a.kind == TableKindIr::StyledContainer
                     && b.kind == TableKindIr::StyledContainer
-                    && a.rows.len() == 1
+                    && (1..=2).contains(&a.rows.len())
                     && b.rows.len() == 1
-                    && a.rows[0].cells.len() == 1
-                    && b.rows[0].cells.len() == 1
+                    && a.rows.iter().all(|r| r.cells.len() == 1)
+                    && b.rows[0].cells.len() == 1 =>
+            {
+                let a_last = &a.rows.last().unwrap().cells[0];
+                let b_cell = &b.rows[0].cells[0];
+                if a_last.fill == b_cell.fill && a_last.borders == b_cell.borders {
+                    Some(true) // Append into `a.rows.last()`
+                } else if a.rows.len() == 1
+                    && a_last.borders.left == b_cell.borders.left
+                    && a_last.borders.right == b_cell.borders.right
+                    && a_last.blocks.len() == 1
+                    && matches!(b_cell.blocks.first(), Some(BlockNode::CodeBlock { .. }))
+                {
+                    Some(false) // Append `b.rows[0]` as `a.rows[1]` (split between card header and code body)
+                } else {
+                    None
+                }
             }
-            _ => false,
+            _ => None,
         };
-        if !can_merge {
+        let Some(append_into_last_row) = merge_mode else {
             i += 1;
             continue;
-        }
+        };
 
         let BlockNode::Table(mut b) = blocks.remove(i) else {
             unreachable!()
         };
         if let BlockNode::Table(a) = &mut blocks[i - 1] {
+            if !append_into_last_row {
+                let mut body_row = b.rows.remove(0);
+                body_row.cells[0].y = 1;
+                a.rows.push(body_row);
+                a.row_heights_pt.push(0.0);
+                continue;
+            }
             let b_cell = &mut b.rows[0].cells[0];
             let mut b_blocks = std::mem::take(&mut b_cell.blocks);
-            let starts_with_single_list_item = matches!(
-                b_blocks.first(),
-                Some(BlockNode::List { items, .. }) if items.len() == 1
-            );
+            let starts_with_single_list_item = a.rows.len() == 1
+                && matches!(
+                    b_blocks.first(),
+                    Some(BlockNode::List { items, .. }) if items.len() == 1
+                );
             if starts_with_single_list_item && b_blocks.len() > 1 {
                 let a_inset_l = a.rows[0].cells[0].inset.left;
                 let a_inset_r = a.rows[0].cells[0].inset.right;
@@ -113,7 +136,7 @@ pub fn merge_split_styled_containers(blocks: &mut Vec<BlockNode>) {
                     cells: vec![row2_cell],
                 });
             } else {
-                let a_blocks = &mut a.rows[0].cells[0].blocks;
+                let a_blocks = &mut a.rows.last_mut().unwrap().cells[0].blocks;
                 if let (
                     Some(BlockNode::Enum {
                         items: a_items,
@@ -139,6 +162,42 @@ pub fn merge_split_styled_containers(blocks: &mut Vec<BlockNode>) {
                 {
                     if let BlockNode::List { items: b_items, .. } = b_blocks.remove(0) {
                         a_items.extend(b_items);
+                    }
+                } else if let (
+                    Some(BlockNode::CodeBlock {
+                        lines: a_lines,
+                        fill: a_fill,
+                        stroke: a_stroke,
+                        ..
+                    }),
+                    Some(BlockNode::CodeBlock {
+                        fill: b_fill,
+                        stroke: b_stroke,
+                        ..
+                    }),
+                ) = (a_blocks.last_mut(), b_blocks.first())
+                    && *a_fill == *b_fill
+                    && *a_stroke == *b_stroke
+                {
+                    if let BlockNode::CodeBlock { lines: b_lines, .. } = b_blocks.remove(0) {
+                        a_lines.extend(b_lines);
+                        let base_font = a_lines
+                            .iter()
+                            .flatten()
+                            .find(|r| r.font_size_pt.is_some())
+                            .map(|r| (r.font_family.clone(), r.font_size_pt));
+                        if let Some((fam, sz)) = base_font {
+                            for line in a_lines.iter_mut() {
+                                for run in line.iter_mut() {
+                                    if run.font_size_pt.is_none() {
+                                        run.font_size_pt = sz;
+                                    }
+                                    if run.font_family.is_none() {
+                                        run.font_family = fam.clone();
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
                 a_blocks.extend(b_blocks);

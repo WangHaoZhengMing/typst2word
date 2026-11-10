@@ -27,6 +27,7 @@ impl<'a> ExtractorContext<'a> {
 
         let mut lines: Vec<Vec<TextRunIr>> = Vec::new();
         Self::collect_raw_lines(children, &mut lines);
+        Self::normalize_empty_code_line_metrics(&mut lines);
 
         // Fallback if no `RawLine` tags were found: use `raw.lines` or `raw.text`.
         if lines.is_empty() {
@@ -121,6 +122,25 @@ impl<'a> ExtractorContext<'a> {
                     Self::collect_raw_line_runs(children, runs);
                 }
                 _ => {}
+            }
+        }
+    }
+
+    pub(crate) fn normalize_empty_code_line_metrics(lines: &mut [Vec<TextRunIr>]) {
+        let sample = lines.iter().flatten().find_map(|r| {
+            r.font_size_pt
+                .map(|sz| (r.font_family.clone(), sz))
+        });
+        if let Some((fam, sz)) = sample {
+            for line in lines.iter_mut() {
+                for r in line.iter_mut() {
+                    if r.font_size_pt.is_none() {
+                        r.font_size_pt = Some(sz);
+                    }
+                    if r.font_family.is_none() {
+                        r.font_family = fam.clone();
+                    }
+                }
             }
         }
     }

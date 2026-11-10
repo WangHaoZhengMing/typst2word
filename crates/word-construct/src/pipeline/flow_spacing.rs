@@ -47,6 +47,24 @@ pub fn resolve_paragraph_style_spacing(style: &mut ParagraphStyleIr) {
 
     // 2. Resolve direct block-to-block gap from raw `flow_measure.self_span` and `flow_measure.next`.
     if let Some(next) = style.flow_measure.next {
+        if let ParagraphPdfMetricsIr::Measured {
+            par_spacing_pt,
+            par_leading_pt,
+            ..
+        } = style.pdf_metrics
+            && (par_spacing_pt - par_leading_pt).abs() < 0.1
+            && let (Some((pa, bottom_a)), Some((pb, top_b))) = (
+                style.flow_measure.self_span.end_page_and_bottom_y(),
+                next.span.start_page_and_top_y(),
+            )
+            && pa == pb
+            && top_b >= bottom_a
+        {
+            let gap_pt = top_b - bottom_a;
+            if gap_pt > par_leading_pt + 1.5 && gap_pt <= 48.0 {
+                style.space_after_pt = (gap_pt - par_leading_pt).max(0.0);
+            }
+        }
         apply_direct_paragraph_transition(
             &mut style.space_after_pt,
             style.flow_measure.self_span,

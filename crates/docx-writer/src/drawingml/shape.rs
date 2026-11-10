@@ -24,6 +24,46 @@ pub fn shape_to_drawingml_run(shape: &ShapeIr) -> String {
 
     let wsp_xml = build_wsp_xml(shape, None, cx, cy);
 
+    if let Some((dx_pt, dy_pt)) = shape.placed_offset_pt {
+        let dx_emu = pt_to_emu(dx_pt);
+        let dy_emu = pt_to_emu(dy_pt);
+        return format!(
+            concat!(
+                r#"<w:r>"#,
+                r#"<w:drawing>"#,
+                r#"<wp:anchor distT="0" distB="0" distL="0" distR="0" simplePos="0" relativeHeight="25165824" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1" "#,
+                r#"xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" "#,
+                r#"xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" "#,
+                r#"xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" "#,
+                r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" "#,
+                r#"xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math">"#,
+                r#"<wp:simplePos x="0" y="0"/>"#,
+                r#"<wp:positionH relativeFrom="column"><wp:posOffset>{dx_emu}</wp:posOffset></wp:positionH>"#,
+                r#"<wp:positionV relativeFrom="paragraph"><wp:posOffset>{dy_emu}</wp:posOffset></wp:positionV>"#,
+                r#"<wp:extent cx="{cx}" cy="{cy}"/>"#,
+                r#"<wp:effectExtent l="{pad}" t="{pad}" r="{pad}" b="{pad}"/>"#,
+                r#"<wp:wrapNone/>"#,
+                r#"<wp:docPr id="{id}" name="TypstShape_{id}"/>"#,
+                r#"<wp:cNvGraphicFramePr/>"#,
+                r#"<a:graphic>"#,
+                r#"<a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">"#,
+                r#"{wsp}"#,
+                r#"</a:graphicData>"#,
+                r#"</a:graphic>"#,
+                r#"</wp:anchor>"#,
+                r#"</w:drawing>"#,
+                r#"</w:r>"#
+            ),
+            dx_emu = dx_emu,
+            dy_emu = dy_emu,
+            cx = cx,
+            cy = cy,
+            pad = stroke_pad_emu,
+            id = draw_id,
+            wsp = wsp_xml
+        );
+    }
+
     format!(
         concat!(
             r#"<w:r>"#,
@@ -108,6 +148,8 @@ pub(crate) fn build_wsp_xml(
     let is_line_connector = matches!(shape.kind, ShapeKindIr::Line { .. }) && shape.body.is_empty();
     let c_nv_tag = if is_line_connector {
         "<wps:cNvCnPr/>"
+    } else if !shape.body.is_empty() {
+        r#"<wps:cNvSpPr txBox="1"/>"#
     } else {
         r#"<wps:cNvSpPr/>"#
     };

@@ -122,7 +122,18 @@ impl ParagraphConstruct {
             if cur_sz <= 13.5 && next_sz >= 15.0 && next_sz >= cur_sz + 2.0 {
                 adj_style.space_after_pt =
                     (adj_style.space_after_pt - (next_sz - cur_sz) * 1.2).max(0.0);
-            } else if cur_sz <= 14.5 && next_sz <= 14.5 && (next_sz - cur_sz).abs() >= 0.5 {
+            } else if cur_sz <= 14.5
+                && next_sz <= 14.5
+                && (next_sz - cur_sz).abs() >= 0.5
+                && !matches!(
+                    style.pdf_metrics,
+                    ir::ParagraphPdfMetricsIr::Measured {
+                        par_spacing_pt,
+                        par_leading_pt,
+                        ..
+                    } if (par_spacing_pt - par_leading_pt).abs() < 0.1
+                )
+            {
                 let max_sz = cur_sz.max(next_sz);
                 adj_style.space_after_pt =
                     (1.20 * max_sz - 0.65 * cur_sz - 0.229 * (next_sz - cur_sz)).max(1.5);

@@ -136,7 +136,7 @@ impl ParagraphStyleIr {
 }
 
 /// Stroke style for borders, lines, and vector shapes.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StrokeIr {
     pub color: ColorHex,
     pub thickness_pt: f64,
@@ -185,7 +185,7 @@ pub enum LineJoinIr {
 }
 
 /// Four-sided border strokes (e.g. for table cells or rectangular blocks).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct BordersIr {
     pub top: Option<StrokeIr>,
     pub bottom: Option<StrokeIr>,

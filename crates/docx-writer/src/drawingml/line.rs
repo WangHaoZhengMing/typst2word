@@ -25,7 +25,7 @@ pub(crate) fn build_ln_xml(stroke: Option<&StrokeIr>) -> String {
         DashPatternIr::DashDotDot => "lgDashDotDot",
     };
     let join_xml = match s.join {
-        LineJoinIr::Miter => r#"<a:miter lim="800000"/>"#,
+        LineJoinIr::Miter => r#"<a:miter lim="320000"/>"#,
         LineJoinIr::Round => r#"<a:round/>"#,
         LineJoinIr::Bevel => r#"<a:bevel/>"#,
     };

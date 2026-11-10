@@ -159,6 +159,7 @@ impl<'a> ExtractorContext<'a> {
                     scale_y: scale.1,
                     body,
                     align: inherited_align,
+                    placed_offset_pt: None,
                 });
             }
         }
@@ -305,6 +306,7 @@ impl<'a> ExtractorContext<'a> {
             scale_y: scale.1,
             body: body_blocks,
             align: inherited_align,
+            placed_offset_pt: None,
         })
     }
 }

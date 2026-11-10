@@ -84,6 +84,7 @@ impl<'a> ExtractorContext<'a> {
             height_pt,
             alt,
             align,
+            placed_offset_pt: None,
         })
     }
 }

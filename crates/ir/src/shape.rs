@@ -23,6 +23,8 @@ pub struct ShapeIr {
     /// Optional content inside the shape (e.g. `#rect[Hello]` or `#circle[A]`).
     pub body: Vec<BlockNode>,
     pub align: HAlignIr,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placed_offset_pt: Option<(f64, f64)>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

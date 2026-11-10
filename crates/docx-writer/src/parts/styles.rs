@@ -102,7 +102,7 @@ impl<'a> DocxWriter<'a> {
     <w:name w:val="caption"/>
     <w:basedOn w:val="Normal"/>
     <w:qFormat/>
-    <w:rPr><w:sz w:val="20"/><w:szCs w:val="20"/><w:color w:val="475569"/></w:rPr>
+    <w:rPr><w:sz w:val="20"/><w:szCs w:val="20"/></w:rPr>
   </w:style>
   <w:style w:type="paragraph" w:styleId="FootnoteText">
     <w:name w:val="footnote text"/>

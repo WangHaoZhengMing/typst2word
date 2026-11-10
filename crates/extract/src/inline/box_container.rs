@@ -62,29 +62,14 @@ impl<'a> ExtractorContext<'a> {
             return false;
         }
 
-        let inner_text = Self::nodes_to_plain_text(&content_children);
-        if inner_text.trim().is_empty() {
-            // Empty / whitespace-only inline `#box(width: 4em, stroke: (bottom: 0.5pt))`:
-            // emit only the shape so whitespace doesn't offset the underline!
-            let mut inner_y = None;
-            let mut inner_x = None;
-            self.extract_inlines_from_nodes(&shape_nodes, out, state, &mut inner_y, &mut inner_x);
-            *last_x_end = Some(pos.x.to_pt() + group.frame.size().x.to_pt());
-            return true;
-        }
-
-        // Non-empty inline `#box`: distinguish a thin bottom-underline strip from a 4-sided box fill/stroke.
         let is_bottom_line_only = bg_shapes.len() == 1 && {
             let b = bg_shapes[0].1.geometry.bbox(None).size();
             matches!(bg_shapes[0].1.geometry, Geometry::Line(_))
                 || (b.y.to_pt().abs() <= 2.5 && b.x.to_pt().abs() >= 6.0)
         };
-        let prev_hl = state.highlight.clone();
-        let prev_bdr = state.border.clone();
-        let prev_ul = state.underline.clone();
-        if is_bottom_line_only {
+        let bottom_ul_stroke = is_bottom_line_only.then(|| {
             let s = &bg_shapes[0].1;
-            let st = s.stroke.as_ref().map(Self::fixed_stroke_to_ir).or_else(|| {
+            s.stroke.as_ref().map(Self::fixed_stroke_to_ir).or_else(|| {
                 let color = s
                     .fill
                     .as_ref()
@@ -96,8 +81,38 @@ impl<'a> ExtractorContext<'a> {
                     thickness_pt: th,
                     ..Default::default()
                 })
-            });
-            state.underline = st;
+            })
+        }).flatten();
+
+        let box_w_pt = group.frame.size().x.to_pt();
+        let inner_text = Self::nodes_to_plain_text(&content_children);
+        if inner_text.trim().is_empty() {
+            if let Some(ul) = bottom_ul_stroke {
+                let sz_pt = 9.0;
+                let space_w_pt = sz_pt * 0.25;
+                let count = (box_w_pt / space_w_pt).round().max(1.0) as usize;
+                out.push(InlineNode::Text(ir::TextRunIr {
+                    text: "\u{00A0}".repeat(count),
+                    font_family: Some("Times New Roman".to_string()),
+                    font_size_pt: Some(sz_pt),
+                    underline: Some(ul),
+                    ..Default::default()
+                }));
+                *last_x_end = Some(pos.x.to_pt() + box_w_pt);
+                return true;
+            }
+            let mut inner_y = None;
+            let mut inner_x = None;
+            self.extract_inlines_from_nodes(&shape_nodes, out, state, &mut inner_y, &mut inner_x);
+            *last_x_end = Some(pos.x.to_pt() + box_w_pt);
+            return true;
+        }
+
+        let prev_hl = state.highlight.clone();
+        let prev_bdr = state.border.clone();
+        let prev_ul = state.underline.clone();
+        if is_bottom_line_only {
+            state.underline = bottom_ul_stroke.clone();
         } else {
             let box_fill = bg_shapes
                 .iter()
@@ -114,11 +129,57 @@ impl<'a> ExtractorContext<'a> {
         }
         let mut inner_y = None;
         let mut inner_x = None;
-        self.extract_inlines_from_nodes(&content_children, out, state, &mut inner_y, &mut inner_x);
+        if let Some(ref ul) = bottom_ul_stroke {
+            let (min_x, _min_y, text_w, _text_h) = Self::estimate_nodes_bbox(&content_children);
+            let mut box_inlines = Vec::new();
+            self.extract_inlines_from_nodes(
+                &content_children,
+                &mut box_inlines,
+                state,
+                &mut inner_y,
+                &mut inner_x,
+            );
+            let sz_pt = box_inlines
+                .iter()
+                .find_map(|n| match n {
+                    InlineNode::Text(r) => r.font_size_pt,
+                    _ => None,
+                })
+                .unwrap_or(9.0);
+            let space_w_pt = (sz_pt * 0.25).max(1.5);
+            if min_x.is_finite() && min_x > 1.5 {
+                let lead_count = (min_x / space_w_pt).round().max(1.0) as usize;
+                out.push(InlineNode::Text(ir::TextRunIr {
+                    text: "\u{00A0}".repeat(lead_count),
+                    font_family: Some("Times New Roman".to_string()),
+                    font_size_pt: Some(sz_pt),
+                    underline: Some(ul.clone()),
+                    ..Default::default()
+                }));
+            }
+            out.extend(box_inlines);
+            let used_end_x = if min_x.is_finite() {
+                (min_x + text_w).max(0.0)
+            } else {
+                text_w.max(0.0)
+            };
+            if box_w_pt - used_end_x > 1.5 {
+                let trail_count = ((box_w_pt - used_end_x) / space_w_pt).round().max(1.0) as usize;
+                out.push(InlineNode::Text(ir::TextRunIr {
+                    text: "\u{00A0}".repeat(trail_count),
+                    font_family: Some("Times New Roman".to_string()),
+                    font_size_pt: Some(sz_pt),
+                    underline: Some(ul.clone()),
+                    ..Default::default()
+                }));
+            }
+        } else {
+            self.extract_inlines_from_nodes(&content_children, out, state, &mut inner_y, &mut inner_x);
+        }
         state.highlight = prev_hl;
         state.border = prev_bdr;
         state.underline = prev_ul;
-        *last_x_end = Some(pos.x.to_pt() + group.frame.size().x.to_pt());
+        *last_x_end = Some(pos.x.to_pt() + box_w_pt);
         true
     }
 }

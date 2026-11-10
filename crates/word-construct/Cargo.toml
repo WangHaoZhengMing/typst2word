@@ -1,6 +1,6 @@
 [package]
 name = "word-construct"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 description = "Spatial, line-breaking, pagination, preprocessing pipeline, and per-object layout model for Microsoft Word (OOXML WordprocessingML)"
 
