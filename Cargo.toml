@@ -6,6 +6,7 @@ members = [
     "crates/extract",
     "crates/word-construct",
     "crates/docx-writer",
+    "crates/visual-test",
 ]
 default-members = ["."]
 
