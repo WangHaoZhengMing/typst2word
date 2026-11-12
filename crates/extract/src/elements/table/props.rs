@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use typst::foundations::{Content, Smart, StyleChain};
-use typst::layout::grid::resolve::Cell;
+use typst::layout::grid::resolve::{Cell, CellGrid};
 use typst::layout::{GridCell, GridElem};
 use typst::model::{EnumElem, ListElem, TableCell, TableElem};
 use typst::pdf::TableCellKind;
@@ -121,13 +121,67 @@ impl<'a> ExtractorContext<'a> {
             .unwrap_or(1)
     }
 
-    pub(crate) fn extract_cell_borders(cell: &Cell, _is_semantic_table: bool) -> BordersIr {
-        BordersIr {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn extract_cell_borders(
+        grid: &CellGrid,
+        cell: &Cell,
+        x: usize,
+        y: usize,
+        colspan: usize,
+        rowspan: usize,
+        num_cols: usize,
+        num_rows: usize,
+        _is_semantic_table: bool,
+    ) -> BordersIr {
+        let mut borders = BordersIr {
             top: cell.stroke.top.as_deref().map(Self::abs_stroke_to_ir),
             bottom: cell.stroke.bottom.as_deref().map(Self::abs_stroke_to_ir),
             left: cell.stroke.left.as_deref().map(Self::abs_stroke_to_ir),
             right: cell.stroke.right.as_deref().map(Self::abs_stroke_to_ir),
+        };
+
+        if !cell.stroke_overridden.top
+            && let Some(lines) = grid.hlines.get(y)
+        {
+            for line in lines {
+                let end = line.end.map_or(num_cols, |e| e.get());
+                if (line.start..end).contains(&x) {
+                    borders.top = line.stroke.as_deref().map(Self::abs_stroke_to_ir);
+                }
+            }
         }
+        if !cell.stroke_overridden.bottom
+            && let Some(lines) = grid.hlines.get(y + rowspan.max(1))
+        {
+            for line in lines {
+                let end = line.end.map_or(num_cols, |e| e.get());
+                if (line.start..end).contains(&x) {
+                    borders.bottom = line.stroke.as_deref().map(Self::abs_stroke_to_ir);
+                }
+            }
+        }
+        if !cell.stroke_overridden.left
+            && let Some(lines) = grid.vlines.get(x)
+        {
+            for line in lines {
+                let end = line.end.map_or(num_rows, |e| e.get());
+                if (line.start..end).contains(&y) {
+                    borders.left = line.stroke.as_deref().map(Self::abs_stroke_to_ir);
+                }
+            }
+        }
+        if !cell.stroke_overridden.right
+            && let Some(lines) = grid.vlines.get(x + colspan.max(1))
+        {
+            for line in lines {
+                let end = line.end.map_or(num_rows, |e| e.get());
+                if (line.start..end).contains(&y) {
+                    borders.right = line.stroke.as_deref().map(Self::abs_stroke_to_ir);
+                }
+            }
+        }
+
+        borders
     }
 
     pub(crate) fn extract_cell_props(

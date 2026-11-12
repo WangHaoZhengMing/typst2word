@@ -154,7 +154,22 @@ impl<'a> ExtractorContext<'a> {
             if total_fr > 0.0 {
                 let col_w = self.current_column_width_pt();
                 let (col_count, col_gutter) = self.active_columns;
-                let right_bound = if col_count > 1 && col_min_x[0] >= self.content_left_pt - 4.0 {
+                let mut inside_inset_container = false;
+                let right_bound = if let Some((gl, gr)) = self.active_group_bounds_pt {
+                    if col_min_x[0] < 4.0 && avail_w_pt < gr - 2.0 {
+                        inside_inset_container = true;
+                        avail_w_pt
+                    } else if self.container_inset_pt > 0.1
+                        && (gl + 2.0..=gl + 30.0).contains(&col_min_x[0])
+                    {
+                        inside_inset_container = true;
+                        gr - (col_min_x[0] - gl)
+                    } else {
+                        gr
+                    }
+                } else if col_min_x[0] < self.content_left_pt - 4.0 {
+                    avail_w_pt
+                } else if col_count > 1 && col_min_x[0] >= self.content_left_pt - 4.0 {
                     let cidx = (((col_min_x[0] - self.content_left_pt).max(0.0))
                         / (col_w + col_gutter).max(1.0))
                     .floor() as usize;
@@ -164,8 +179,17 @@ impl<'a> ExtractorContext<'a> {
                 } else {
                     self.content_right_pt
                 };
+                let extra_pad = if col_fr[num_cols - 1] == 0.0 { 4.0 } else { 0.0 };
                 col_widths_pt[num_cols - 1] =
-                    (right_bound - col_min_x[num_cols - 1] + 4.0).max(24.0);
+                    (right_bound - col_min_x[num_cols - 1] + extra_pad).max(24.0);
+                if inside_inset_container
+                    && extra_pad > 0.0
+                    && let Some(fr_idx) = (0..num_cols - 1)
+                        .rev()
+                        .find(|&i| col_fr[i] > 0.0 && col_widths_pt[i] > extra_pad + 36.0)
+                {
+                    col_widths_pt[fr_idx] -= extra_pad;
+                }
             }
         }
 
@@ -190,7 +214,14 @@ impl<'a> ExtractorContext<'a> {
         let inferred_center_align = !is_semantic_table
             && total_fr == 0.0
             && col_min_x.first().is_some_and(|&x0| {
-                if x0 >= self.content_left_pt - 4.0 {
+                if let Some((gl, gr)) = self.active_group_bounds_pt {
+                    let left_gap = x0 - gl;
+                    let right_gap = gr - (x0 + total_table_w);
+                    left_gap > 20.0
+                        && right_gap > 20.0
+                        && total_table_w < (gr - gl) - 40.0
+                        && (left_gap - right_gap).abs() <= 18.0
+                } else if x0 >= self.content_left_pt - 4.0 {
                     let right_gap = self.content_right_pt - (x0 + total_table_w);
                     let left_gap_page = x0 - self.content_left_pt;
                     let left_gap_avail = x0 - (self.content_right_pt - avail_w_pt);

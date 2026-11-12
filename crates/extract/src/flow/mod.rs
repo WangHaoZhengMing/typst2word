@@ -10,10 +10,11 @@ use typst::foundations::StyleChain;
 use typst::layout::{GridElem, GroupItem};
 use typst::math::EquationElem;
 use typst::model::{
-    CiteGroup, DirectLinkElem, EmphElem, EnumElem, FigureElem, FootnoteElem, HeadingElem, LinkElem,
-    LinkMarker, ListElem, ParElem, RefElem, StrongElem, TableElem, TermsElem,
+    CiteGroup, DirectLinkElem, EmphElem, EnumElem, FigureElem, FootnoteElem, FootnoteEntry,
+    HeadingElem, LinkElem, LinkMarker, ListElem, ParElem, RefElem, StrongElem, TableElem,
+    TermsElem,
 };
-use typst::pdf::PdfMarkerTag;
+use typst::pdf::{ArtifactElem, PdfMarkerTag};
 use typst::text::{
     HighlightElem, OverlineElem, RawElem, SmallcapsElem, StrikeElem, SubElem, SuperElem,
     UnderlineElem,
@@ -41,6 +42,9 @@ impl<'a> ExtractorContext<'a> {
         )> = Vec::new();
 
         for (idx, node) in nodes.iter().enumerate() {
+            if self.is_footnote_separator_node(nodes, idx) {
+                continue;
+            }
             if matches!(blocks.last(), Some(BlockNode::CodeBlock { .. }))
                 && stray_inlines.is_empty()
                 && matches!(node, TreeNode::Element { elem, .. } if elem.is::<typst::text::LinebreakElem>())
@@ -114,6 +118,95 @@ impl<'a> ExtractorContext<'a> {
         blocks
     }
 
+    fn node_contains_footnote_entry(node: &TreeNode) -> bool {
+        match node {
+            TreeNode::Element { elem, children, .. } => {
+                elem.is::<FootnoteEntry>()
+                    || children.iter().any(Self::node_contains_footnote_entry)
+            }
+            TreeNode::Group { children, .. } => {
+                children.iter().any(Self::node_contains_footnote_entry)
+            }
+            _ => false,
+        }
+    }
+
+    fn node_has_text_or_image(node: &TreeNode) -> bool {
+        match node {
+            TreeNode::Text { .. } | TreeNode::Image { .. } => true,
+            TreeNode::Element { children, .. } | TreeNode::Group { children, .. } => {
+                children.iter().any(Self::node_has_text_or_image)
+            }
+            _ => false,
+        }
+    }
+
+    fn node_horizontal_rule_info(node: &TreeNode) -> (bool, bool) {
+        match node {
+            TreeNode::Shape { shape, span, .. } => {
+                let sz = shape.geometry.bbox(None).size();
+                let is_horiz = sz.y.to_pt().abs() <= 2.0 && sz.x.to_pt().abs() > 20.0;
+                (is_horiz, is_horiz && span.is_detached())
+            }
+            TreeNode::Element { elem, children, .. } => {
+                let is_artifact = elem.is::<ArtifactElem>();
+                let is_line = elem.is::<LineElem>();
+                let mut any_horiz = is_line;
+                let mut any_detached = is_line && elem.span().is_detached();
+                for ch in children {
+                    let (ch_h, ch_d) = Self::node_horizontal_rule_info(ch);
+                    any_horiz |= ch_h;
+                    any_detached |= ch_d;
+                }
+                (any_horiz, any_horiz && (is_artifact || any_detached))
+            }
+            TreeNode::Group { children, .. } => {
+                let mut any_horiz = false;
+                let mut any_detached = false;
+                for ch in children {
+                    let (ch_h, ch_d) = Self::node_horizontal_rule_info(ch);
+                    any_horiz |= ch_h;
+                    any_detached |= ch_d;
+                }
+                (any_horiz, any_detached)
+            }
+            _ => (false, false),
+        }
+    }
+
+    fn is_footnote_separator_node(&self, nodes: &[TreeNode], idx: usize) -> bool {
+        let node = &nodes[idx];
+        if let TreeNode::Element { elem, .. } = node
+            && elem.is::<LineElem>()
+            && nodes
+                .get(idx + 1)
+                .is_some_and(Self::node_contains_footnote_entry)
+        {
+            return true;
+        }
+        if self.footnote_top_y_by_page.is_empty() || Self::node_has_text_or_image(node) {
+            return false;
+        }
+        let (has_horiz_rule, is_artifact_or_detached) = Self::node_horizontal_rule_info(node);
+        if !has_horiz_rule || !is_artifact_or_detached {
+            return false;
+        }
+        let slice = std::slice::from_ref(node);
+        if let (Some((p1, top_y, _)), Some((p2, bot_y, _))) = (
+            Self::nodes_first_page_top_y(slice),
+            Self::nodes_last_page_bottom_y(slice),
+        ) && p1 == p2
+            && (bot_y - top_y).abs() <= 2.5
+            && let Some(&fn_top_y) = self.footnote_top_y_by_page.get(&p1)
+        {
+            let gap_to_fn = fn_top_y - bot_y;
+            if (-2.0..=28.0).contains(&gap_to_fn) {
+                return true;
+            }
+        }
+        false
+    }
+
     pub(crate) fn is_stray_inline_node_at(
         nodes: &[TreeNode],
         idx: usize,
@@ -128,8 +221,11 @@ impl<'a> ExtractorContext<'a> {
         } = node
             && Self::is_inline_box_group(group, children)
         {
-            let next_is_inline = nodes.get(idx + 1).is_some_and(|n| {
-                Self::is_stray_inline_node(n)
+            let prev_same_line = has_preceding_inline
+                && idx > 0
+                && Self::nodes_share_horizontal_line(&nodes[idx - 1], node);
+            let next_same_line = nodes.get(idx + 1).is_some_and(|n| {
+                (Self::is_stray_inline_node(n)
                     || matches!(
                         n,
                         TreeNode::Group {
@@ -137,9 +233,10 @@ impl<'a> ExtractorContext<'a> {
                             children: c,
                             ..
                         } if Self::is_inline_box_group(g, c)
-                    )
+                    ))
+                    && Self::nodes_share_horizontal_line(node, n)
             });
-            if has_preceding_inline || next_is_inline || group.frame.size().y.to_pt() <= 4.0 {
+            if prev_same_line || next_same_line || group.frame.size().y.to_pt() <= 4.0 {
                 return true;
             }
         }
@@ -179,6 +276,19 @@ impl<'a> ExtractorContext<'a> {
             }
         }
         None
+    }
+
+    fn nodes_share_horizontal_line(a: &TreeNode, b: &TreeNode) -> bool {
+        let (ax, ay, aw, ah) = Self::estimate_nodes_bbox(std::slice::from_ref(a));
+        let (bx, by, bw, bh) = Self::estimate_nodes_bbox(std::slice::from_ref(b));
+        if aw <= 0.0 || bw <= 0.0 || ah <= 0.0 || bh <= 0.0 {
+            return false;
+        }
+        let y_overlap = (ay + ah).min(by + bh) - ay.max(by);
+        let min_h = ah.min(bh);
+        let x_overlap = (ax + aw).min(bx + bw) - ax.max(bx);
+        let min_w = aw.min(bw);
+        y_overlap >= (min_h * 0.4).max(2.5) && (ah > 28.0 || bh > 28.0 || x_overlap <= min_w * 0.5)
     }
 
     pub(crate) fn is_inline_box_group(group: &GroupItem, children: &[TreeNode]) -> bool {
@@ -300,15 +410,32 @@ impl<'a> ExtractorContext<'a> {
         let mut right_indent_pt = 0.0;
         let mut line_spacing_pt = None;
 
+        let chain = self.style_chain();
+        let chain_justify = chain.get(ParElem::justify);
+        let chain_linebreaks = match chain.get(ParElem::linebreaks) {
+            typst::foundations::Smart::Custom(typst::model::Linebreaks::Optimized) => {
+                ir::LinebreaksIr::Optimized
+            }
+            typst::foundations::Smart::Custom(typst::model::Linebreaks::Simple) => {
+                ir::LinebreaksIr::Simple
+            }
+            typst::foundations::Smart::Auto => ir::LinebreaksIr::Auto,
+        };
+
         if line_spans.len() >= 2 {
             let non_final = &line_spans[..line_spans.len() - 1];
             let r0 = non_final[0].2;
+            let min_flush_span = if chain_justify { 100.0 } else { 200.0 };
             if eff_align == HAlignIr::Left {
                 let multi_flush = non_final.len() >= 2
                     && non_final.iter().all(|(_, _, rx)| (*rx - r0).abs() <= 1.2)
-                    && (r0 - non_final[0].1) >= 200.0;
-                let right_margin_flush = (self.content_right_pt - r0).abs() <= 1.5
-                    && (r0 - non_final[0].1) >= 200.0;
+                    && (r0 - non_final[0].1) >= min_flush_span;
+                let expected_right = self
+                    .active_group_bounds_pt
+                    .map(|(_, gr)| gr)
+                    .unwrap_or(self.content_right_pt);
+                let right_margin_flush = (expected_right - r0).abs() <= 1.5
+                    && (r0 - non_final[0].1) >= min_flush_span;
                 if multi_flush || right_margin_flush {
                     eff_align = HAlignIr::Justify;
                 }
@@ -326,11 +453,14 @@ impl<'a> ExtractorContext<'a> {
                         line_spans[0].1
                     };
                     let col_w = self.current_column_width_pt();
-                    let (left_bound, right_bound) = if base_l >= self.content_left_pt - 4.0 {
-                        (self.content_left_pt, self.content_right_pt)
-                    } else {
-                        (0.0, col_w)
-                    };
+                    let (left_bound, right_bound) =
+                        if let Some((gl, gr)) = self.active_group_bounds_pt {
+                            (gl, gr)
+                        } else if base_l >= self.content_left_pt - 4.0 {
+                            (self.content_left_pt, self.content_right_pt)
+                        } else {
+                            (0.0, col_w)
+                        };
                     let vis_left = (base_l - left_bound).max(0.0);
                     if (2.0..=48.0).contains(&vis_left) {
                         left_indent_pt = vis_left;
@@ -343,7 +473,6 @@ impl<'a> ExtractorContext<'a> {
                     }
                 }
             }
-            let chain = self.style_chain();
             let default_font_pt =
                 Self::resolve_length_pt(chain.get(typst::text::TextElem::size).0, 11.0);
             line_spacing_pt = Some(Self::resolve_length_pt(
@@ -374,6 +503,8 @@ impl<'a> ExtractorContext<'a> {
             style.left_indent_pt = left_indent_pt;
             style.right_indent_pt = right_indent_pt;
             style.line_spacing_pt = line_spacing_pt;
+            style.justify = eff_align == HAlignIr::Justify;
+            style.linebreaks = chain_linebreaks;
             blocks.push(BlockNode::Paragraph {
                 content: inlines,
                 style,

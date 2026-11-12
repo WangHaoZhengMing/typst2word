@@ -223,6 +223,15 @@ impl<'a> ExtractorContext<'a> {
                     *max_x = max_x.max(x + size.x.to_pt());
                     *max_y = max_y.max(y + size.y.to_pt());
                 }
+                TreeNode::Shape { shape, pos, .. } => {
+                    let b = shape.geometry.bbox(None);
+                    let x = (offset.x + pos.x + b.min.x).to_pt();
+                    let y = (offset.y + pos.y + b.min.y).to_pt();
+                    *min_x = min_x.min(x);
+                    *min_y = min_y.min(y);
+                    *max_x = max_x.max(x + b.size().x.to_pt());
+                    *max_y = max_y.max(y + b.size().y.to_pt());
+                }
                 _ => {}
             }
         }

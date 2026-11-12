@@ -39,8 +39,16 @@ impl<'a> ExtractorContext<'a> {
 
         let col_w = self.current_column_width_pt();
         let (count, gutter_pt) = self.active_columns;
-        let (left_bound, right_bound) = if let Some(gw) = self.active_group_width_pt {
-            (0.0, gw.max(40.0))
+        let (left_bound, right_bound) = if let Some((gl, gr)) = self.active_group_bounds_pt {
+            if count > 1 && width <= col_w + 12.0 {
+                let col_idx = (((min_x - gl + 4.0).max(0.0)) / (col_w + gutter_pt).max(1.0)).floor()
+                    as usize;
+                let col_idx = col_idx.min(count - 1);
+                let col_left = gl + col_idx as f64 * (col_w + gutter_pt);
+                (col_left, col_left + col_w)
+            } else {
+                (gl, gr.max(gl + 40.0))
+            }
         } else if min_x >= self.content_left_pt - 8.0 {
             if count > 1 && width <= col_w + 12.0 {
                 let col_idx = (((min_x - self.content_left_pt + 4.0).max(0.0))
@@ -117,7 +125,16 @@ impl<'a> ExtractorContext<'a> {
         }
         let col_w = self.current_column_width_pt();
         let (count, gutter_pt) = self.active_columns;
-        let left_bound = if min_x < self.content_left_pt - 4.0 {
+        let left_bound = if let Some((gl, _)) = self.active_group_bounds_pt {
+            if count > 1 && width <= col_w + 12.0 {
+                let col_idx = (((min_x - gl + 4.0).max(0.0)) / (col_w + gutter_pt).max(1.0)).floor()
+                    as usize;
+                let col_idx = col_idx.min(count - 1);
+                gl + col_idx as f64 * (col_w + gutter_pt)
+            } else {
+                gl
+            }
+        } else if min_x < self.content_left_pt - 4.0 {
             0.0
         } else if count > 1 && width <= col_w + 12.0 {
             let col_idx = (((min_x - self.content_left_pt + 4.0).max(0.0))

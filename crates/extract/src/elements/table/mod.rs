@@ -79,6 +79,8 @@ impl<'a> ExtractorContext<'a> {
             let row_cells = self.extract_table_row_cells(
                 grid,
                 &cell_nodes_map,
+                &dims.col_widths_pt,
+                avail_w_pt,
                 y,
                 num_cols,
                 num_rows,
@@ -110,20 +112,33 @@ impl<'a> ExtractorContext<'a> {
                         .iter()
                         .any(|c| c.x == x + 1 && c.borders.bottom.is_some())
                 });
-                if col_has_bottom_border
-                    && !next_col_has_bottom_border
-                    && let Some(Sizing::Rel(rel)) = grid.cols.get(x * 2 + 1)
+                if let Some(Sizing::Rel(rel)) = grid.cols.get(x * 2 + 1)
                 {
                     let col_gutter_pt =
                         (Self::resolve_length_pt(rel.abs, 11.0) + rel.rel.get() * avail_w_pt)
                             .max(0.0);
-                    if col_gutter_pt > 0.5 && dims.col_widths_pt[x] > col_gutter_pt + 20.0 {
+                    if col_has_bottom_border
+                        && !next_col_has_bottom_border
+                        && col_gutter_pt > 0.5
+                        && dims.col_widths_pt[x] > col_gutter_pt + 20.0
+                    {
                         dims.col_widths_pt[x] -= col_gutter_pt;
                         dims.col_widths_pt[x + 1] += col_gutter_pt;
                         for r in &mut rows {
                             for c in &mut r.cells {
                                 if c.x == x + 1 {
                                     c.inset.left += col_gutter_pt;
+                                }
+                            }
+                        }
+                    } else if !col_has_bottom_border
+                        && col_gutter_pt >= 4.0
+                        && dims.col_widths_pt[x] > col_gutter_pt + 20.0
+                    {
+                        for r in &mut rows {
+                            for c in &mut r.cells {
+                                if c.x == x {
+                                    c.inset.right = c.inset.right.max(col_gutter_pt);
                                 }
                             }
                         }
@@ -160,6 +175,8 @@ impl<'a> ExtractorContext<'a> {
         &mut self,
         grid: &CellGrid,
         cell_nodes_map: &CellNodeMap,
+        col_widths_pt: &[f64],
+        avail_w_pt: f64,
         y: usize,
         num_cols: usize,
         num_rows: usize,
@@ -193,23 +210,54 @@ impl<'a> ExtractorContext<'a> {
                         self.record_unsupported_paint("table.cell.fill", resolved_cell.body.span());
                     }
                     let fill = resolved_cell.fill.as_ref().and_then(paint_to_hex);
-                    let mut borders = Self::extract_cell_borders(resolved_cell, is_semantic_table);
+                    let mut borders = Self::extract_cell_borders(
+                        grid,
+                        resolved_cell,
+                        x,
+                        y,
+                        colspan,
+                        rowspan,
+                        num_cols,
+                        num_rows,
+                        is_semantic_table,
+                    );
 
                     let (inset, halign, valign, is_header_cell, cell_blocks) =
                         if let Some((cell_elem, cnodes, _)) = cell_nodes_map.get(&(x, y)) {
                             let (mut ins, ha, va, ih) =
                                 Self::extract_cell_props(cell_elem, is_header, is_semantic_table);
                             let prev_inset = self.container_inset_pt;
+                            let prev_group_bounds = self.active_group_bounds_pt;
                             self.container_inset_pt += ins.left + ins.right + 1.0;
-                            let mut blks = self.extract_blocks_from_nodes(cnodes, 0, ha);
-                            self.container_inset_pt = prev_inset;
-                            if num_cols > 1 && Self::find_explicit_align_elem(cnodes).is_none() {
-                                for blk in &mut blks {
-                                    if let ir::BlockNode::Paragraph { style, .. } = blk {
-                                        style.align = ha;
+                            let table_base_x = prev_group_bounds
+                                .map(|(l, _)| l)
+                                .unwrap_or(self.content_left_pt);
+                            let col_left: f64 =
+                                table_base_x + col_widths_pt.iter().take(x).sum::<f64>();
+                            let gutter_pt = if grid.has_gutter && x + 1 < num_cols {
+                                match grid.cols.get(x * 2 + 1) {
+                                    Some(Sizing::Rel(rel)) => {
+                                        (Self::resolve_length_pt(rel.abs, 11.0)
+                                            + rel.rel.get() * avail_w_pt)
+                                            .max(0.0)
                                     }
+                                    _ => 0.0,
                                 }
+                            } else {
+                                0.0
+                            };
+                            let span_w: f64 = col_widths_pt
+                                .iter()
+                                .skip(x)
+                                .take(colspan.max(1))
+                                .sum::<f64>()
+                                - gutter_pt;
+                            if span_w > 12.0 {
+                                self.active_group_bounds_pt = Some((col_left, col_left + span_w));
                             }
+                            let mut blks = self.extract_blocks_from_nodes(cnodes, 0, ha);
+                            self.active_group_bounds_pt = prev_group_bounds;
+                            self.container_inset_pt = prev_inset;
                             if !is_semantic_table
                                 && fill.is_none()
                                 && !borders.has_any()

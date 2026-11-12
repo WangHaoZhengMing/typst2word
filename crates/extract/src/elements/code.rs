@@ -60,7 +60,11 @@ impl<'a> ExtractorContext<'a> {
         for node in nodes {
             match node {
                 TreeNode::Shape { shape, .. } => {
-                    if matches!(shape.geometry, Geometry::Rect(_)) {
+                    let sz = shape.geometry.bbox(None).size();
+                    if matches!(shape.geometry, Geometry::Rect(_) | Geometry::Curve(_))
+                        && sz.x.to_pt().abs() > 20.0
+                        && sz.y.to_pt().abs() > 6.0
+                    {
                         let fill = shape.fill.as_ref().and_then(paint_to_hex);
                         let stroke = shape.stroke.as_ref().map(Self::fixed_stroke_to_ir);
                         if fill.is_some() || stroke.is_some() {

@@ -79,8 +79,23 @@ impl<'a> ExtractorContext<'a> {
                 }
 
                 // 3. Regular layout group: extract inner blocks and propagate horizontal offset.
+                let prev_group_bounds = self.active_group_bounds_pt;
+                let gw = group.frame.size().x.to_pt();
+                if gw > 20.0 {
+                    self.active_group_bounds_pt = Some((0.0, gw));
+                }
                 let mut inner =
                     self.extract_blocks_from_nodes(children, list_level, inherited_align);
+                self.active_group_bounds_pt = prev_group_bounds;
+                if inner.len() == 1
+                    && let Some(BlockNode::CodeBlock { fill, stroke, .. }) = inner.first_mut()
+                    && fill.is_none()
+                    && stroke.is_none()
+                {
+                    let (f, s) = Self::find_code_block_box_style(children);
+                    *fill = f;
+                    *stroke = s;
+                }
                 self.apply_group_left_offset(group, *pos, list_level, &mut inner);
                 let group_h_pt = group.frame.size().y.to_pt();
                 if inner.len() >= 2
@@ -348,9 +363,30 @@ impl<'a> ExtractorContext<'a> {
 
         // 13. Native Shapes & Transforms (`RotateElem`, `ScaleElem`, `MoveElem`, `RectElem`, ...).
         if (elem.is::<RotateElem>() || elem.is::<ScaleElem>() || elem.is::<MoveElem>())
-            && let Some(shape_ir) =
+            && let Some(mut shape_ir) =
                 self.try_extract_transformed_shape(elem, pos, children, list_level, inherited_align)
         {
+            if shape_ir.placed_offset_pt.is_none()
+                && !elem.is::<MoveElem>()
+                && self.container_inset_pt <= 0.1
+                && matches!(inherited_align, HAlignIr::Left | HAlignIr::Justify)
+            {
+                let left_bound = self
+                    .active_group_bounds_pt
+                    .map(|(l, _)| l)
+                    .unwrap_or(self.content_left_pt);
+                let dx = pos.x.to_pt() - left_bound;
+                let (_, local_y, _) =
+                    crate::frame_tree::decode_page_and_local_y(pos.y.to_pt(), pos.x.to_pt());
+                let dy = if blocks.is_empty() && self.active_group_bounds_pt.is_none() {
+                    (local_y - self.content_top_pt).max(0.0)
+                } else {
+                    0.0
+                };
+                if (1.0..=120.0).contains(&dx) || (1.0..=120.0).contains(&dy) {
+                    shape_ir.placed_offset_pt = Some((dx.max(0.0), dy));
+                }
+            }
             self.report.shapes_count += 1;
             blocks.push(BlockNode::ShapeBlock(shape_ir));
             return;
@@ -497,7 +533,14 @@ impl<'a> ExtractorContext<'a> {
     ) -> Option<BlockNode> {
         let gw_pt = group.frame.size().x.to_pt();
         let gh_pt = group.frame.size().y.to_pt();
-        if gw_pt < 200.0 || gh_pt < 40.0 || children.len() < 3 {
+        let all_explicit_place = children.len() >= 2
+            && children.iter().all(|ch| {
+                matches!(ch, TreeNode::Element { elem, .. } if elem.is::<typst::layout::PlaceElem>())
+            });
+        if gw_pt < 120.0
+            || gh_pt < 24.0
+            || (!all_explicit_place && (gw_pt < 200.0 || gh_pt < 40.0 || children.len() < 3))
+        {
             return None;
         }
 
@@ -518,20 +561,13 @@ impl<'a> ExtractorContext<'a> {
                         let (bx, by, bw, bh) = Self::estimate_nodes_bbox(ec);
                         item_boxes.push((bx, by, bw.max(10.0), bh.max(2.0)));
                     } else if Self::is_native_shape_elem(elem) {
-                        let sh = ec.iter().find_map(|n| match n {
-                            TreeNode::Shape { shape, pos: sp, .. } => {
-                                let bsz = shape.geometry.bbox(None).size();
-                                Some((
-                                    sp.x.to_pt(),
-                                    sp.y.to_pt(),
-                                    bsz.x.to_pt().abs(),
-                                    bsz.y.to_pt().abs(),
-                                ))
-                            }
-                            _ => None,
-                        });
                         let (bx, by, bw, bh) =
-                            sh.unwrap_or((pos.x.to_pt(), pos.y.to_pt(), 10.0, 2.0));
+                            Self::estimate_nodes_bbox(std::slice::from_ref(raw_ch));
+                        let (bx, by, bw, bh) = if bx.is_finite() && by.is_finite() {
+                            (bx, by, bw, bh)
+                        } else {
+                            (pos.x.to_pt(), pos.y.to_pt(), 10.0, 2.0)
+                        };
                         item_boxes.push((bx, by, bw.max(10.0), bh.max(2.0)));
                     } else {
                         return None;
@@ -549,7 +585,7 @@ impl<'a> ExtractorContext<'a> {
                     && yb < ya + ha - 2.0
             })
         });
-        if !has_2d_overlap {
+        if !all_explicit_place && !has_2d_overlap {
             return None;
         }
 
@@ -612,14 +648,21 @@ impl<'a> ExtractorContext<'a> {
                         0.0,
                         (1.0, 1.0),
                     ) {
-                        let sh_pos = ec
-                            .iter()
-                            .find_map(|n| match n {
-                                TreeNode::Shape { pos: sp, .. } => Some(*sp),
-                                _ => None,
-                            })
-                            .unwrap_or(*pos);
-                        shape_ir.placed_offset_pt = Some((sh_pos.x.to_pt(), sh_pos.y.to_pt()));
+                        let (bx, by, _, _) =
+                            Self::estimate_nodes_bbox(std::slice::from_ref(raw_ch));
+                        let off = if bx.is_finite() && by.is_finite() {
+                            (bx, by)
+                        } else {
+                            let sh_pos = ec
+                                .iter()
+                                .find_map(|n| match n {
+                                    TreeNode::Shape { pos: sp, .. } => Some(*sp),
+                                    _ => None,
+                                })
+                                .unwrap_or(*pos);
+                            (sh_pos.x.to_pt(), sh_pos.y.to_pt())
+                        };
+                        shape_ir.placed_offset_pt = Some(off);
                         self.report.shapes_count += 1;
                         inlines.push(ir::InlineNode::ShapeInline(shape_ir));
                     }
@@ -631,11 +674,11 @@ impl<'a> ExtractorContext<'a> {
                 } => {
                     let cw_pt = cg.frame.size().x.to_pt();
                     let ch_pt = cg.frame.size().y.to_pt();
-                    let prev_gw = self.active_group_width_pt;
-                    self.active_group_width_pt = Some(cw_pt);
+                    let prev_gw = self.active_group_bounds_pt;
+                    self.active_group_bounds_pt = Some((0.0, cw_pt));
                     let sub_blocks =
                         self.extract_blocks_from_nodes(cchildren, list_level, inherited_align);
-                    self.active_group_width_pt = prev_gw;
+                    self.active_group_bounds_pt = prev_gw;
                     self.report.shapes_count += 1;
                     inlines.push(ir::InlineNode::ShapeInline(ir::ShapeIr {
                         kind: ir::ShapeKindIr::Rect,

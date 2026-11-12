@@ -12,7 +12,7 @@ use ir::{
 };
 
 impl<'a> ExtractorContext<'a> {
-    /// `ParElem` -> `BlockNode::Paragraph` (or a CeTZ canvas if the paragraph only wraps one).
+    /// `ParElem` -> `BlockNode::Paragraph` (or a CeTZ canvas / block-structured `#box(...)` if the paragraph only wraps one).
     pub(crate) fn extract_paragraph_block(
         &mut self,
         par: &Packed<ParElem>,
@@ -22,25 +22,68 @@ impl<'a> ExtractorContext<'a> {
         list_level: usize,
         inherited_align: HAlignIr,
     ) {
-        // Check if this paragraph is actually just a wrapper around a single CeTZ canvas or block shape!
-        if children.len() == 1 {
-            if let TreeNode::Group {
-                group,
-                children: gchildren,
-                ..
-            } = &children[0]
-            {
-                if Self::is_cetz_group_nodes(gchildren) {
-                    if let Some(canvas) = self.extract_cetz_canvas(
-                        gchildren,
-                        Some(group.frame.size()),
-                        inherited_align,
+        // Check if this paragraph is actually just a wrapper around a single CeTZ canvas or block-structured `#box(...)`!
+        if let Some((unwrapped, eff_align)) = Self::unwrap_single_par_child(children, inherited_align) {
+            match unwrapped {
+                TreeNode::Group {
+                    group,
+                    pos: gpos,
+                    children: gchildren,
+                } => {
+                    if Self::is_cetz_group_nodes(gchildren) {
+                        if let Some(canvas) = self.extract_cetz_canvas(
+                            gchildren,
+                            Some(group.frame.size()),
+                            eff_align,
+                        ) {
+                            self.report.cetz_canvases_count += 1;
+                            blocks.push(BlockNode::CetzCanvas(canvas));
+                            return;
+                        }
+                    }
+                    if Self::is_block_structured_box_group(gchildren) {
+                        if let Some(styled_box) = self.try_extract_styled_container_group(
+                            group,
+                            *gpos,
+                            gchildren,
+                            list_level,
+                            eff_align,
+                        ) {
+                            blocks.push(styled_box);
+                            return;
+                        }
+                        if Self::contains_block_layout_elem(gchildren) {
+                            self.extract_block_from_node(unwrapped, blocks, list_level, eff_align);
+                            return;
+                        }
+                    }
+                }
+                TreeNode::Element {
+                    elem,
+                    pos: epos,
+                    children: echildren,
+                    ..
+                } if elem.is::<typst::layout::BoxElem>()
+                    && Self::is_block_structured_box_group(echildren) =>
+                {
+                    if let Some(styled_box) = self.try_extract_styled_container_nodes(
+                        None,
+                        *epos,
+                        echildren,
+                        list_level,
+                        eff_align,
                     ) {
-                        self.report.cetz_canvases_count += 1;
-                        blocks.push(BlockNode::CetzCanvas(canvas));
+                        blocks.push(styled_box);
+                        return;
+                    }
+                    if Self::contains_block_layout_elem(echildren) {
+                        let inner =
+                            self.extract_blocks_from_nodes(echildren, list_level, eff_align);
+                        blocks.extend(inner);
                         return;
                     }
                 }
+                _ => {}
             }
         }
 
@@ -112,10 +155,17 @@ impl<'a> ExtractorContext<'a> {
             }
             if list_level == 0
                 && let Some(vis_left) = self.node_left_offset_in_column(children)
-                && vis_left > 2.0
-                && vis_left <= 48.0
             {
-                left_indent_pt = vis_left;
+                let mut line_starts: Vec<(f64, f64)> = Vec::new();
+                Self::collect_line_left_edges(children, Point::zero(), &mut line_starts);
+                let block_vis_left = if line_starts.len() <= 1 && first_line_indent_pt > 0.5 {
+                    (vis_left - first_line_indent_pt).max(0.0)
+                } else {
+                    vis_left
+                };
+                if (2.0..=48.0).contains(&block_vis_left) {
+                    left_indent_pt = block_vis_left;
+                }
             }
             if list_level == 0 && align == HAlignIr::Justify && left_indent_pt > 2.0 {
                 let (_, _, width, _) = Self::estimate_nodes_bbox(children);
@@ -255,5 +305,133 @@ impl<'a> ExtractorContext<'a> {
                 _ => {}
             }
         }
+    }
+
+    fn is_ignorable_par_sibling(node: &TreeNode) -> bool {
+        match node {
+            TreeNode::Text { text, .. } => text.text.trim().is_empty(),
+            TreeNode::Element { elem, children, .. } => {
+                children.is_empty()
+                    && !Self::is_native_shape_elem(elem)
+                    && !elem.is::<typst::visualize::ImageElem>()
+                    && !elem.is::<typst::text::LinebreakElem>()
+                    && !elem.is::<typst::introspection::CounterDisplayElem>()
+            }
+            _ => false,
+        }
+    }
+
+    fn unwrap_single_par_child(
+        children: &[TreeNode],
+        inherited_align: HAlignIr,
+    ) -> Option<(&TreeNode, HAlignIr)> {
+        let mut non_ws = children.iter().filter(|n| !Self::is_ignorable_par_sibling(n));
+        let first = non_ws.next()?;
+        if non_ws.next().is_some() {
+            return None;
+        }
+
+        let mut eff_align = inherited_align;
+        let mut cur = first;
+        while let TreeNode::Element {
+            elem,
+            children: echildren,
+            ..
+        } = cur
+        {
+            let is_wrapper = elem.is::<typst::layout::BoxElem>()
+                || elem.is::<typst::layout::AlignElem>()
+                || elem.is::<typst::layout::LayoutElem>()
+                || matches!(
+                    elem.elem().name(),
+                    "par-line-marker" | "styled" | "context"
+                );
+            if !is_wrapper {
+                break;
+            }
+            if let Some(al) = elem.to_packed::<typst::layout::AlignElem>() {
+                let (ha, _) = Self::alignment_to_ir(Smart::Custom(
+                    al.alignment.get(typst::foundations::StyleChain::default()),
+                ));
+                eff_align = ha;
+            }
+            let mut inner_non_ws = echildren.iter().filter(|n| !Self::is_ignorable_par_sibling(n));
+            let Some(only_child) = inner_non_ws.next() else {
+                break;
+            };
+            if inner_non_ws.next().is_some() {
+                break;
+            }
+            cur = only_child;
+        }
+
+        Some((cur, eff_align))
+    }
+
+    fn contains_block_layout_elem(nodes: &[TreeNode]) -> bool {
+        let mut par_count = 0usize;
+        Self::count_block_paras_and_check_block_elems(nodes, &mut par_count)
+    }
+
+    fn count_block_paras_and_check_block_elems(nodes: &[TreeNode], par_count: &mut usize) -> bool {
+        for node in nodes {
+            match node {
+                TreeNode::Element { elem, children, .. } => {
+                    if elem.is::<typst::model::TableElem>()
+                        || elem.is::<typst::layout::GridElem>()
+                        || elem.is::<typst::model::ListElem>()
+                        || elem.is::<typst::model::EnumElem>()
+                        || elem.is::<typst::model::TermsElem>()
+                        || elem.is::<typst::model::HeadingElem>()
+                        || elem.is::<typst::model::TitleElem>()
+                        || elem.is::<typst::model::FigureElem>()
+                        || elem.is::<typst::layout::BlockElem>()
+                        || elem.is::<typst::layout::ColumnsElem>()
+                    {
+                        return true;
+                    }
+                    if let Some(q) = elem.to_packed::<typst::model::QuoteElem>()
+                        && q.block.get(typst::foundations::StyleChain::default())
+                    {
+                        return true;
+                    }
+                    if let Some(raw) = elem.to_packed::<typst::text::RawElem>()
+                        && raw.block.get(typst::foundations::StyleChain::default())
+                    {
+                        return true;
+                    }
+                    if let Some(eq) = elem.to_packed::<typst::math::EquationElem>()
+                        && eq.block.get(typst::foundations::StyleChain::default())
+                    {
+                        return true;
+                    }
+                    if elem.is::<typst::model::ParElem>() {
+                        *par_count += 1;
+                        if *par_count >= 2 {
+                            return true;
+                        }
+                    }
+                    if Self::count_block_paras_and_check_block_elems(children, par_count) {
+                        return true;
+                    }
+                }
+                TreeNode::Group { children, .. } => {
+                    if Self::count_block_paras_and_check_block_elems(children, par_count) {
+                        return true;
+                    }
+                }
+                _ => {}
+            }
+        }
+        false
+    }
+
+    fn is_block_structured_box_group(nodes: &[TreeNode]) -> bool {
+        if Self::contains_block_layout_elem(nodes) {
+            return true;
+        }
+        let mut line_starts: Vec<(f64, f64)> = Vec::new();
+        Self::collect_line_left_edges(nodes, Point::zero(), &mut line_starts);
+        line_starts.len() >= 2
     }
 }

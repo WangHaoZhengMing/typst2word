@@ -29,6 +29,23 @@ impl<'a> ExtractorContext<'a> {
             &mut saw_body,
         );
 
+        let mut cap_min_y = None;
+        let mut body_min_y = None;
+        Self::collect_figure_caption_and_body_min_y(
+            children,
+            typst::layout::Point::zero(),
+            false,
+            &mut cap_min_y,
+            &mut body_min_y,
+        );
+        if let (Some(cap_y), Some(body_y)) = (cap_min_y, body_min_y) {
+            caption_pos = if cap_y + 0.5 < body_y {
+                CaptionPositionIr::Top
+            } else {
+                CaptionPositionIr::Bottom
+            };
+        }
+
         let caption_inlines =
             caption_nodes_opt.map(|cap_nodes| self.extract_inlines_flat(&cap_nodes));
         let body = self.extract_blocks_from_nodes(&body_nodes, list_level, HAlignIr::Center);
@@ -114,6 +131,73 @@ impl<'a> ExtractorContext<'a> {
                     *saw_body = true;
                     body_out.push(other.clone());
                 }
+            }
+        }
+    }
+
+    fn collect_figure_caption_and_body_min_y(
+        nodes: &[TreeNode],
+        offset: typst::layout::Point,
+        in_caption: bool,
+        cap_min_y: &mut Option<f64>,
+        body_min_y: &mut Option<f64>,
+    ) {
+        let update_min = |slot: &mut Option<f64>, y: f64| {
+            *slot = Some(slot.map_or(y, |prev| prev.min(y)));
+        };
+        for node in nodes {
+            match node {
+                TreeNode::Element { elem, children, .. } => {
+                    if Self::is_page_furniture_elem(elem) {
+                        continue;
+                    }
+                    let next_in_cap = in_caption || elem.is::<FigureCaption>();
+                    Self::collect_figure_caption_and_body_min_y(
+                        children,
+                        offset,
+                        next_in_cap,
+                        cap_min_y,
+                        body_min_y,
+                    );
+                }
+                TreeNode::Group { pos, children, .. } => {
+                    Self::collect_figure_caption_and_body_min_y(
+                        children,
+                        offset + *pos,
+                        in_caption,
+                        cap_min_y,
+                        body_min_y,
+                    );
+                }
+                TreeNode::Text { text, pos } => {
+                    if text.text.trim().is_empty() {
+                        continue;
+                    }
+                    let y = (offset.y + pos.y - text.size * 0.8).to_pt();
+                    if in_caption {
+                        update_min(cap_min_y, y);
+                    } else {
+                        update_min(body_min_y, y);
+                    }
+                }
+                TreeNode::Shape { shape, pos, .. } => {
+                    let b = shape.geometry.bbox(None);
+                    let y = (offset.y + pos.y + b.min.y).to_pt();
+                    if in_caption {
+                        update_min(cap_min_y, y);
+                    } else {
+                        update_min(body_min_y, y);
+                    }
+                }
+                TreeNode::Image { pos, .. } => {
+                    let y = (offset.y + pos.y).to_pt();
+                    if in_caption {
+                        update_min(cap_min_y, y);
+                    } else {
+                        update_min(body_min_y, y);
+                    }
+                }
+                _ => {}
             }
         }
     }

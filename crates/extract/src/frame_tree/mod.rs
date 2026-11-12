@@ -89,13 +89,23 @@ pub(crate) struct PendingSplitGroup {
 
 impl<'a> ExtractorContext<'a> {
     /// Pre-scan a frame to collect `GroupItem`s that have `group.parent.is_some()`.
-    pub(crate) fn collect_detached_parent_groups(&mut self, frame: &Frame, offset: Point) {
+    pub(crate) fn collect_detached_parent_groups(
+        &mut self,
+        page_idx: usize,
+        frame: &Frame,
+        offset: Point,
+    ) {
         for (pos, item) in frame.items() {
             let abs_pos = offset + *pos;
             if let FrameItem::Group(group) = item {
                 if let Some(parent) = group.parent {
                     match parent.inherit {
                         Inherit::No => {
+                            let top_y = self
+                                .footnote_top_y_by_page
+                                .entry(page_idx)
+                                .or_insert(f64::INFINITY);
+                            *top_y = top_y.min(abs_pos.y.to_pt());
                             self.footnote_raw_groups
                                 .entry(parent.location)
                                 .or_default()
@@ -109,7 +119,7 @@ impl<'a> ExtractorContext<'a> {
                         }
                     }
                 } else {
-                    self.collect_detached_parent_groups(&group.frame, abs_pos);
+                    self.collect_detached_parent_groups(page_idx, &group.frame, abs_pos);
                 }
             }
         }
@@ -153,8 +163,14 @@ impl<'a> ExtractorContext<'a> {
                     root_nodes.push(TreeNode::PageBreak);
                 }
             }
+            let x_shift_pt = if self.mirror_margins && page_idx % 2 == 1 {
+                let right_margin_pt = (self.page_width_pt - self.content_right_pt).max(0.0);
+                self.content_left_pt - right_margin_pt
+            } else {
+                0.0
+            };
             let base_offset = Point::new(
-                typst::layout::Abs::zero(),
+                typst::layout::Abs::pt(x_shift_pt),
                 encode_page_y_offset(page_idx),
             );
             self.append_frame_items_to_tree(&page.frame, base_offset, &mut root_nodes, &mut stack);

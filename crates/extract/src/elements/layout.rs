@@ -26,7 +26,9 @@ impl<'a> ExtractorContext<'a> {
         let gw = group.frame.size().x.to_pt();
         let col_w = self.current_column_width_pt();
         let (count, gutter_pt) = self.active_columns;
-        let left_bound = if gx < self.content_left_pt - 4.0 {
+        let left_bound = if let Some((gl, _)) = self.active_group_bounds_pt {
+            gl
+        } else if gx < self.content_left_pt - 4.0 {
             0.0
         } else if count > 1 && gw <= col_w + 12.0 {
             let col_idx = (((gx - self.content_left_pt + 4.0).max(0.0))
@@ -87,10 +89,11 @@ impl<'a> ExtractorContext<'a> {
         let base_font_pt = Self::resolve_length_pt(chain.get(TextElem::size).0, 11.0);
         let pad_left_pt = Self::resolve_length_pt(pad.left.get(chain).abs, base_font_pt);
         let pad_right_pt = Self::resolve_length_pt(pad.right.get(chain).abs, base_font_pt);
+        let pad_top_pt = Self::resolve_length_pt(pad.top.get(chain).abs, base_font_pt);
         let mut child_blocks =
             self.extract_blocks_from_nodes(children, list_level, inherited_align);
-        if pad_left_pt > 0.1 || pad_right_pt > 0.1 {
-            for b in &mut child_blocks {
+        if pad_left_pt > 0.1 || pad_right_pt > 0.1 || pad_top_pt > 0.1 {
+            for (idx, b) in child_blocks.iter_mut().enumerate() {
                 match b {
                     BlockNode::Paragraph { style, .. } => {
                         if pad_left_pt > 0.1 {
@@ -99,12 +102,24 @@ impl<'a> ExtractorContext<'a> {
                         if pad_right_pt > 0.1 {
                             style.right_indent_pt = pad_right_pt;
                         }
+                        if idx == 0 && pad_top_pt > 0.1 {
+                            style.space_before_pt += pad_top_pt;
+                        }
                     }
                     BlockNode::List { indent_pt, .. } | BlockNode::Enum { indent_pt, .. } => {
                         *indent_pt += pad_left_pt;
                     }
                     BlockNode::Table(t) => {
                         t.left_indent_pt += pad_left_pt;
+                    }
+                    BlockNode::ShapeBlock(sh) => {
+                        let dy = if idx == 0 { pad_top_pt } else { 0.0 };
+                        if pad_left_pt > 0.1 || dy > 0.1 {
+                            sh.placed_offset_pt = match sh.placed_offset_pt {
+                                Some((ox, oy)) => Some((ox + pad_left_pt, oy + dy)),
+                                None => Some((pad_left_pt, dy)),
+                            };
+                        }
                     }
                     _ => {}
                 }

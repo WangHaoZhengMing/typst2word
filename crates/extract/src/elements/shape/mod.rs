@@ -4,8 +4,9 @@
 pub(crate) mod raw;
 
 use typst::foundations::{Content, Smart, StyleChain};
-use typst::layout::{Point, RotateElem, ScaleAmount, ScaleElem, Size};
+use typst::layout::{MoveElem, Point, RotateElem, ScaleAmount, ScaleElem, Size};
 use typst::syntax::Span;
+use typst::text::TextElem;
 use typst::visualize::{
     CircleElem, CurveElem, CurveItem, EllipseElem, FillRule, Geometry, LineElem, Paint,
     PolygonElem, RectElem, Shape, SquareElem,
@@ -39,19 +40,34 @@ impl<'a> ExtractorContext<'a> {
     ) -> Option<ShapeIr> {
         let mut rot_deg = 0.0;
         let mut scale = (1.0, 1.0);
+        let mut move_offset: Option<(f64, f64)> = None;
+
+        let chain = self.style_chain();
+        let base_font_pt = Self::resolve_length_pt(chain.get(TextElem::size).0, 11.0);
 
         if let Some(rot) = elem.to_packed::<RotateElem>() {
-            rot_deg = rot.angle.get(StyleChain::default()).to_deg();
+            rot_deg = rot.angle.get(chain).to_deg();
         }
         if let Some(sc) = elem.to_packed::<ScaleElem>() {
-            if let Smart::Custom(ScaleAmount::Ratio(rx)) = sc.x.get(StyleChain::default()) {
+            if let Smart::Custom(ScaleAmount::Ratio(rx)) = sc.x.get(chain) {
                 scale.0 = rx.get();
             }
-            if let Smart::Custom(ScaleAmount::Ratio(ry)) = sc.y.get(StyleChain::default()) {
+            if let Smart::Custom(ScaleAmount::Ratio(ry)) = sc.y.get(chain) {
                 scale.1 = ry.get();
             }
         }
+        if let Some(mv) = elem.to_packed::<MoveElem>() {
+            let dx_rel = mv.dx.get(chain);
+            let dy_rel = mv.dy.get(chain);
+            let col_w = self.current_column_width_pt();
+            let dx_pt = Self::resolve_length_pt(dx_rel.abs, base_font_pt) + dx_rel.rel.get() * col_w;
+            let dy_pt = Self::resolve_length_pt(dy_rel.abs, base_font_pt);
+            if dx_pt.abs() > 0.5 || dy_pt.abs() > 0.5 {
+                move_offset = Some((dx_pt, dy_pt));
+            }
+        }
 
+        let mut extracted = None;
         for child in children {
             match child {
                 TreeNode::Element {
@@ -60,7 +76,7 @@ impl<'a> ExtractorContext<'a> {
                     children: inner_children,
                     ..
                 } if Self::is_native_shape_elem(inner_elem) => {
-                    return self.extract_native_shape_elem(
+                    extracted = self.extract_native_shape_elem(
                         inner_elem,
                         *inner_pos,
                         inner_children,
@@ -69,6 +85,7 @@ impl<'a> ExtractorContext<'a> {
                         rot_deg,
                         scale,
                     );
+                    break;
                 }
                 TreeNode::Group {
                     children: gchildren,
@@ -83,7 +100,7 @@ impl<'a> ExtractorContext<'a> {
                         } = gchild
                             && Self::is_native_shape_elem(inner_elem)
                         {
-                            return self.extract_native_shape_elem(
+                            extracted = self.extract_native_shape_elem(
                                 inner_elem,
                                 *inner_pos,
                                 inner_children,
@@ -92,15 +109,26 @@ impl<'a> ExtractorContext<'a> {
                                 rot_deg,
                                 scale,
                             );
+                            break;
                         }
+                    }
+                    if extracted.is_some() {
+                        break;
                     }
                 }
                 _ => {}
             }
         }
 
+        if let (Some(sh), Some((dx, dy))) = (&mut extracted, move_offset) {
+            sh.placed_offset_pt = match sh.placed_offset_pt {
+                Some((ox, oy)) => Some((ox + dx, oy + dy)),
+                None => Some((dx, dy)),
+            };
+        }
+
         let _ = pos;
-        None
+        extracted
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -165,14 +193,39 @@ impl<'a> ExtractorContext<'a> {
         }
 
         let (bbox_x, bbox_y, bbox_w, bbox_h) = Self::shapes_bbox(&shape_items);
+        let (frame_origin_x, frame_origin_y) = shape_items
+            .first()
+            .map(|(sp, _, _)| (sp.x.to_pt(), sp.y.to_pt()))
+            .unwrap_or((bbox_x, bbox_y));
+        let preserve_positive_origin = elem.is::<PolygonElem>() || elem.is::<CurveElem>();
+        let path_origin_x = if preserve_positive_origin {
+            bbox_x.min(frame_origin_x)
+        } else {
+            bbox_x
+        };
+        let path_origin_y = if preserve_positive_origin {
+            bbox_y.min(frame_origin_y)
+        } else {
+            bbox_y
+        };
+        let extent_w = if preserve_positive_origin {
+            (bbox_x + bbox_w - path_origin_x).max(bbox_w)
+        } else {
+            bbox_w
+        };
+        let extent_h = if preserve_positive_origin {
+            (bbox_y + bbox_h - path_origin_y).max(bbox_h)
+        } else {
+            bbox_h
+        };
         let width_pt = group_size
             .map(|s| s.x.to_pt())
-            .unwrap_or(bbox_w)
-            .max(bbox_w);
+            .unwrap_or(extent_w)
+            .max(extent_w);
         let height_pt = group_size
             .map(|s| s.y.to_pt())
-            .unwrap_or(bbox_h)
-            .max(bbox_h);
+            .unwrap_or(extent_h)
+            .max(extent_h);
 
         let fill = shape_items
             .iter()
@@ -259,8 +312,8 @@ impl<'a> ExtractorContext<'a> {
                     match item {
                         CurveItem::Move(p) | CurveItem::Line(p) => {
                             pts.push((
-                                (spos.x + p.x).to_pt() - bbox_x,
-                                (spos.y + p.y).to_pt() - bbox_y,
+                                (spos.x + p.x).to_pt() - path_origin_x,
+                                (spos.y + p.y).to_pt() - path_origin_y,
                             ));
                         }
                         _ => {}
@@ -278,8 +331,8 @@ impl<'a> ExtractorContext<'a> {
                 Self::geometry_to_curve_segments(
                     &sh.geometry,
                     *spos,
-                    bbox_x,
-                    bbox_y,
+                    path_origin_x,
+                    path_origin_y,
                     &mut segments,
                 );
             }

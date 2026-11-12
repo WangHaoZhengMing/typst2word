@@ -1,7 +1,7 @@
 //! Document-level extraction: metadata, page setup (size, margins, columns, fill),
 //! header / footer artifacts and page-break bookkeeping.
 
-use typst::foundations::{Content, SequenceElem, Smart, StyleChain, StyledElem};
+use typst::foundations::{Content, NativeElement as _, SequenceElem, Smart, StyleChain, StyledElem};
 use typst::layout::{PageElem, PagebreakElem};
 use typst::model::Document;
 use typst::pdf::{ArtifactElem, ArtifactKind};
@@ -15,17 +15,61 @@ use ir::{
 
 impl<'a> ExtractorContext<'a> {
     pub(crate) fn page_styles(nodes: &[TreeNode]) -> Option<typst::foundations::Styles> {
+        let mut style_maps = Vec::new();
+        Self::collect_all_page_styles(nodes, &mut style_maps);
+        let (first, rest) = style_maps.split_first()?;
+        let mut prefix = first.as_slice();
+        for s in rest {
+            let common = prefix
+                .iter()
+                .zip(s.as_slice())
+                .take_while(|&(a, b)| a == b)
+                .count();
+            prefix = &prefix[..common];
+        }
+        Some(
+            prefix
+                .iter()
+                .filter(|style| {
+                    style.outside()
+                        && (style.liftable() || style.element() == Some(PageElem::ELEM))
+                })
+                .cloned()
+                .collect(),
+        )
+    }
+
+    pub(crate) fn collect_all_page_styles<'b>(
+        nodes: &'b [TreeNode],
+        out: &mut Vec<&'b typst::foundations::Styles>,
+    ) {
         for node in nodes {
             if let TreeNode::Element { elem, children, .. } = node {
-                if elem.label().is_some_and(|l| l.resolve().as_str() == "__typst2word_page_styles") {
-                    if let Some(styled) = elem.to_packed::<StyledElem>() { return Some(styled.styles.clone()); }
+                if elem
+                    .label()
+                    .is_some_and(|l| l.resolve().as_str() == "__typst2word_page_styles")
+                    && let Some(styled) = elem.to_packed::<StyledElem>()
+                {
+                    out.push(&styled.styles);
                 }
-                if let Some(styles) = Self::page_styles(children) { return Some(styles); }
+                Self::collect_all_page_styles(children, out);
             } else if let TreeNode::Group { children, .. } = node {
-                if let Some(styles) = Self::page_styles(children) { return Some(styles); }
+                Self::collect_all_page_styles(children, out);
             }
         }
-        None
+    }
+
+    pub(crate) fn page_root_font_size_pt(&self, page_nodes: &[TreeNode]) -> f64 {
+        if let Some(trunk) = Self::page_styles(page_nodes) {
+            return Self::resolve_length_pt(
+                StyleChain::new(&trunk).get(typst::text::TextElem::size).0,
+                11.0,
+            );
+        }
+        Self::resolve_length_pt(
+            self.style_chain().get(typst::text::TextElem::size).0,
+            11.0,
+        )
     }
 
     pub(crate) fn extract_metadata(&self) -> MetadataIr {
@@ -60,44 +104,89 @@ impl<'a> ExtractorContext<'a> {
                 self.active_columns = (setup.columns, 18.0);
             }
 
-            // Typst's default margin is 2.5 / 21 of the shorter page dimension (~70.87pt for A4).
-            let default_margin_pt = (2.5 / 21.0) * setup.width_pt.min(setup.height_pt);
+            // Match `typst-layout/src/pages/run.rs` & `finalize.rs` margin resolution 1:1:
+            // - `em` lengths resolve against the page-root `TextElem::size` (unpolluted by
+            //   inner scoped `#[#set text(size: ...); ...]` blocks).
+            // - `auto` / omitted sides resolve to `(2.5 / 21.0) * min(width, height)`, where
+            //   an infinite (`auto`) axis falls back to `Paper::A4.width()` (`595.276pt`).
+            // - Two-sided `inside` / `outside` sets `mirror_margins = true` and orders odd-page
+            //   `(left, right)` according to `PageElem::binding` (`auto` -> `Right` in RTL, `Left` in LTR).
+            let base_font_pt = self.page_root_font_size_pt(page_nodes);
             let chain = self.style_chain();
-            let base_font_pt =
-                Self::resolve_length_pt(chain.get(typst::text::TextElem::size).0, 11.0);
+            let cfg_width_pt = match chain.get(PageElem::width) {
+                Smart::Custom(len) => Some(Self::resolve_length_pt(len, base_font_pt)),
+                Smart::Auto => None,
+            };
+            let cfg_height_pt = match chain.get(PageElem::height) {
+                Smart::Custom(len) => Some(Self::resolve_length_pt(len, base_font_pt)),
+                Smart::Auto => None,
+            };
+            let min_dim_pt = match (cfg_width_pt, cfg_height_pt) {
+                (Some(w), Some(h)) if w.is_finite() && h.is_finite() => w.min(h),
+                _ => typst::layout::Paper::A4.width().to_pt(),
+            };
+            let default_margin_pt = (2.5 / 21.0) * min_dim_pt;
+
             let margin_cfg = chain.get(PageElem::margin);
+            let mut rel_axis_x = cfg_width_pt.filter(|v| v.is_finite());
+            let mut rel_axis_y = cfg_height_pt.filter(|v| v.is_finite());
+            if chain.get(PageElem::flipped) {
+                std::mem::swap(&mut rel_axis_x, &mut rel_axis_y);
+            }
             let resolve_side = |side: Option<Smart<typst::layout::Rel<typst::layout::Length>>>,
-                                axis_pt: f64|
+                                axis_pt: Option<f64>|
              -> Option<f64> {
                 match side {
                     Some(Smart::Custom(rel)) => {
                         let abs_pt = Self::resolve_length_pt(rel.abs, base_font_pt);
-                        Some((abs_pt + rel.rel.get() * axis_pt).max(0.0))
+                        let rel_pt = axis_pt.map_or(0.0, |whole| rel.rel.get() * whole);
+                        Some((abs_pt + rel_pt).max(0.0))
                     }
                     _ => None,
                 }
             };
 
-            let (cfg_left, cfg_right, cfg_top, cfg_bottom) = match margin_cfg {
+            let (raw_left, raw_right, cfg_top, cfg_bottom, two_sided) = match margin_cfg {
                 Smart::Custom(m) => (
-                    resolve_side(m.sides.left, setup.width_pt),
-                    resolve_side(m.sides.right, setup.width_pt),
-                    resolve_side(m.sides.top, setup.height_pt),
-                    resolve_side(m.sides.bottom, setup.height_pt),
+                    resolve_side(m.sides.left, rel_axis_x),
+                    resolve_side(m.sides.right, rel_axis_x),
+                    resolve_side(m.sides.top, rel_axis_y),
+                    resolve_side(m.sides.bottom, rel_axis_y),
+                    m.two_sided.unwrap_or(false),
                 ),
-                Smart::Auto => (None, None, None, None),
+                Smart::Auto => (None, None, None, None, false),
             };
 
-            // Page styles now survive realization; glyph positions can be
-            // indented/aligned and must not be treated as page margins.
-            setup.margin_left_pt = cfg_left.unwrap_or(default_margin_pt);
-            setup.margin_right_pt = cfg_right.unwrap_or(default_margin_pt);
+            let mut left_pt = raw_left.unwrap_or(default_margin_pt);
+            let mut right_pt = raw_right.unwrap_or(default_margin_pt);
+            if two_sided {
+                setup.mirror_margins = true;
+                let binding = match chain.get(PageElem::binding) {
+                    Smart::Custom(b) => b,
+                    Smart::Auto => {
+                        if chain.resolve(typst::text::TextElem::dir) == typst::layout::Dir::RTL {
+                            typst::layout::Binding::Right
+                        } else {
+                            typst::layout::Binding::Left
+                        }
+                    }
+                };
+                if binding == typst::layout::Binding::Right {
+                    std::mem::swap(&mut left_pt, &mut right_pt);
+                }
+            }
+
+            setup.margin_left_pt = left_pt;
+            setup.margin_right_pt = right_pt;
             setup.margin_top_pt = cfg_top.unwrap_or(default_margin_pt);
             setup.margin_bottom_pt = cfg_bottom.unwrap_or(default_margin_pt);
 
             self.content_left_pt = setup.margin_left_pt;
+            self.content_top_pt = setup.margin_top_pt;
             self.content_right_pt =
-                (setup.width_pt - setup.margin_right_pt).max(setup.margin_left_pt + 100.0);
+                (setup.width_pt - setup.margin_right_pt).max(setup.margin_left_pt + 36.0);
+            self.page_width_pt = setup.width_pt;
+            self.mirror_margins = setup.mirror_margins;
 
             // Extract header & footer from ArtifactElem(Header / Footer) on the first page.
             for node in page_nodes {
@@ -107,16 +196,40 @@ impl<'a> ExtractorContext<'a> {
             Self::zero_header_footer_paragraph_spacing(&mut setup.footer);
 
             setup.header_margin_pt = self
-                .find_artifact_top_y(page_nodes, ArtifactKind::Header)
-                .map(|y| y.clamp(18.0, (setup.margin_top_pt - 12.0).max(18.0)))
-                .unwrap_or_else(|| (setup.margin_top_pt * 0.58).max(28.0));
-            setup.footer_margin_pt = self
-                .find_artifact_top_y(page_nodes, ArtifactKind::Footer)
-                .map(|y| {
-                    (setup.height_pt - y - 12.0)
-                        .clamp(18.0, (setup.margin_bottom_pt - 12.0).max(18.0))
+                .find_artifact_y_bounds(page_nodes, ArtifactKind::Header)
+                .map(|(min_y, _)| {
+                    if setup.margin_top_pt < 36.0 {
+                        min_y.clamp(0.0, (setup.margin_top_pt - 6.0).max(0.0))
+                    } else {
+                        min_y.clamp(12.0, (setup.margin_top_pt - 12.0).max(12.0))
+                    }
                 })
-                .unwrap_or_else(|| (setup.margin_bottom_pt * 0.58).max(28.0));
+                .unwrap_or_else(|| {
+                    if setup.margin_top_pt < 48.0 {
+                        (setup.margin_top_pt * 0.5).clamp(0.0, setup.margin_top_pt)
+                    } else {
+                        (setup.margin_top_pt * 0.58).max(28.0).min(setup.margin_top_pt)
+                    }
+                });
+            setup.footer_margin_pt = self
+                .find_artifact_y_bounds(page_nodes, ArtifactKind::Footer)
+                .map(|(_, max_y)| {
+                    let dist_bottom = (setup.height_pt - max_y).max(0.0);
+                    if setup.margin_bottom_pt < 36.0 {
+                        dist_bottom.clamp(0.0, (setup.margin_bottom_pt - 6.0).max(0.0))
+                    } else {
+                        dist_bottom.clamp(12.0, (setup.margin_bottom_pt - 12.0).max(12.0))
+                    }
+                })
+                .unwrap_or_else(|| {
+                    if setup.margin_bottom_pt < 48.0 {
+                        (setup.margin_bottom_pt * 0.5).clamp(0.0, setup.margin_bottom_pt)
+                    } else {
+                        (setup.margin_bottom_pt * 0.58)
+                            .max(28.0)
+                            .min(setup.margin_bottom_pt)
+                    }
+                });
         }
         setup
     }
@@ -132,29 +245,32 @@ impl<'a> ExtractorContext<'a> {
         }
     }
 
-    pub(crate) fn find_artifact_top_y(
+    pub(crate) fn find_artifact_y_bounds(
         &self,
         nodes: &[TreeNode],
         target_kind: ArtifactKind,
-    ) -> Option<f64> {
+    ) -> Option<(f64, f64)> {
         for node in nodes {
             match node {
                 TreeNode::Element { elem, children, .. } => {
                     if let Some(artifact) = elem.to_packed::<ArtifactElem>() {
                         if artifact.kind.get(StyleChain::default()) == target_kind {
-                            let (_, min_y, _, _) = Self::estimate_nodes_bbox(children);
-                            if min_y.is_finite() && min_y > 0.0 {
-                                return Some(min_y);
+                            let (_, min_y, width, height) = Self::estimate_nodes_bbox(children);
+                            if (width > 0.0 || height > 0.0)
+                                && min_y.is_finite()
+                                && height.is_finite()
+                            {
+                                return Some((min_y, min_y + height));
                             }
                         }
                     }
-                    if let Some(y) = self.find_artifact_top_y(children, target_kind) {
-                        return Some(y);
+                    if let Some(bounds) = self.find_artifact_y_bounds(children, target_kind) {
+                        return Some(bounds);
                     }
                 }
                 TreeNode::Group { children, .. } => {
-                    if let Some(y) = self.find_artifact_top_y(children, target_kind) {
-                        return Some(y);
+                    if let Some(bounds) = self.find_artifact_y_bounds(children, target_kind) {
+                        return Some(bounds);
                     }
                 }
                 _ => {}

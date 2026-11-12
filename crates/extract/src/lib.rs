@@ -62,6 +62,8 @@ pub(crate) struct ExtractorContext<'a> {
     pub(crate) logical_child_groups: HashMap<Location, Vec<(Point, GroupItem)>>,
     /// Raw footnote entry groups detached via `FrameParent { location, inherit: Inherit::No }`.
     pub(crate) footnote_raw_groups: HashMap<Location, Vec<(Point, GroupItem)>>,
+    /// Minimum local Y coordinate (in pt) of detached footnote groups on each 0-based page.
+    pub(crate) footnote_top_y_by_page: HashMap<usize, f64>,
     /// Counter for assigning sequential 1-based Word footnote IDs.
     pub(crate) next_footnote_id: usize,
     /// Counter for assigning sequential 1-based numbered block equation numbers.
@@ -70,8 +72,13 @@ pub(crate) struct ExtractorContext<'a> {
     pub(crate) seen_unsupported_locs: HashSet<Location>,
     /// Left X coordinate (in pt) of the main page content area.
     pub(crate) content_left_pt: f64,
+    /// Top Y coordinate (in pt) of the main page content area.
+    pub(crate) content_top_pt: f64,
     /// Right X coordinate (in pt) of the main page content area.
     pub(crate) content_right_pt: f64,
+    /// Active section page width (in pt) and whether two-sided mirror margins are active.
+    pub(crate) page_width_pt: f64,
+    pub(crate) mirror_margins: bool,
     /// Page-level column count (`#set page(columns: N)`).
     pub(crate) page_columns: usize,
     /// Active column layout `(column_count, gutter_pt)` during extraction.
@@ -84,8 +91,8 @@ pub(crate) struct ExtractorContext<'a> {
     pub(crate) pending_split_group: Option<frame_tree::PendingSplitGroup>,
     /// Recursion depth inside `FrameItem::Group` frames during `build_frame_tree`.
     pub(crate) group_tree_depth: usize,
-    /// Width of the currently active local `Group` frame (for alignment inference inside sub-frames).
-    pub(crate) active_group_width_pt: Option<f64>,
+    /// Horizontal bounds `(left_pt, right_pt)` of the currently active local `Group` or cell frame.
+    pub(crate) active_group_bounds_pt: Option<(f64, f64)>,
 }
 
 impl<'a> ExtractorContext<'a> {
@@ -103,18 +110,22 @@ impl<'a> ExtractorContext<'a> {
             footnotes: HashMap::new(),
             logical_child_groups: HashMap::new(),
             footnote_raw_groups: HashMap::new(),
+            footnote_top_y_by_page: HashMap::new(),
             next_footnote_id: 1,
             next_equation_number: 1,
             seen_unsupported_locs: HashSet::new(),
             content_left_pt: 70.866,
+            content_top_pt: 70.866,
             content_right_pt: 595.276 - 70.866,
+            page_width_pt: 595.276,
+            mirror_margins: false,
             page_columns: 1,
             active_columns: (1, 0.0),
             container_inset_pt: 0.0,
             pending_list_marker: None,
             pending_split_group: None,
             group_tree_depth: 0,
-            active_group_width_pt: None,
+            active_group_bounds_pt: None,
         }
     }
 
@@ -159,8 +170,8 @@ impl<'a> ExtractorContext<'a> {
         }
 
         // 2. Pre-scan all page frames for detached `FrameParent` groups (footnotes & multi-frame continuations).
-        for page in self.compiled.document.pages() {
-            self.collect_detached_parent_groups(&page.frame, Point::zero());
+        for (page_idx, page) in self.compiled.document.pages().iter().enumerate() {
+            self.collect_detached_parent_groups(page_idx, &page.frame, Point::zero());
         }
 
         // 3. Extract footnote bodies from `footnote_raw_groups` and `FootnoteEntry` elements.
@@ -211,7 +222,11 @@ impl<'a> ExtractorContext<'a> {
             let setup = page_setups.get(range.start).cloned().unwrap_or_default();
             if let Some(styles) = page_styles.get(range.start) { self.doc_styles = styles.clone(); }
             self.content_left_pt = setup.margin_left_pt;
-            self.content_right_pt = setup.width_pt - setup.margin_right_pt;
+            self.content_top_pt = setup.margin_top_pt;
+            self.content_right_pt =
+                (setup.width_pt - setup.margin_right_pt).max(setup.margin_left_pt + 36.0);
+            self.page_width_pt = setup.width_pt;
+            self.mirror_margins = setup.mirror_margins;
             self.page_columns = setup.columns;
             self.active_columns = (setup.columns, 18.0);
             let nodes = self.build_document_frame_tree(pagebreak_targets.clone(), range);

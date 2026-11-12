@@ -216,14 +216,14 @@ impl<'a> ExtractorContext<'a> {
             )
         });
         let prev_inset = self.container_inset_pt;
-        let prev_gw = self.active_group_width_pt;
+        let prev_gw = self.active_group_bounds_pt;
         if !has_full_width_child_group && has_box_sides {
             self.container_inset_pt += 2.0 * inferred_pad + 3.0;
         }
-        self.active_group_width_pt = Some(width_pt);
+        self.active_group_bounds_pt = Some((0.0, width_pt));
         let mut body_blocks =
             self.extract_blocks_from_nodes(&content_nodes, list_level, inherited_align);
-        self.active_group_width_pt = prev_gw;
+        self.active_group_bounds_pt = prev_gw;
         self.container_inset_pt = prev_inset;
 
         if body_blocks.is_empty() {
@@ -245,19 +245,69 @@ impl<'a> ExtractorContext<'a> {
             right: inferred_pad,
         };
 
-        // If the styled `#block(stroke: ..., fill: ...)[...]` has partial side borders,
-        // or contains tables, lists, enums, figures, rules, code blocks, CeTZ canvases, or more than 3 blocks,
-        // represent it as a breakable bordered `BlockNode::Table` (`kind: StyledContainer`).
-        let needs_table_container = (has_partial_border && stroke.is_none())
-            || body_blocks.iter().any(|b| {
-                !matches!(
+        let corner_radius_pt = bg_shapes.iter().find_map(|(_, s, _)| {
+            if let Geometry::Curve(curve) = &s.geometry
+                && let Some(CurveItem::Move(p)) = curve.0.first()
+            {
+                let rx = p.x.to_pt();
+                let ry = p.y.to_pt();
+                if rx > 0.5 && ry.abs() < 0.5 && rx <= width_pt * 0.5 {
+                    return Some(rx);
+                } else if ry > 0.5 && rx.abs() < 0.5 && ry <= height_pt * 0.5 {
+                    return Some(ry);
+                }
+            }
+            None
+        });
+
+        let has_distinct_header_bar = match body_blocks.first() {
+            Some(BlockNode::ShapeBlock(hdr)) => {
+                hdr.fill.is_some() && hdr.fill != fill && (hdr.width_pt - width_pt).abs() <= 6.0
+            }
+            Some(BlockNode::Table(hdr_tbl)) => {
+                hdr_tbl.kind == TableKindIr::StyledContainer
+                    && hdr_tbl.rows.len() == 1
+                    && hdr_tbl.rows[0].cells.len() == 1
+                    && hdr_tbl.rows[0].cells[0].fill.is_some()
+                    && hdr_tbl.rows[0].cells[0].fill != fill
+            }
+            _ => false,
+        };
+
+        let can_use_rounded_shape_box = corner_radius_pt.is_some_and(|r| r > 0.5)
+            && !(has_partial_border && stroke.is_none())
+            && !has_distinct_header_bar
+            && height_pt <= 320.0
+            && body_blocks.iter().all(|b| {
+                matches!(
                     b,
                     BlockNode::Paragraph { .. }
                         | BlockNode::Heading { .. }
+                        | BlockNode::Title { .. }
                         | BlockNode::EquationBlock(_)
+                        | BlockNode::Table(_)
+                        | BlockNode::List { .. }
+                        | BlockNode::Enum { .. }
+                        | BlockNode::CodeBlock { .. }
+                        | BlockNode::UnsupportedBlock(_)
                 )
-            })
-            || body_blocks.len() > 3;
+            });
+
+        // If the styled `#block(stroke: ..., fill: ...)[...]` has partial side borders,
+        // or contains tables, lists, enums, figures, rules, code blocks, CeTZ canvases, or more than 3 blocks
+        // (and is not a compact rounded-corner card that `<wps:wsp>` can preserve with native `roundRect`),
+        // represent it as a breakable bordered `BlockNode::Table` (`kind: StyledContainer`).
+        let needs_table_container = !can_use_rounded_shape_box
+            && ((has_partial_border && stroke.is_none())
+                || body_blocks.iter().any(|b| {
+                    !matches!(
+                        b,
+                        BlockNode::Paragraph { .. }
+                            | BlockNode::Heading { .. }
+                            | BlockNode::EquationBlock(_)
+                    )
+                })
+                || body_blocks.len() > 3);
 
         if needs_table_container {
             self.report.tables_count += 1;
@@ -400,21 +450,6 @@ impl<'a> ExtractorContext<'a> {
                 summary: None,
             }));
         }
-
-        let corner_radius_pt = bg_shapes.iter().find_map(|(_, s, _)| {
-            if let Geometry::Curve(curve) = &s.geometry
-                && let Some(CurveItem::Move(p)) = curve.0.first()
-            {
-                let rx = p.x.to_pt();
-                let ry = p.y.to_pt();
-                if rx > 0.5 && ry.abs() < 0.5 && rx <= width_pt * 0.5 {
-                    return Some(rx);
-                } else if ry > 0.5 && rx.abs() < 0.5 && ry <= height_pt * 0.5 {
-                    return Some(ry);
-                }
-            }
-            None
-        });
 
         self.report.shapes_count += 1;
         Some(BlockNode::ShapeBlock(ShapeIr {

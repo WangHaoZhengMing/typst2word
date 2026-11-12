@@ -24,6 +24,9 @@ pub struct PageSetupIr {
     pub margin_right_pt: f64,
     pub header_margin_pt: f64,
     pub footer_margin_pt: f64,
+    /// Two-sided book binding (`margin: (inside: ..., outside: ...)` -> Word `<w:mirrorMargins/>`).
+    #[serde(default)]
+    pub mirror_margins: bool,
     pub columns: usize,
     pub fill: Option<ColorHex>,
     pub header: Vec<BlockNode>,
@@ -42,6 +45,7 @@ impl Default for PageSetupIr {
             margin_right_pt: 70.866,
             header_margin_pt: 42.5,
             footer_margin_pt: 42.5,
+            mirror_margins: false,
             columns: 1,
             fill: None,
             header: Vec::new(),

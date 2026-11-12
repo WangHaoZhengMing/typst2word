@@ -207,36 +207,69 @@ fn custom_realize<'a>(
     if is_par {
         use typst::introspection::{Tag, TagElem, TagFlags};
         use typst::model::StrongElem;
-        use typst::text::{FontWeight, TextElem};
-        if pairs.iter().any(|(item, chain)| {
-            item.is::<TextElem>() && chain.get(TextElem::weight) >= FontWeight::SEMIBOLD
-        }) {
-            let mut tagged = Vec::with_capacity(pairs.len() + 4);
+        use typst::text::{FontWeight, SmallcapsElem, TextElem};
+        let needs_inline_markers = pairs.iter().any(|(item, chain)| {
+            item.is::<TextElem>()
+                && (chain.get(TextElem::weight) >= FontWeight::SEMIBOLD
+                    || chain.get(TextElem::smallcaps).is_some())
+        });
+        if needs_inline_markers {
+            let mut tagged = Vec::with_capacity(pairs.len() + 6);
             for (item, chain) in pairs {
-                if item.is::<TextElem>() && chain.get(TextElem::weight) >= FontWeight::SEMIBOLD {
+                let is_bold =
+                    item.is::<TextElem>() && chain.get(TextElem::weight) >= FontWeight::SEMIBOLD;
+                let is_sc =
+                    item.is::<TextElem>() && chain.get(TextElem::smallcaps).is_some();
+                let flags = TagFlags {
+                    introspectable: false,
+                    tagged: true,
+                };
+                let bold_end = if is_bold {
                     let mut marker = StrongElem::new(Content::empty()).pack();
                     let key = typst_utils::hash128(&(item, &marker));
                     let loc = locator.next_location(engine, key, item.span());
                     marker.set_location(loc);
-                    let flags = TagFlags {
-                        introspectable: false,
-                        tagged: true,
-                    };
                     tagged.push((
                         &*arenas
                             .content
                             .alloc(TagElem::packed(Tag::Start(marker, flags))),
                         chain,
                     ));
-                    tagged.push((item, chain));
+                    Some((loc, key))
+                } else {
+                    None
+                };
+                let sc_end = if is_sc {
+                    let mut marker = SmallcapsElem::new(Content::empty()).pack();
+                    let key = typst_utils::hash128(&(item, &marker));
+                    let loc = locator.next_location(engine, key, item.span());
+                    marker.set_location(loc);
+                    tagged.push((
+                        &*arenas
+                            .content
+                            .alloc(TagElem::packed(Tag::Start(marker, flags))),
+                        chain,
+                    ));
+                    Some((loc, key))
+                } else {
+                    None
+                };
+                tagged.push((item, chain));
+                if let Some((loc, key)) = sc_end {
                     tagged.push((
                         &*arenas
                             .content
                             .alloc(TagElem::packed(Tag::End(loc, key, flags))),
                         chain,
                     ));
-                } else {
-                    tagged.push((item, chain));
+                }
+                if let Some((loc, key)) = bold_end {
+                    tagged.push((
+                        &*arenas
+                            .content
+                            .alloc(TagElem::packed(Tag::End(loc, key, flags))),
+                        chain,
+                    ));
                 }
             }
             return Ok(tagged);
