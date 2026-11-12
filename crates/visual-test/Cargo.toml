@@ -6,12 +6,17 @@ autobins = false
 description = "Atomic single-variable (margin: 10pt) Typst-to-Word IR & visual test suite + gpui-kit desktop inspector"
 
 [features]
-default = []
+default = ["gui"]
 gui = ["dep:gpui-kit"]
 
 [[bin]]
 name = "visual-test-cli"
 path = "src/bin/visual_test_cli.rs"
+
+[[bin]]
+name = "visual-test-gui"
+path = "src/bin/visual_test_gui.rs"
+required-features = ["gui"]
 
 [dependencies]
 typst2word = { path = "../.." }
