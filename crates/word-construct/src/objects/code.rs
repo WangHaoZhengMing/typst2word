@@ -27,7 +27,7 @@ impl<'a> CodeBlockConstruct<'a> {
         } else {
             Self::ShadedBoxTable {
                 bg_hex: fill.unwrap_or("F6F8FA"),
-                border_color_hex: stroke.map(|s| s.color.as_str()).unwrap_or("D0D7DE"),
+                border_color_hex: stroke.map(|s| s.color.as_str()).or(fill).unwrap_or("D0D7DE"),
             }
         }
     }

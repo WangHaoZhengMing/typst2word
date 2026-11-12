@@ -446,3 +446,61 @@ fn explicit_breaks_use_element_identity_not_repeated_text() {
         }
     }
 }
+
+#[test]
+fn test_rounded_box_header_card_with_nested_grid() {
+    let typst_src = r##"
+#set text(font: ("New Computer Modern", "PingFang SC"), size: 11pt)
+#box(
+  radius: 6pt,
+  stroke: 2pt,
+  inset: 1em,
+)[
+  #align(center)[
+    #text(17pt, weight: "bold")[Homework 2]
+    #grid(
+      columns: (1fr, auto),
+      gutter: 1em,
+      align: left,
+      [*Course*: Algorithm Design and Analysis], [*Due Date*: 2025/3/23],
+      [*Instructor*: Lei Li], [*Semester*: Spring 2025],
+    )
+  ]
+]
+
+Status #box(fill: rgb("#E0F2FE"), inset: (x: 4pt, y: 1pt))[ACTIVE] verified.
+"##;
+
+    let (docx_bytes, ir) =
+        convert_typst_str_to_docx_bytes(typst_src, None).expect("rounded box header card converts");
+    let doc_xml = assert_valid_docx_xml(&docx_bytes);
+
+    // 1. Standalone `#box(radius: 6pt, stroke: 2pt, inset: 1em)[...]` becomes a rounded `ShapeBlock`
+    //    containing a centered title `Paragraph` and a 2x2 `Table` (`LayoutGrid`).
+    let Some(BlockNode::ShapeBlock(card)) = ir.blocks.first() else {
+        panic!("expected first block to be BlockNode::ShapeBlock, got {:?}", ir.blocks.first());
+    };
+    assert!(matches!(card.kind, ShapeKindIr::Rect));
+    assert!(
+        card.corner_radius_pt.is_some_and(|r| (4.5..=6.5).contains(&r)),
+        "expected ~5-6pt centerline corner radius, got {:?}",
+        card.corner_radius_pt
+    );
+    assert_eq!(card.body.len(), 2);
+    assert!(matches!(
+        &card.body[0],
+        BlockNode::Paragraph { style, .. } if style.align == typst2word::ir::HAlignIr::Center
+    ));
+    assert!(matches!(&card.body[1], BlockNode::Table(tbl) if tbl.rows.len() == 2));
+
+    // 2. Generated OOXML uses `<a:prstGeom prst="roundRect">`, `<a:spAutoFit/>`, nested `<w:tbl>`
+    //    inside `<w:txbxContent>`, trailing `</w:p>`, and zero `<w:bdr` character borders.
+    assert!(doc_xml.contains(r#"<a:prstGeom prst="roundRect">"#));
+    assert!(doc_xml.contains("<a:spAutoFit/>"));
+    assert!(doc_xml.contains("</w:tbl><w:p><w:pPr><w:spacing w:before=\"0\" w:after=\"0\" w:line=\"20\" w:lineRule=\"exact\"/>"));
+    assert!(!doc_xml.contains("<w:bdr "));
+
+    // 3. True inline `#box(...)` inside text remains an inline run in a regular `Paragraph`.
+    assert!(matches!(ir.blocks.get(1), Some(BlockNode::Paragraph { .. })));
+    assert!(doc_xml.contains("E0F2FE"));
+}

@@ -160,7 +160,10 @@ impl<'a> DocxWriter<'a> {
                     inset.right,
                     cell_role,
                 );
-                if table_kind == TableKindIr::SemanticTable && row_idx + 1 == table.rows.len() {
+                if table_kind == TableKindIr::SemanticTable
+                    && row_idx + 1 == table.rows.len()
+                    && inset.bottom >= 2.5
+                {
                     margins.bottom_dxa += 70;
                 }
                 let _ = write!(
@@ -184,6 +187,7 @@ impl<'a> DocxWriter<'a> {
                 } else {
                     ""
                 };
+                let zero_vertical_inset = inset.top <= 0.5 && inset.bottom <= 0.5;
                 if blocks.is_empty() || vmerge == Some(VMergeState::Continue) {
                     let _ = write!(
                         out,
@@ -195,6 +199,7 @@ impl<'a> DocxWriter<'a> {
                         blocks,
                         keep_rows_together,
                         table_kind,
+                        zero_vertical_inset,
                         &mut cell_xml,
                     );
                     if !cell_xml.contains("<w:p") || !cell_xml.ends_with("</w:p>") {
@@ -220,6 +225,7 @@ impl<'a> DocxWriter<'a> {
         blocks: &[BlockNode],
         keep_next: bool,
         table_kind: TableKindIr,
+        zero_vertical_inset: bool,
         out: &mut String,
     ) {
         let len = blocks.len();
@@ -232,7 +238,7 @@ impl<'a> DocxWriter<'a> {
             {
                 let prev_block = (idx > 0).then(|| &blocks[idx - 1]);
                 let next_block = blocks.get(idx + 1);
-                let cell_style = solve_table_cell_paragraph_style(
+                let mut cell_style = solve_table_cell_paragraph_style(
                     content,
                     style,
                     idx,
@@ -241,6 +247,12 @@ impl<'a> DocxWriter<'a> {
                     next_block,
                     table_kind,
                 );
+                if table_kind == TableKindIr::SemanticTable
+                    && zero_vertical_inset
+                    && style.line_spacing_pt.is_none()
+                {
+                    cell_style.line_spacing_pt = Some(0.0);
+                }
                 self.render_paragraph_with_keep_next(
                     content,
                     &cell_style,
@@ -248,6 +260,22 @@ impl<'a> DocxWriter<'a> {
                     keep_next,
                     out,
                 );
+            } else if table_kind != TableKindIr::StyledContainer
+                && let BlockNode::ShapeBlock(shape) = block
+            {
+                let run_xml = crate::drawingml::shape_to_drawingml_run(self, shape);
+                out.push_str("<w:p><w:pPr>");
+                if keep_next {
+                    out.push_str("<w:keepNext/>");
+                }
+                Self::render_jc(shape.align, out);
+                let after_dxa = if idx + 1 < len { 20 } else { 0 };
+                let _ = write!(
+                    out,
+                    r#"<w:spacing w:before="0" w:after="{after_dxa}" w:line="240" w:lineRule="auto"/></w:pPr>"#
+                );
+                out.push_str(&run_xml);
+                out.push_str("</w:p>");
             } else if table_kind != TableKindIr::StyledContainer && idx + 1 == len {
                 match block {
                     BlockNode::List {

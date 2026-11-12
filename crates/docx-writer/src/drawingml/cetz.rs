@@ -38,7 +38,7 @@ pub fn cetz_canvas_to_drawingml_run(canvas: &CetzCanvasIr) -> String {
             align: HAlignIr::Left,
             placed_offset_pt: None,
         };
-        children_xml.push_str(&build_wsp_xml(&bg_shape, Some((0, 0)), cx, cy));
+        children_xml.push_str(&build_wsp_xml(None, &bg_shape, Some((0, 0)), cx, cy));
     }
 
     // 2. Vector path/curve drawables
@@ -70,7 +70,7 @@ pub fn cetz_canvas_to_drawingml_run(canvas: &CetzCanvasIr) -> String {
             align: HAlignIr::Left,
             placed_offset_pt: None,
         };
-        children_xml.push_str(&build_wsp_xml(&empty_shape, Some((0, 0)), cx, cy));
+        children_xml.push_str(&build_wsp_xml(None, &empty_shape, Some((0, 0)), cx, cy));
     }
 
     format!(
@@ -133,8 +133,8 @@ pub(crate) fn build_cetz_path_wsp(drawable: &CetzPathDrawableIr) -> String {
         .max(drawable.height_pt)
         .max(0.5);
 
-    let off_x = pt_to_emu(eff_x_pt).max(0);
-    let off_y = pt_to_emu(eff_y_pt).max(0);
+    let off_x = pt_to_emu(eff_x_pt);
+    let off_y = pt_to_emu(eff_y_pt);
     let cx = pt_to_emu(eff_w_pt).max(1270);
     let cy = pt_to_emu(eff_h_pt).max(1270);
 

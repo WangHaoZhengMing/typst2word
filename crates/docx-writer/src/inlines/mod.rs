@@ -45,7 +45,7 @@ impl<'a> DocxWriter<'a> {
                 crate::math::render_equation_omml(eq, out);
             }
             InlineNode::ShapeInline(shape) => {
-                let run_xml = shape_to_drawingml_run(shape);
+                let run_xml = shape_to_drawingml_run(self, shape);
                 out.push_str(&run_xml);
             }
             InlineNode::CetzInline(canvas) => {
@@ -78,8 +78,27 @@ impl<'a> DocxWriter<'a> {
                 out.push_str("<w:r><w:tab/></w:r>");
             }
             InlineNode::HorizontalSpace { width_pt } => {
-                if *width_pt >= 36.0 {
+                if self.in_right_tab_paragraph && *width_pt >= 18.0 {
                     out.push_str("<w:r><w:tab/></w:r>");
+                } else if *width_pt >= 4.0 {
+                    let spacer = word_construct::model::ShapeIr {
+                        kind: word_construct::model::ShapeKindIr::Rect,
+                        width_pt: *width_pt,
+                        height_pt: 1.0,
+                        fill: None,
+                        fill_rule_even_odd: false,
+                        stroke: None,
+                        borders: Default::default(),
+                        corner_radius_pt: None,
+                        inset: Default::default(),
+                        rotation_deg: 0.0,
+                        scale_x: 1.0,
+                        scale_y: 1.0,
+                        body: Vec::new(),
+                        align: word_construct::model::HAlignIr::Left,
+                        placed_offset_pt: None,
+                    };
+                    out.push_str(&shape_to_drawingml_run(self, &spacer));
                 } else {
                     let spaces = ((width_pt / 3.5).round() as usize).clamp(1, 8);
                     let s = " ".repeat(spaces);

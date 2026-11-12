@@ -24,7 +24,7 @@ pub use word_construct;
 use std::path::Path;
 
 use compiler::{TypstWorld, compile_world};
-use docx_writer::{write_docx_to_bytes, write_docx_to_path};
+use docx_writer::{DocxWriteOptions, write_docx_to_bytes_with_options, write_docx_to_path};
 use extract::extract_document_ir;
 use ir::DocumentIr;
 use word_construct::build_word_document;
@@ -59,8 +59,17 @@ pub fn convert_typst_str_to_docx_bytes(
     source: &str,
     root_dir: Option<&Path>,
 ) -> Result<(Vec<u8>, DocumentIr), String> {
+    convert_typst_str_to_docx_bytes_with_options(source, root_dir, DocxWriteOptions::default())
+}
+
+/// Convert an in-memory Typst source string to `.docx` bytes with explicit [`DocxWriteOptions`].
+pub fn convert_typst_str_to_docx_bytes_with_options(
+    source: &str,
+    root_dir: Option<&Path>,
+    options: DocxWriteOptions,
+) -> Result<(Vec<u8>, DocumentIr), String> {
     let ir = compile_str_to_ir(source, root_dir)?;
     let word_doc = build_word_document(&ir);
-    let bytes = write_docx_to_bytes(&word_doc)?;
+    let bytes = write_docx_to_bytes_with_options(&word_doc, options)?;
     Ok((bytes, ir))
 }

@@ -378,12 +378,41 @@ pub fn tokenize_spans_with_script_policy(
                     || matches!(ch, '—' | '…' | '“' | '”' | '‘' | '’'))
             {
                 flush_word(&mut word_buf, &mut word_w, &mut word_char_widths, &mut out);
-                let adv = metrics.char_advance_pt(family, size, ch);
+                let prev_ch = idx.checked_sub(1).and_then(|pi| chars.get(pi).copied());
+                let next_ch = chars.get(idx + 1).copied();
+                let is_right_punct = is_cjk_right_half_space_punct(ch);
+                let is_left_punct = is_cjk_left_half_space_punct(ch);
+                let prev_is_right = prev_ch.is_some_and(is_cjk_right_half_space_punct);
+                let prev_is_left = prev_ch.is_some_and(is_cjk_left_half_space_punct);
+                let next_is_right = next_ch.is_some_and(is_cjk_right_half_space_punct);
+                let next_is_left = next_ch.is_some_and(is_cjk_left_half_space_punct);
+
+                // OpenType `chws` contextual halfwidth compression for adjacent fullwidth CJK punctuation:
+                // - Closing/middle followed by closing/middle or opening (`》，`, `》）`, `，（`): first is `0.5em`.
+                // - Opening preceded by opening (`（《`, `「『`): second is `0.5em`.
+                let chws_compressed_self =
+                    (is_right_punct && (next_is_right || next_is_left)) || (is_left_punct && prev_is_left);
+                let chws_adjacent_partner =
+                    (is_right_punct && prev_is_right) || (is_left_punct && (prev_is_right || next_is_left));
+
+                let adv = if chws_compressed_self {
+                    0.5 * size
+                } else {
+                    metrics.char_advance_pt(family, size, ch)
+                };
+                let shrink_pt = if (is_right_punct || is_left_punct)
+                    && !chws_compressed_self
+                    && !chws_adjacent_partner
+                {
+                    0.5 * size
+                } else {
+                    0.0
+                };
                 out.push(InlineToken {
                     text: ch.to_string(),
                     width_pt: adv,
-                    stretch_pt: size * 0.02,
-                    shrink_pt: size * 0.01,
+                    stretch_pt: 0.0,
+                    shrink_pt,
                     font_size_pt: size,
                     font_family: span.font_family.clone(),
                     kind: TokenKind::CjkChar,
@@ -410,6 +439,24 @@ pub fn tokenize_spans_with_script_policy(
         flush_word(&mut word_buf, &mut word_w, &mut word_char_widths, &mut out);
     }
     out
+}
+
+/// Fullwidth CJK closing / middle punctuation whose `0.5em` blank space sits on the RIGHT half of the `1.0em` advance box.
+#[inline]
+pub const fn is_cjk_right_half_space_punct(ch: char) -> bool {
+    matches!(
+        ch,
+        '，' | '、' | '。' | '．' | '；' | '：' | '！' | '？' | '）' | '》' | '〉' | '」' | '』' | '】' | '〕' | '］' | '｝'
+    )
+}
+
+/// Fullwidth CJK opening punctuation whose `0.5em` blank space sits on the LEFT half of the `1.0em` advance box.
+#[inline]
+pub const fn is_cjk_left_half_space_punct(ch: char) -> bool {
+    matches!(
+        ch,
+        '（' | '《' | '〈' | '「' | '『' | '【' | '〔' | '［' | '｛'
+    )
 }
 
 /// Dispatch paragraph line-breaking according to `LineBreakPolicy`.

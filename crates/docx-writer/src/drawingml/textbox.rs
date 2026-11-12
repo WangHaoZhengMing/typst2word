@@ -1,38 +1,57 @@
-//! Shape / label body blocks -> `<w:txbxContent>` paragraphs and runs.
+//! Shape / label body blocks -> `<w:txbxContent>` paragraphs, tables, and runs.
 
 use crate::inlines::text::render_text_run_xml;
 use crate::math::render_equation_omml;
+use crate::writer::DocxWriter;
 use word_construct::model::{BlockNode, HAlignIr, InlineNode, TextRunIr};
+use word_construct::units::pt_to_dxa;
 
-pub(crate) fn render_textbox_blocks(blocks: &[BlockNode]) -> String {
+pub(crate) fn render_textbox_blocks(writer: &mut DocxWriter<'_>, blocks: &[BlockNode]) -> String {
     let mut out = String::new();
-    for block in blocks {
+    let len = blocks.len();
+    for (idx, block) in blocks.iter().enumerate() {
         match block {
             BlockNode::Paragraph { content, style, .. } => {
-                out.push_str(&render_inline_nodes_as_txbx_para(
+                let after_dxa = if idx + 1 < len && style.space_after_pt > 0.5 {
+                    pt_to_dxa(style.space_after_pt)
+                } else {
+                    0
+                };
+                out.push_str(&render_inline_nodes_as_txbx_para_with_after(
                     content,
                     style.align,
                     style.line_spacing_pt,
+                    after_dxa,
                 ));
             }
             BlockNode::Heading { content, align, .. } | BlockNode::Title { content, align } => {
-                out.push_str(&render_inline_nodes_as_txbx_para(content, *align, None));
+                let after_dxa = if idx + 1 < len { 120 } else { 0 };
+                out.push_str(&render_inline_nodes_as_txbx_para_with_after(
+                    content,
+                    *align,
+                    None,
+                    after_dxa,
+                ));
             }
             BlockNode::EquationBlock(eq) => {
-                out.push_str(
-                    r#"<w:p><w:pPr><w:jc w:val="center"/><w:spacing w:before="110" w:after="0"/></w:pPr>"#,
-                );
+                let after_dxa = if idx + 1 < len { 80 } else { 0 };
+                out.push_str(&format!(
+                    r#"<w:p><w:pPr><w:jc w:val="center"/><w:spacing w:before="110" w:after="{after_dxa}"/></w:pPr>"#,
+                ));
                 render_equation_omml(eq, &mut out);
                 out.push_str("</w:p>");
             }
+            BlockNode::Table(tbl) => {
+                writer.render_table(tbl, &mut out);
+            }
             BlockNode::List { items, .. } => {
                 for item in items {
-                    out.push_str(&render_textbox_blocks(&item.blocks));
+                    out.push_str(&render_textbox_blocks(writer, &item.blocks));
                 }
             }
             BlockNode::Enum { items, .. } => {
                 for item in items {
-                    out.push_str(&render_textbox_blocks(&item.blocks));
+                    out.push_str(&render_textbox_blocks(writer, &item.blocks));
                 }
             }
             BlockNode::CodeBlock { lines, .. } => {
@@ -67,6 +86,10 @@ pub(crate) fn render_textbox_blocks(blocks: &[BlockNode]) -> String {
     }
     if out.is_empty() {
         out.push_str(r#"<w:p><w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr></w:p>"#);
+    } else if !out.ends_with("</w:p>") {
+        out.push_str(
+            r#"<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="20" w:lineRule="exact"/><w:rPr><w:sz w:val="2"/><w:szCs w:val="2"/></w:rPr></w:pPr></w:p>"#,
+        );
     }
     out
 }
@@ -75,6 +98,15 @@ pub(crate) fn render_inline_nodes_as_txbx_para(
     inlines: &[InlineNode],
     align: HAlignIr,
     line_spacing_pt: Option<f64>,
+) -> String {
+    render_inline_nodes_as_txbx_para_with_after(inlines, align, line_spacing_pt, 0)
+}
+
+pub(crate) fn render_inline_nodes_as_txbx_para_with_after(
+    inlines: &[InlineNode],
+    align: HAlignIr,
+    line_spacing_pt: Option<f64>,
+    after_dxa: i64,
 ) -> String {
     let jc = match align {
         HAlignIr::Left => "left",
@@ -86,7 +118,7 @@ pub(crate) fn render_inline_nodes_as_txbx_para(
     let mut runs_xml = String::new();
     render_inline_nodes_to_wml(inlines, &mut runs_xml);
     format!(
-        r#"<w:p><w:pPr><w:jc w:val="{jc}"/><w:spacing w:before="0" w:after="0" w:line="{line_dxa}" w:lineRule="auto"/></w:pPr>{runs_xml}</w:p>"#
+        r#"<w:p><w:pPr><w:jc w:val="{jc}"/><w:spacing w:before="0" w:after="{after_dxa}" w:line="{line_dxa}" w:lineRule="auto"/></w:pPr>{runs_xml}</w:p>"#
     )
 }
 

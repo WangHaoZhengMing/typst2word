@@ -14,7 +14,7 @@ impl<'a> DocxWriter<'a> {
         align: HAlignIr,
         out: &mut String,
     ) {
-        out.push_str("<w:p><w:pPr><w:pStyle w:val=\"Title\"/>");
+        out.push_str("<w:p><w:pPr><w:pStyle w:val=\"Title\"/><w:spacing w:before=\"0\" w:after=\"120\" w:line=\"216\" w:lineRule=\"auto\"/>");
         Self::render_jc(align, out);
         out.push_str("</w:pPr>");
         self.render_inlines(content, out);

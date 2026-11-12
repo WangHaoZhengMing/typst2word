@@ -8,10 +8,18 @@ use word_construct::model::{DashPatternIr, ScriptKindIr, TextRunIr};
 use crate::xml::escape_xml;
 
 pub(crate) fn render_text_run_xml(run: &TextRunIr, out: &mut String) {
+    render_text_run_xml_with_spacing(run, None, out);
+}
+
+pub(crate) fn render_text_run_xml_with_spacing(
+    run: &TextRunIr,
+    extra_char_spacing_dxa: Option<i32>,
+    out: &mut String,
+) {
     if run.text.is_empty() {
         return;
     }
-    let construct = TextRunConstruct::solve(run);
+    let construct = TextRunConstruct::solve_with_spacing(run, extra_char_spacing_dxa);
     out.push_str("<w:r><w:rPr>");
     if let Some(fam) = construct.font_family {
         let esc = escape_xml(fam);
@@ -60,21 +68,16 @@ pub(crate) fn render_text_run_xml(run: &TextRunIr, out: &mut String) {
             r#"<w:shd w:val="clear" w:color="auto" w:fill="{hl}"/>"#
         );
     }
+    if let Some(char_spacing_dxa) = construct.char_spacing_dxa {
+        let _ = write!(out, r#"<w:spacing w:val="{char_spacing_dxa}"/>"#);
+    }
     match construct.font_size {
         RunFontSizeConstruct::Inherited => {}
-        RunFontSizeConstruct::StandardHalfPts(half_pts) => {
+        RunFontSizeConstruct::StandardHalfPts(half_pts)
+        | RunFontSizeConstruct::ConsolasInlineCodeCompensated { half_pts, .. } => {
             let _ = write!(
                 out,
                 r#"<w:sz w:val="{half_pts}"/><w:szCs w:val="{half_pts}"/>"#
-            );
-        }
-        RunFontSizeConstruct::ConsolasInlineCodeCompensated {
-            half_pts,
-            char_spacing_dxa,
-        } => {
-            let _ = write!(
-                out,
-                r#"<w:spacing w:val="{char_spacing_dxa}"/><w:sz w:val="{half_pts}"/><w:szCs w:val="{half_pts}"/>"#
             );
         }
     }

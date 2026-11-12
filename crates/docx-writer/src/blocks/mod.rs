@@ -27,6 +27,11 @@ use word_construct::model::BlockNode;
 impl<'a> DocxWriter<'a> {
     pub(crate) fn render_blocks(&mut self, blocks: &[BlockNode], out: &mut String) {
         for (idx, block) in blocks.iter().enumerate() {
+            let collapse_before = idx == 0
+                || matches!(
+                    blocks.get(idx.wrapping_sub(1)),
+                    Some(BlockNode::PageBreak | BlockNode::ColumnBreak)
+                );
             if let BlockNode::Heading {
                 level,
                 numbering,
@@ -35,11 +40,6 @@ impl<'a> DocxWriter<'a> {
                 align,
             } = block
             {
-                let collapse_before = idx == 0
-                    || matches!(
-                        blocks.get(idx.wrapping_sub(1)),
-                        Some(BlockNode::PageBreak | BlockNode::ColumnBreak)
-                    );
                 let compact_after = matches!(blocks.get(idx + 1), Some(BlockNode::Paragraph { .. }));
                 self.render_heading_inner(
                     *level,
@@ -91,7 +91,77 @@ impl<'a> DocxWriter<'a> {
                 );
                 continue;
             }
-            self.render_block(block, out);
+            match block {
+                BlockNode::List {
+                    items,
+                    tight,
+                    level,
+                    spacing_pt,
+                    indent_pt,
+                    hanging_pt,
+                } => {
+                    self.render_list_collapsed(
+                        items,
+                        *tight,
+                        *level,
+                        *spacing_pt,
+                        *indent_pt,
+                        *hanging_pt,
+                        collapse_before,
+                        out,
+                    );
+                }
+                BlockNode::Enum {
+                    items,
+                    tight,
+                    level,
+                    spacing_pt,
+                    indent_pt,
+                    hanging_pt,
+                } => {
+                    self.render_enum_collapsed(
+                        items,
+                        *tight,
+                        *level,
+                        *spacing_pt,
+                        *indent_pt,
+                        *hanging_pt,
+                        collapse_before,
+                        out,
+                    );
+                }
+                BlockNode::Quote { body, attribution } => {
+                    self.render_quote_collapsed(
+                        body,
+                        attribution.as_deref(),
+                        collapse_before,
+                        out,
+                    );
+                }
+                BlockNode::EquationBlock(eq) => {
+                    self.render_equation_block_collapsed(eq, collapse_before, out);
+                }
+                BlockNode::ShapeBlock(shape) => {
+                    self.render_shape_block_collapsed(shape, collapse_before, out);
+                }
+                BlockNode::ImageBlock(img) => {
+                    self.render_image_block_collapsed(img, collapse_before, out);
+                }
+                BlockNode::Outline { title, entries } => {
+                    self.render_outline(title.as_deref(), entries, collapse_before, out);
+                }
+                BlockNode::Bibliography { title, entries } => {
+                    self.render_bibliography(title.as_deref(), entries, collapse_before, out);
+                }
+                BlockNode::HorizontalRule {
+                    length_pt,
+                    stroke,
+                    align,
+                } => {
+                    self.render_horizontal_rule(*length_pt, stroke, *align, collapse_before, out);
+                }
+                _ => self.render_block(block, out),
+            }
             // If two Word `<w:tbl>` blocks (e.g. two tables or numbered equations) are directly
             // adjacent without an intervening `<w:p>`, Word merges them into a single table!
             // Emit a minimal 2pt separator paragraph only between adjacent table-backed blocks.
@@ -224,23 +294,27 @@ impl<'a> DocxWriter<'a> {
                 self.render_image_block(img, out);
             }
             BlockNode::Outline { title, entries } => {
-                self.render_outline(title.as_deref(), entries, out);
+                self.render_outline(title.as_deref(), entries, false, out);
             }
             BlockNode::Bibliography { title, entries } => {
-                self.render_bibliography(title.as_deref(), entries, out);
+                self.render_bibliography(title.as_deref(), entries, false, out);
             }
             BlockNode::HorizontalRule {
-                length_pt: _,
+                length_pt,
                 stroke,
-                align: _,
+                align,
             } => {
-                self.render_horizontal_rule(stroke, out);
+                self.render_horizontal_rule(*length_pt, stroke, *align, false, out);
             }
             BlockNode::PageBreak => {
-                out.push_str(r#"<w:p><w:r><w:br w:type="page"/></w:r></w:p>"#);
+                out.push_str(
+                    r#"<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="20" w:lineRule="exact"/><w:rPr><w:sz w:val="2"/><w:szCs w:val="2"/></w:rPr></w:pPr><w:r><w:rPr><w:sz w:val="2"/><w:szCs w:val="2"/></w:rPr><w:br w:type="page"/></w:r></w:p>"#,
+                );
             }
             BlockNode::ColumnBreak => {
-                out.push_str(r#"<w:p><w:r><w:br w:type="column"/></w:r></w:p>"#);
+                out.push_str(
+                    r#"<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="20" w:lineRule="exact"/><w:rPr><w:sz w:val="2"/><w:szCs w:val="2"/></w:rPr></w:pPr><w:r><w:rPr><w:sz w:val="2"/><w:szCs w:val="2"/></w:rPr><w:br w:type="column"/></w:r></w:p>"#,
+                );
             }
             BlockNode::Columns {
                 count,

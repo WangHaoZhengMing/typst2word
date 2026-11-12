@@ -229,9 +229,10 @@ impl<'a> DocxWriter<'a> {
             (Some(override_dxa), 276) => override_dxa,
             _ => raw_line_dxa,
         };
-        let has_wide_space = content
-            .iter()
-            .any(|inl| matches!(inl, InlineNode::HorizontalSpace { width_pt } if *width_pt >= 36.0));
+        let has_wide_space = word_construct::paragraph::has_flush_right_horizontal_space(
+            content,
+            self.content_width_dxa(),
+        );
         let tabs_xml = if has_wide_space {
             format!(
                 r#"<w:tabs><w:tab w:val="num" w:pos="{indent_left}"/><w:tab w:val="right" w:pos="{}"/></w:tabs>"#,
@@ -269,7 +270,10 @@ impl<'a> DocxWriter<'a> {
                     r#"<w:r><w:t xml:space="preserve">{} </w:t></w:r>"#,
                     escape_xml(prefix)
                 );
+                let prev_right_tab = self.in_right_tab_paragraph;
+                self.in_right_tab_paragraph = has_wide_space;
                 self.render_inlines(content, out);
+                self.in_right_tab_paragraph = prev_right_tab;
                 if let Some(id) = bm_id {
                     Self::emit_bookmark_end(id, out);
                 }
@@ -288,7 +292,10 @@ impl<'a> DocxWriter<'a> {
                 }
                 out.push_str("</w:pPr>");
                 let bm_id = bookmark.map(|bm| self.emit_bookmark_start(bm, out));
+                let prev_right_tab = self.in_right_tab_paragraph;
+                self.in_right_tab_paragraph = has_wide_space;
                 self.render_inlines(content, out);
+                self.in_right_tab_paragraph = prev_right_tab;
                 if is_only_inline_equation(content) {
                     out.push_str("<w:r><w:t>&#8203;</w:t></w:r>");
                 }

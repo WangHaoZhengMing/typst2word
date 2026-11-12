@@ -4,11 +4,12 @@ use crate::drawingml::geometry::build_cust_geom_xml;
 use crate::drawingml::line::build_ln_xml;
 use crate::drawingml::next_drawing_id;
 use crate::drawingml::textbox::render_textbox_blocks;
-use word_construct::model::{CurveSegmentIr, ShapeIr, ShapeKindIr};
+use crate::writer::DocxWriter;
+use word_construct::model::{BlockNode, CurveSegmentIr, ShapeIr, ShapeKindIr};
 use word_construct::units::pt_to_emu;
 
 /// Build a `<w:r><w:drawing>...</w:drawing></w:r>` XML fragment for a `ShapeIr`.
-pub fn shape_to_drawingml_run(shape: &ShapeIr) -> String {
+pub(crate) fn shape_to_drawingml_run(writer: &mut DocxWriter<'_>, shape: &ShapeIr) -> String {
     let draw_id = next_drawing_id();
     let (w_pt, h_pt) = effective_shape_dimensions(shape);
     let cx = pt_to_emu(w_pt * shape.scale_x.abs().max(0.05)).max(12700);
@@ -22,7 +23,7 @@ pub fn shape_to_drawingml_run(shape: &ShapeIr) -> String {
         .map(|s| pt_to_emu(s.thickness_pt).max(6350))
         .unwrap_or(0);
 
-    let wsp_xml = build_wsp_xml(shape, None, cx, cy);
+    let wsp_xml = build_wsp_xml(Some(writer), shape, None, cx, cy);
 
     if let Some((dx_pt, dy_pt)) = shape.placed_offset_pt {
         let dx_emu = pt_to_emu(dx_pt);
@@ -115,6 +116,7 @@ pub(crate) fn effective_shape_dimensions(shape: &ShapeIr) -> (f64, f64) {
 }
 
 pub(crate) fn build_wsp_xml(
+    writer: Option<&mut DocxWriter<'_>>,
     shape: &ShapeIr,
     group_offset_emu: Option<(i64, i64)>,
     cx: i64,
@@ -225,6 +227,10 @@ pub(crate) fn build_wsp_xml(
     let txbx_and_body_pr = if shape.body.is_empty() {
         r#"<wps:bodyPr/>"#.to_string()
     } else {
+        let has_nested_table = shape
+            .body
+            .iter()
+            .any(|b| matches!(b, BlockNode::Table(_)));
         let (l_ins, t_ins, r_ins, b_ins) = match &shape.kind {
             ShapeKindIr::Ellipse => {
                 if shape.width_pt < 80.0 {
@@ -242,7 +248,11 @@ pub(crate) fn build_wsp_xml(
             }
             ShapeKindIr::Rect => {
                 let radius_pt = shape.corner_radius_pt.unwrap_or(0.0);
-                let horiz_comp = 0.55 * radius_pt;
+                let horiz_comp = if has_nested_table {
+                    (0.15 * radius_pt).min(1.5)
+                } else {
+                    0.55 * radius_pt
+                };
                 let top_comp = if shape.width_pt >= 350.0 {
                     3.5 + 0.35 * radius_pt
                 } else if radius_pt > 0.1 {
@@ -270,13 +280,21 @@ pub(crate) fn build_wsp_xml(
         } else {
             "ctr"
         };
-        let inner_paras = render_textbox_blocks(&shape.body);
+        let autofit_xml = if has_nested_table {
+            "<a:spAutoFit/>"
+        } else {
+            "<a:noAutofit/>"
+        };
+        let inner_paras = match writer {
+            Some(w) => render_textbox_blocks(w, &shape.body),
+            None => r#"<w:p><w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr></w:p>"#.to_string(),
+        };
         format!(
             concat!(
                 r#"<wps:txbx><w:txbxContent>{paras}</w:txbxContent></wps:txbx>"#,
                 r#"<wps:bodyPr rot="0" vert="horz" wrap="square" "#,
                 r#"lIns="{l}" tIns="{t}" rIns="{r}" bIns="{b}" anchor="{anchor}">"#,
-                r#"<a:noAutofit/>"#,
+                r#"{autofit}"#,
                 r#"</wps:bodyPr>"#
             ),
             paras = inner_paras,
@@ -285,6 +303,7 @@ pub(crate) fn build_wsp_xml(
             r = r_ins,
             b = b_ins,
             anchor = anchor,
+            autofit = autofit_xml,
         )
     };
 

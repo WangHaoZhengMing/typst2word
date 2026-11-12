@@ -46,6 +46,7 @@ pub(crate) struct DocxWriter<'a> {
     pub(crate) footer_rel_id: Option<String>,
     pub(crate) active_columns: (usize, f64),
     pub(crate) has_scoped_columns: bool,
+    pub(crate) in_right_tab_paragraph: bool,
 }
 
 impl<'a> DocxWriter<'a> {
@@ -70,6 +71,7 @@ impl<'a> DocxWriter<'a> {
             footer_rel_id: None,
             active_columns: (1, 0.0),
             has_scoped_columns: false,
+            in_right_tab_paragraph: false,
         }
     }
 
@@ -82,7 +84,7 @@ impl<'a> DocxWriter<'a> {
 
     pub(crate) fn content_width_dxa(&self) -> i64 {
         let ps = &self.current_setup;
-        let full_w_pt = (ps.width_pt - ps.margin_left_pt - ps.margin_right_pt).max(200.0);
+        let full_w_pt = (ps.width_pt - ps.margin_left_pt - ps.margin_right_pt).max(72.0);
         let (cols, gutter_pt) = if self.active_columns.0 > 1 {
             self.active_columns
         } else if ps.columns > 1 {

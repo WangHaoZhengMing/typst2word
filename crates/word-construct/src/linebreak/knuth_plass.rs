@@ -87,9 +87,27 @@ impl CumulativeEstimates {
         if start >= end {
             return (0.0, 0.0, 0.0, 0, 11.0);
         }
-        let w = self.width[end] - self.width[start];
+        let mut w = self.width[end] - self.width[start];
         let st = self.stretch[end] - self.stretch[start];
-        let sh = self.shrink[end] - self.shrink[start];
+        let mut sh = self.shrink[end] - self.shrink[start];
+        if tokens[start]
+            .text
+            .chars()
+            .next()
+            .is_some_and(crate::linebreak::is_cjk_left_half_space_punct)
+        {
+            w = (w - tokens[start].shrink_pt).max(0.0);
+            sh = (sh - tokens[start].shrink_pt).max(0.0);
+        }
+        if tokens[end - 1]
+            .text
+            .chars()
+            .next_back()
+            .is_some_and(crate::linebreak::is_cjk_right_half_space_punct)
+        {
+            w = (w - tokens[end - 1].shrink_pt).max(0.0);
+            sh = (sh - tokens[end - 1].shrink_pt).max(0.0);
+        }
         let just = self.justifiables[end] - self.justifiables[start];
         let fs = tokens[start].font_size_pt.max(6.0);
         (w, st, sh, just, fs)
@@ -272,7 +290,8 @@ impl KnuthPlassBreaker {
         tokens: &[InlineToken],
         candidates: &[BreakCandidate],
         estimates: &CumulativeEstimates,
-        avail_width_pt: f64,
+        line0_max_w: f64,
+        rest_max_w: f64,
         justify: bool,
     ) -> f64 {
         #[derive(Clone, Copy)]
@@ -298,12 +317,13 @@ impl KnuthPlassBreaker {
             let mut best: Option<ApproxEntry> = None;
             for (pred_idx, pred) in table.iter().enumerate().skip(active) {
                 let start = pred.end_idx;
+                let line_avail = if start == 0 { line0_max_w } else { rest_max_w };
                 let unbreakable = prev_end == start;
                 let line_justify = justify && cand.kind != CandidateKind::Mandatory;
                 let consecutive_dash =
                     pred.kind == CandidateKind::Hyphen && cand.kind == CandidateKind::Hyphen;
                 let (w, st, sh, just, fs) = estimates.slice_metrics(tokens, start, cand.end_idx);
-                let ratio = Self::compute_ratio(avail_width_pt, w, st, sh, just, fs, self.min_ratio);
+                let ratio = Self::compute_ratio(line_avail, w, st, sh, just, fs, self.min_ratio);
                 let cost = self.compute_cost(
                     cand.kind,
                     ratio,
@@ -347,8 +367,9 @@ impl KnuthPlassBreaker {
         let mut prev_kind = CandidateKind::Mandatory;
         for i in indices.into_iter().rev() {
             let entry = table[i];
+            let line_avail = if start == 0 { line0_max_w } else { rest_max_w };
             let (w, st, sh, just, fs) = estimates.slice_metrics(tokens, start, entry.end_idx);
-            let ratio = Self::compute_ratio(avail_width_pt, w, st, sh, just, fs, self.min_ratio);
+            let ratio = Self::compute_ratio(line_avail, w, st, sh, just, fs, self.min_ratio);
             if ratio < self.min_ratio {
                 return f64::INFINITY;
             }
@@ -368,24 +389,32 @@ impl KnuthPlassBreaker {
         }
         exact_total
     }
-}
 
-impl LineBreaker for KnuthPlassBreaker {
-    fn break_tokens(
+    /// Break `tokens` with explicit first-line and hanging indents (`pt`).
+    pub fn break_tokens_with_indents(
         &self,
         tokens: &[InlineToken],
         avail_width_pt: f64,
+        first_line_indent_pt: f64,
+        hanging_indent_pt: f64,
         justify: bool,
         kinsoku: &KinsokuSet,
     ) -> Vec<BrokenLine> {
         if tokens.is_empty() {
             return Vec::new();
         }
-        let max_w = avail_width_pt.max(1.0);
+        let line0_max_w = (avail_width_pt - first_line_indent_pt).max(1.0);
+        let rest_max_w = (avail_width_pt - hanging_indent_pt).max(1.0);
         let candidates = Self::collect_candidates(tokens, kinsoku);
         let estimates = CumulativeEstimates::compute(tokens);
-        let upper_bound =
-            self.estimate_upper_bound(tokens, &candidates, &estimates, max_w, justify);
+        let upper_bound = self.estimate_upper_bound(
+            tokens,
+            &candidates,
+            &estimates,
+            line0_max_w,
+            rest_max_w,
+            justify,
+        );
 
         #[derive(Clone, Copy)]
         struct DpEntry {
@@ -414,6 +443,7 @@ impl LineBreaker for KnuthPlassBreaker {
 
             for (pred_idx, pred) in table.iter().enumerate().skip(active) {
                 let start = pred.end_idx;
+                let line_avail = if start == 0 { line0_max_w } else { rest_max_w };
                 let unbreakable = prev_end == start;
 
                 if line_lower_bound
@@ -426,7 +456,7 @@ impl LineBreaker for KnuthPlassBreaker {
                 let consecutive_dash =
                     pred.kind == CandidateKind::Hyphen && cand.kind == CandidateKind::Hyphen;
                 let (w, st, sh, just, fs) = estimates.slice_metrics(tokens, start, cand.end_idx);
-                let ratio = Self::compute_ratio(max_w, w, st, sh, just, fs, self.min_ratio);
+                let ratio = Self::compute_ratio(line_avail, w, st, sh, just, fs, self.min_ratio);
                 let cost = self.compute_cost(
                     cand.kind,
                     ratio,
@@ -467,7 +497,6 @@ impl LineBreaker for KnuthPlassBreaker {
             prev_end = cand.end_idx;
         }
 
-        // Retrace optimal breaks.
         let mut chosen = Vec::new();
         let mut idx = table.len() - 1;
         while idx != 0 {
@@ -492,7 +521,9 @@ impl LineBreaker for KnuthPlassBreaker {
                 tokens: slice,
                 width_pt: entry.width_pt,
                 x_start_pt: 0.0,
-                stretch_ratio: if justify && entry.kind != CandidateKind::Mandatory {
+                stretch_ratio: if (justify && entry.kind != CandidateKind::Mandatory)
+                    || entry.ratio < 0.0
+                {
                     entry.ratio
                 } else {
                     0.0
@@ -507,5 +538,17 @@ impl LineBreaker for KnuthPlassBreaker {
             });
         }
         lines
+    }
+}
+
+impl LineBreaker for KnuthPlassBreaker {
+    fn break_tokens(
+        &self,
+        tokens: &[InlineToken],
+        avail_width_pt: f64,
+        justify: bool,
+        kinsoku: &KinsokuSet,
+    ) -> Vec<BrokenLine> {
+        self.break_tokens_with_indents(tokens, avail_width_pt, 0.0, 0.0, justify, kinsoku)
     }
 }

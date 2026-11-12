@@ -20,9 +20,41 @@ impl<'a> DocxWriter<'a> {
         hanging_pt: f64,
         out: &mut String,
     ) {
-        self.render_list_with_trailing_gap(
-            items, tight, level, spacing_pt, indent_pt, hanging_pt, None, None, out,
+        self.render_list_collapsed(
+            items, tight, level, spacing_pt, indent_pt, hanging_pt, false, out,
         );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn render_list_collapsed(
+        &mut self,
+        items: &[ListItemIr],
+        tight: bool,
+        level: usize,
+        spacing_pt: Option<f64>,
+        indent_pt: f64,
+        hanging_pt: f64,
+        collapse_before: bool,
+        out: &mut String,
+    ) {
+        let mut constructs = solve_list_sequence_construct(
+            ListSequenceSource::Bullet { items },
+            tight,
+            level,
+            spacing_pt,
+            indent_pt,
+            hanging_pt,
+            None,
+            None,
+        );
+        if collapse_before
+            && let Some(first) = constructs.first_mut()
+        {
+            first.before_dxa = 0;
+        }
+        for item_construct in &constructs {
+            self.render_list_or_enum_item_blocks(item_construct.blocks, item_construct, out);
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -64,9 +96,48 @@ impl<'a> DocxWriter<'a> {
         hanging_pt: f64,
         out: &mut String,
     ) {
-        self.render_enum_with_trailing_gap(
-            items, tight, level, spacing_pt, indent_pt, hanging_pt, None, None, out,
+        self.render_enum_collapsed(
+            items, tight, level, spacing_pt, indent_pt, hanging_pt, false, out,
         );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn render_enum_collapsed(
+        &mut self,
+        items: &[EnumItemIr],
+        tight: bool,
+        level: usize,
+        spacing_pt: Option<f64>,
+        indent_pt: f64,
+        hanging_pt: f64,
+        collapse_before: bool,
+        out: &mut String,
+    ) {
+        let ilvl = level.min(8);
+        let start_val = items.first().and_then(|it| it.number).unwrap_or(1);
+        let num_id = self.alloc_enum_num_id(ilvl, start_val);
+        let mut constructs = solve_list_sequence_construct(
+            ListSequenceSource::DecimalEnum {
+                items,
+                num_id,
+                start_val,
+            },
+            tight,
+            level,
+            spacing_pt,
+            indent_pt,
+            hanging_pt,
+            None,
+            None,
+        );
+        if collapse_before
+            && let Some(first) = constructs.first_mut()
+        {
+            first.before_dxa = 0;
+        }
+        for item_construct in &constructs {
+            self.render_list_or_enum_item_blocks(item_construct.blocks, item_construct, out);
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -116,17 +187,24 @@ impl<'a> DocxWriter<'a> {
             } else {
                 110
             };
-            let jc_xml = match item.description.first() {
-                Some(BlockNode::Paragraph { style, .. })
-                    if style.align == word_construct::model::HAlignIr::Justify =>
-                {
-                    r#"<w:jc w:val="both"/>"#
+            let (jc_xml, desc_line_spacing, desc_inlines) = match item.description.first() {
+                Some(BlockNode::Paragraph { content, style, .. }) => {
+                    let jc = if style.align == word_construct::model::HAlignIr::Justify {
+                        r#"<w:jc w:val="both"/>"#
+                    } else {
+                        ""
+                    };
+                    (jc, style.line_spacing_pt, content.as_slice())
                 }
-                _ => "",
+                _ => ("", None, item.term.as_slice()),
             };
+            let line_dxa = word_construct::paragraph::compute_line_spacing_dxa(
+                desc_inlines,
+                desc_line_spacing,
+            );
             let _ = write!(
                 out,
-                r#"<w:p><w:pPr>{jc_xml}<w:spacing w:before="0" w:after="{after}" w:line="270" w:lineRule="auto"/><w:ind w:left="440" w:hanging="440"/></w:pPr>"#
+                r#"<w:p><w:pPr>{jc_xml}<w:spacing w:before="0" w:after="{after}" w:line="{line_dxa}" w:lineRule="auto"/><w:ind w:left="440" w:hanging="440"/></w:pPr>"#
             );
             for inline in &item.term {
                 if let InlineNode::Text(r) = inline {

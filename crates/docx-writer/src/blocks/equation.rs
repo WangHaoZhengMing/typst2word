@@ -13,6 +13,16 @@ impl<'a> DocxWriter<'a> {
         self.render_equation_block_with_layout(eq, 115, 155, 0, out);
     }
 
+    pub(crate) fn render_equation_block_collapsed(
+        &mut self,
+        eq: &EquationIr,
+        collapse_before: bool,
+        out: &mut String,
+    ) {
+        let before_dxa = if collapse_before { 0 } else { 115 };
+        self.render_equation_block_with_layout(eq, before_dxa, 155, 0, out);
+    }
+
     pub(crate) fn render_equation_block_with_layout(
         &mut self,
         eq: &EquationIr,
@@ -37,6 +47,8 @@ impl<'a> DocxWriter<'a> {
                 total_dxa,
                 side_dxa,
                 center_dxa,
+                before_dxa,
+                after_dxa,
                 num_half_pts,
                 number_text,
             } => {
@@ -68,11 +80,13 @@ impl<'a> DocxWriter<'a> {
                         r#"<w:tc><w:tcPr><w:tcW w:w="{side_dxa}" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr>"#,
                         r#"<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/></w:pPr></w:p></w:tc>"#,
                         r#"<w:tc><w:tcPr><w:tcW w:w="{center_dxa}" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr>"#,
-                        r#"<w:p><w:pPr><w:jc w:val="center"/><w:spacing w:before="120" w:after="120" w:line="240" w:lineRule="auto"/></w:pPr>"#,
+                        r#"<w:p><w:pPr><w:jc w:val="center"/><w:spacing w:before="{before_dxa}" w:after="{after_dxa}" w:line="240" w:lineRule="auto"/></w:pPr>"#,
                     ),
                     total_dxa = total_dxa,
                     side_dxa = side_dxa,
                     center_dxa = center_dxa,
+                    before_dxa = before_dxa,
+                    after_dxa = after_dxa,
                 );
                 let bm_id = eq
                     .bookmark

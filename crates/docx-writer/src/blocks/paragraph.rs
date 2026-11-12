@@ -2,7 +2,10 @@
 
 use std::fmt::Write as _;
 
-use word_construct::paragraph::{ParagraphConstruct, ParagraphIndentationConstruct};
+use word_construct::paragraph::{
+    ParagraphConstruct, ParagraphIndentationConstruct, ParagraphInlineConstruct,
+};
+use crate::inlines::text::render_text_run_xml_with_spacing;
 use crate::writer::DocxWriter;
 use word_construct::model::{InlineNode, ParagraphStyleIr};
 
@@ -88,7 +91,24 @@ impl<'a> DocxWriter<'a> {
         }
         out.push_str("</w:pPr>");
         let bm_id = bookmark.map(|bm| self.emit_bookmark_start(bm, out));
-        self.render_inlines(content, out);
+        let prev_right_tab = self.in_right_tab_paragraph;
+        self.in_right_tab_paragraph = construct.right_tab_stop_dxa.is_some();
+        if let Some(solved_inlines) =
+            ParagraphConstruct::solve_inlines(content, style, self.content_width_dxa())
+        {
+            for item in &solved_inlines {
+                match item {
+                    ParagraphInlineConstruct::Passthrough(inl) => self.render_inline(inl, out),
+                    ParagraphInlineConstruct::AdjustedText {
+                        run,
+                        char_spacing_dxa,
+                    } => render_text_run_xml_with_spacing(run, *char_spacing_dxa, out),
+                }
+            }
+        } else {
+            self.render_inlines(content, out);
+        }
+        self.in_right_tab_paragraph = prev_right_tab;
         if construct.needs_zwsp_for_inline_eq {
             // Prevent Microsoft Word from promoting a `<w:p>` containing only `<m:oMath>`
             // into centered Display Math Mode (`oMathPara` with +8pt vertical margin).

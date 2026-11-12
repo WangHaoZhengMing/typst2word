@@ -60,13 +60,13 @@ pub(crate) fn build_cust_geom_xml(
     for seg in segments {
         match *seg {
             CurveSegmentIr::MoveTo { x_pt, y_pt } => {
-                let x = pt_to_emu(x_pt + shift_x_pt).max(0);
-                let y = pt_to_emu(y_pt + shift_y_pt).max(0);
+                let x = pt_to_emu(x_pt + shift_x_pt);
+                let y = pt_to_emu(y_pt + shift_y_pt);
                 path_cmds.push_str(&format!(r#"<a:moveTo><a:pt x="{x}" y="{y}"/></a:moveTo>"#));
             }
             CurveSegmentIr::LineTo { x_pt, y_pt } => {
-                let x = pt_to_emu(x_pt + shift_x_pt).max(0);
-                let y = pt_to_emu(y_pt + shift_y_pt).max(0);
+                let x = pt_to_emu(x_pt + shift_x_pt);
+                let y = pt_to_emu(y_pt + shift_y_pt);
                 path_cmds.push_str(&format!(r#"<a:lnTo><a:pt x="{x}" y="{y}"/></a:lnTo>"#));
             }
             CurveSegmentIr::CubicTo {
@@ -77,12 +77,12 @@ pub(crate) fn build_cust_geom_xml(
                 x_pt,
                 y_pt,
             } => {
-                let x1 = pt_to_emu(cx1_pt + shift_x_pt).max(0);
-                let y1 = pt_to_emu(cy1_pt + shift_y_pt).max(0);
-                let x2 = pt_to_emu(cx2_pt + shift_x_pt).max(0);
-                let y2 = pt_to_emu(cy2_pt + shift_y_pt).max(0);
-                let x = pt_to_emu(x_pt + shift_x_pt).max(0);
-                let y = pt_to_emu(y_pt + shift_y_pt).max(0);
+                let x1 = pt_to_emu(cx1_pt + shift_x_pt);
+                let y1 = pt_to_emu(cy1_pt + shift_y_pt);
+                let x2 = pt_to_emu(cx2_pt + shift_x_pt);
+                let y2 = pt_to_emu(cy2_pt + shift_y_pt);
+                let x = pt_to_emu(x_pt + shift_x_pt);
+                let y = pt_to_emu(y_pt + shift_y_pt);
                 path_cmds.push_str(&format!(
                     r#"<a:cubicBezTo><a:pt x="{x1}" y="{y1}"/><a:pt x="{x2}" y="{y2}"/><a:pt x="{x}" y="{y}"/></a:cubicBezTo>"#
                 ));

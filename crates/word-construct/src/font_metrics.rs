@@ -612,11 +612,17 @@ impl FontMetricsProvider for WordFontMetricsProvider {
 
     fn char_advance_pt(&self, font_family: Option<&str>, font_size_pt: f64, ch: char) -> f64 {
         let s = font_size_pt.max(1.0);
+        if is_cjk_or_fullwidth_char(ch) || ch == '…' {
+            return s;
+        }
+        if let Some(fam) = font_family
+            && let Some(units_2048) = lookup_calibrated_glyph_advance_2048(fam, ch)
+        {
+            return (units_2048 as f64 / 2048.0) * s;
+        }
         let class = WordFontClass::classify(font_family, false);
         match (class, ch) {
-            (_, c) if is_cjk_or_fullwidth_char(c) || matches!(c, '—' | '…') => s,
-            // CoreText `Songti SC` (`/System/Library/Fonts/Supplemental/Songti.ttc`, UPEM = 1000)
-            // glyph advance ratios when shaped by Word (`0x10044afdc` `'DFLT'` / `script_id = 5`):
+            (_, '—') => s,
             (WordFontClass::CjkSongti, c) if c.is_whitespace() => 0.250 * s,
             (WordFontClass::CjkSongti, '0'..='9') => 0.469 * s,
             (WordFontClass::CjkSongti, '.') => 0.219 * s,
@@ -634,6 +640,144 @@ impl FontMetricsProvider for WordFontMetricsProvider {
             _ => 0.500 * s,
         }
     }
+}
+
+/// Exact TrueType `hmtx` horizontal advance widths (`2048` design-units-per-em scale)
+/// for printable ASCII (`0x20..=0x7E`), extracted directly from system/Typst font binaries.
+const ASCII_2048_TIMES_ROMAN: [u16; 95] = [
+    512, 682, 836, 1024, 1024, 1706, 1593, 369, 682, 682, 1024, 1155, 512, 682, 512, 569, 1024,
+    1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 569, 569, 1155, 1155, 1155, 909, 1886,
+    1479, 1366, 1366, 1479, 1251, 1139, 1479, 1479, 682, 797, 1479, 1251, 1821, 1479, 1479, 1139,
+    1479, 1366, 1139, 1251, 1479, 1479, 1933, 1479, 1479, 1251, 682, 569, 682, 961, 1024, 682,
+    909, 1024, 909, 1024, 909, 682, 1024, 1024, 569, 569, 1024, 569, 1593, 1024, 1024, 1024, 1024,
+    682, 797, 569, 1024, 1024, 1479, 1024, 1024, 909, 983, 410, 983, 1108,
+];
+
+const ASCII_2048_ARIAL: [u16; 95] = [
+    569, 569, 727, 1139, 1139, 1821, 1366, 391, 682, 682, 797, 1196, 569, 682, 569, 569, 1139,
+    1139, 1139, 1139, 1139, 1139, 1139, 1139, 1139, 1139, 569, 569, 1196, 1196, 1196, 1139, 2079,
+    1366, 1366, 1479, 1479, 1366, 1251, 1593, 1479, 569, 1024, 1366, 1139, 1706, 1479, 1593, 1366,
+    1593, 1479, 1366, 1251, 1479, 1366, 1933, 1366, 1366, 1251, 569, 569, 569, 961, 1139, 682,
+    1139, 1139, 1024, 1139, 1139, 569, 1139, 1139, 455, 455, 1024, 455, 1706, 1139, 1139, 1139,
+    1139, 682, 1024, 569, 1139, 1024, 1479, 1024, 1024, 1024, 684, 532, 684, 1196,
+];
+
+const ASCII_2048_GEORGIA: [u16; 95] = [
+    494, 678, 843, 1317, 1249, 1674, 1455, 441, 768, 768, 967, 1317, 552, 766, 552, 960, 1257,
+    880, 1144, 1130, 1157, 1082, 1159, 1029, 1221, 1159, 640, 640, 1317, 1317, 1317, 980, 1902,
+    1374, 1339, 1315, 1534, 1338, 1227, 1485, 1669, 798, 1060, 1422, 1236, 1899, 1571, 1524, 1249,
+    1524, 1437, 1149, 1267, 1549, 1365, 1998, 1455, 1260, 1232, 768, 960, 768, 1317, 1317, 1024,
+    1032, 1147, 930, 1176, 990, 666, 1043, 1192, 600, 598, 1097, 586, 1804, 1210, 1104, 1170,
+    1146, 839, 885, 707, 1178, 1017, 1510, 1034, 1008, 909, 881, 768, 881, 1317,
+];
+
+const ASCII_2048_COURIER_NEW: [u16; 95] = [1229; 95];
+
+const ASCII_2048_SONGTI_SC: [u16; 95] = [
+    512, 449, 831, 1366, 918, 1686, 1493, 362, 598, 598, 874, 1366, 449, 641, 449, 1024, 961, 961,
+    961, 961, 961, 961, 961, 961, 961, 961, 449, 449, 1366, 1366, 1366, 748, 1878, 1391, 1266,
+    1300, 1579, 1348, 1159, 1579, 1569, 725, 682, 1518, 1180, 1735, 1583, 1597, 1159, 1577, 1303,
+    977, 1264, 1454, 1393, 1819, 1434, 1350, 1337, 555, 1024, 555, 1024, 1026, 682, 1032, 1067,
+    844, 1053, 883, 670, 961, 1090, 553, 459, 971, 557, 1608, 1090, 1040, 1075, 1071, 741, 745,
+    662, 1061, 963, 1366, 936, 864, 868, 981, 1024, 981, 1366,
+];
+
+const ASCII_2048_HEITI_SC: [u16; 95] = [
+    512, 604, 633, 1475, 1135, 1587, 1550, 406, 756, 756, 870, 1241, 567, 680, 567, 895, 1135,
+    1135, 1135, 1135, 1135, 1135, 1135, 1135, 1135, 1135, 567, 567, 1241, 1241, 1241, 1014, 1776,
+    1516, 1176, 1665, 1524, 1098, 993, 1786, 1399, 463, 987, 1210, 946, 1882, 1516, 1780, 1212,
+    1784, 1243, 1020, 872, 1341, 1438, 1966, 1247, 1212, 983, 719, 1239, 719, 1376, 1024, 774,
+    1399, 1397, 1325, 1403, 1331, 643, 1378, 1249, 410, 416, 1028, 410, 1921, 1249, 1341, 1397,
+    1397, 616, 795, 694, 1245, 1135, 1702, 983, 1098, 870, 719, 1376, 719, 1241,
+];
+
+#[inline]
+fn lookup_calibrated_glyph_advance_2048(family: &str, ch: char) -> Option<u16> {
+    let f = family.trim().to_ascii_lowercase();
+    let cp = ch as u32;
+    let is_ascii = (0x20..=0x7E).contains(&cp);
+
+    if f.contains("times") || f.contains("libertinus") || f.contains("cambria") {
+        if is_ascii {
+            return Some(ASCII_2048_TIMES_ROMAN[(cp - 0x20) as usize]);
+        }
+        return match ch {
+            '\u{00A0}' => Some(512),
+            '‘' | '’' => Some(682),
+            '“' | '”' => Some(909),
+            '–' => Some(1024),
+            '—' => Some(2048),
+            _ => None,
+        };
+    }
+    if f.contains("arial") || f.contains("helvetica") || f.contains("calibri") {
+        if is_ascii {
+            return Some(ASCII_2048_ARIAL[(cp - 0x20) as usize]);
+        }
+        return match ch {
+            '\u{00A0}' => Some(569),
+            '‘' | '’' => Some(455),
+            '“' | '”' => Some(682),
+            '–' => Some(1139),
+            '—' => Some(2048),
+            _ => None,
+        };
+    }
+    if f.contains("georgia") {
+        if is_ascii {
+            return Some(ASCII_2048_GEORGIA[(cp - 0x20) as usize]);
+        }
+        return match ch {
+            '\u{00A0}' => Some(494),
+            '‘' | '’' => Some(464),
+            '“' | '”' => Some(840),
+            '–' => Some(1317),
+            '—' => Some(1755),
+            _ => None,
+        };
+    }
+    if f.contains("courier") || f.contains("mono") || f.contains("menlo") || f.contains("consolas")
+    {
+        if is_ascii {
+            return Some(ASCII_2048_COURIER_NEW[(cp - 0x20) as usize]);
+        }
+        return match ch {
+            '\u{00A0}' | '‘' | '’' | '“' | '”' | '–' | '—' => Some(1229),
+            _ => None,
+        };
+    }
+    if f.contains("songti") || f.contains("stsong") || f.contains("kaiti") || f == "宋体" || f == "楷体"
+    {
+        if is_ascii {
+            return Some(ASCII_2048_SONGTI_SC[(cp - 0x20) as usize]);
+        }
+        return match ch {
+            '\u{00A0}' => Some(512),
+            '‘' => Some(479),
+            '’' => Some(549),
+            '“' => Some(797),
+            '”' => Some(844),
+            '–' | '—' => Some(2048),
+            _ => None,
+        };
+    }
+    if f.contains("heiti")
+        || f.contains("pingfang")
+        || f.contains("simhei")
+        || f.contains("yahei")
+        || f == "黑体"
+    {
+        if is_ascii {
+            return Some(ASCII_2048_HEITI_SC[(cp - 0x20) as usize]);
+        }
+        return match ch {
+            '\u{00A0}' => Some(512),
+            '‘' | '’' | '“' | '”' | '—' => Some(2048),
+            '–' => Some(1024),
+            _ => None,
+        };
+    }
+    None
 }
 
 /// Check if a single character is a CJK ideograph, CJK symbol, or fullwidth glyph.

@@ -11,16 +11,27 @@ impl<'a> DocxWriter<'a> {
         &mut self,
         title: Option<&[InlineNode]>,
         entries: &[BibEntryIr],
+        collapse_before: bool,
         out: &mut String,
     ) {
         if let Some(t) = title {
-            out.push_str(r#"<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr>"#);
+            let before = if collapse_before { 0 } else { 120 };
+            let _ = write!(
+                out,
+                r#"<w:p><w:pPr><w:pStyle w:val="Heading1"/><w:spacing w:before="{before}" w:after="60" w:line="240" w:lineRule="auto"/></w:pPr>"#,
+            );
             self.render_inlines(t, out);
             out.push_str("</w:p>");
         }
-        for entry in entries {
-            out.push_str(
-                r#"<w:p><w:pPr><w:ind w:left="480" w:hanging="480"/><w:spacing w:before="40" w:after="80"/></w:pPr>"#,
+        for (idx, entry) in entries.iter().enumerate() {
+            let before = if idx == 0 && title.is_none() && collapse_before {
+                0
+            } else {
+                40
+            };
+            let _ = write!(
+                out,
+                r#"<w:p><w:pPr><w:ind w:left="480" w:hanging="480"/><w:spacing w:before="{before}" w:after="80"/></w:pPr>"#,
             );
             if let Some(prefix) = &entry.prefix {
                 let _ = write!(

@@ -111,6 +111,8 @@ pub enum EquationBlockConstruct<'a> {
         total_dxa: i64,
         side_dxa: i64,
         center_dxa: i64,
+        before_dxa: i64,
+        after_dxa: i64,
         num_half_pts: u32,
         number_text: &'a str,
     },
@@ -125,16 +127,18 @@ impl<'a> EquationBlockConstruct<'a> {
         indent_left_dxa: usize,
     ) -> Self {
         if let Some(num) = eq.numbering_text.as_deref() {
-            let content_w_pt = page_content_width_pt.max(360.0);
+            let content_w_pt = page_content_width_pt.max(144.0);
             let total_dxa = pt_to_dxa(content_w_pt);
-            let side_dxa = (total_dxa * 12 / 100).max(720);
-            let center_dxa = (total_dxa - 2 * side_dxa).max(2880);
+            let side_dxa = (total_dxa * 12 / 100).max(480);
+            let center_dxa = (total_dxa - 2 * side_dxa).max(960);
             let num_half_pts =
                 ((eq.font_size_pt.unwrap_or(11.0) * 2.0).round() as u32).clamp(8, 144);
             Self::NumberedThreeColumnRow {
                 total_dxa,
                 side_dxa,
                 center_dxa,
+                before_dxa: before_dxa.max(0),
+                after_dxa: after_dxa.max(0),
                 num_half_pts,
                 number_text: num,
             }

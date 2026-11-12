@@ -55,7 +55,9 @@ impl<'a> DocxWriter<'a> {
             self.has_scoped_columns = false;
             self.render_blocks(blocks, &mut out);
             if index + 1 < sections.len() {
-                out.push_str("<w:p><w:pPr>");
+                out.push_str(
+                    r#"<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="20" w:lineRule="exact"/><w:rPr><w:sz w:val="2"/><w:szCs w:val="2"/></w:rPr>"#,
+                );
                 self.render_sect_pr(&mut out);
                 out.push_str("</w:pPr></w:p>");
             } else {
@@ -76,7 +78,9 @@ impl<'a> DocxWriter<'a> {
         out.push_str(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#);
         let _ = write!(out, "<w:{tag} {}>", Self::xml_namespaces());
         self.render_blocks(blocks, &mut out);
-        if blocks.is_empty() { out.push_str("<w:p/>"); }
+        if blocks.is_empty() {
+            out.push_str("<w:p/>");
+        }
         let _ = write!(out, "</w:{tag}>");
         out
     }
@@ -86,35 +90,56 @@ impl<'a> DocxWriter<'a> {
         self.render_sect_pr_inner(ps.columns, 36.0, self.has_scoped_columns, out);
     }
 
-    pub(crate) fn first_block_uses_cjk_font(&self) -> bool {
-        let inlines = match self.current_blocks.first() {
-            Some(BlockNode::Heading { content, .. }) => Some(content.as_slice()),
-            Some(BlockNode::Paragraph { content, .. }) => Some(content.as_slice()),
-            Some(BlockNode::Title { content, .. }) => Some(content.as_slice()),
-            _ => None,
+    pub(crate) fn first_block_first_line_metrics(&self) -> (Option<&str>, Option<f64>, bool) {
+        let (inlines, default_sz) = match self.current_blocks.first() {
+            Some(BlockNode::Heading { level, content, .. }) => {
+                let dsz = match level {
+                    1 => 15.4,
+                    2 => 13.2,
+                    _ => 11.0,
+                };
+                (Some(content.as_slice()), Some(dsz))
+            }
+            Some(BlockNode::Paragraph { content, .. }) => (Some(content.as_slice()), Some(11.0)),
+            Some(BlockNode::Title { content, .. }) => (Some(content.as_slice()), Some(18.0)),
+            _ => (None, None),
         };
         let Some(inlines) = inlines else {
-            return false;
+            return (None, None, false);
         };
-        inlines.iter().any(|inl| {
-            if let InlineNode::Text(r) = inl
-                && let Some(fam) = &r.font_family
-            {
-                let fl = fam.to_ascii_lowercase();
-                fl.contains("song")
-                    || fl.contains("hei")
-                    || fl.contains("kai")
-                    || fl.contains("fang")
-                    || fl.contains("pingfang")
-                    || fl.contains("sim")
-                    || fl.contains("yahei")
-                    || fl.contains("宋体")
-                    || fl.contains("黑体")
-                    || fl.contains("楷体")
-            } else {
-                false
-            }
-        })
+        let is_cjk_family = |fam: &str| {
+            let fl = fam.to_ascii_lowercase();
+            fl.contains("song")
+                || fl.contains("hei")
+                || fl.contains("kai")
+                || fl.contains("fang")
+                || fl.contains("pingfang")
+                || fl.contains("sim")
+                || fl.contains("yahei")
+                || fl.contains("宋体")
+                || fl.contains("黑体")
+                || fl.contains("楷体")
+                || fl.contains("微软雅黑")
+        };
+        let cjk_font = inlines.iter().find_map(|inl| match inl {
+            InlineNode::Text(r) => r.font_family.as_deref().filter(|f| is_cjk_family(f)),
+            _ => None,
+        });
+        let first_font = cjk_font.or_else(|| {
+            inlines.iter().find_map(|inl| match inl {
+                InlineNode::Text(r) => r.font_family.as_deref(),
+                _ => None,
+            })
+        });
+        let font_size_pt = inlines
+            .iter()
+            .find_map(|inl| match inl {
+                InlineNode::Text(r) => r.font_size_pt,
+                _ => None,
+            })
+            .or(default_sz);
+        let is_cjk = cjk_font.is_some() || word_construct::paragraph::content_has_cjk(inlines);
+        (first_font, font_size_pt, is_cjk)
     }
 
     pub(crate) fn render_sect_pr_inner(
@@ -143,9 +168,17 @@ impl<'a> DocxWriter<'a> {
             ""
         };
         let _ = write!(out, r#"<w:pgSz w:w="{w_dxa}" w:h="{h_dxa}"{orient}/>"#);
-        let (top_pt, bottom_pt) = self.options.page_margin_calibration.margins(
-            ps.margin_top_pt, ps.margin_bottom_pt, self.first_block_uses_cjk_font(),
-        );
+        let (first_font, first_sz_pt, first_is_cjk) = self.first_block_first_line_metrics();
+        let (top_pt, bottom_pt) = self
+            .options
+            .page_margin_calibration
+            .margins_for_first_line(
+                ps.margin_top_pt,
+                ps.margin_bottom_pt,
+                first_font,
+                first_sz_pt,
+                first_is_cjk,
+            );
         let top_dxa = pt_to_dxa(top_pt);
         let bottom_dxa = pt_to_dxa(bottom_pt);
         let _ = write!(

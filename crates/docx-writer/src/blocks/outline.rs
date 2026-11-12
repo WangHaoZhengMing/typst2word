@@ -12,11 +12,14 @@ impl<'a> DocxWriter<'a> {
         &mut self,
         title: Option<&[InlineNode]>,
         entries: &[OutlineEntryIr],
+        collapse_before: bool,
         out: &mut String,
     ) {
         if let Some(t) = title {
-            out.push_str(
-                r#"<w:p><w:pPr><w:pStyle w:val="Heading1"/><w:spacing w:before="120" w:after="60" w:line="240" w:lineRule="auto"/></w:pPr>"#,
+            let before = if collapse_before { 0 } else { 120 };
+            let _ = write!(
+                out,
+                r#"<w:p><w:pPr><w:pStyle w:val="Heading1"/><w:spacing w:before="{before}" w:after="60" w:line="240" w:lineRule="auto"/></w:pPr>"#,
             );
             self.render_inlines(t, out);
             out.push_str("</w:p>");
@@ -24,15 +27,20 @@ impl<'a> DocxWriter<'a> {
         let content_w_pt = (self.current_setup.width_pt
             - self.current_setup.margin_left_pt
             - self.current_setup.margin_right_pt)
-            .max(360.0);
+            .max(120.0);
         let tab_pos = pt_to_dxa(content_w_pt);
         let num_entries = entries.len();
         for (idx, entry) in entries.iter().enumerate() {
             let indent = (entry.level.saturating_sub(1)) * 250;
+            let before = if idx == 0 && title.is_none() && collapse_before {
+                0
+            } else {
+                22
+            };
             let after = if idx + 1 == num_entries { 80 } else { 22 };
             let _ = write!(
                 out,
-                r#"<w:p><w:pPr><w:tabs><w:tab w:val="right" w:leader="dot" w:pos="{tab_pos}"/></w:tabs><w:ind w:left="{indent}"/><w:spacing w:before="22" w:after="{after}" w:line="250" w:lineRule="auto"/></w:pPr>"#
+                r#"<w:p><w:pPr><w:tabs><w:tab w:val="right" w:leader="dot" w:pos="{tab_pos}"/></w:tabs><w:ind w:left="{indent}"/><w:spacing w:before="{before}" w:after="{after}" w:line="250" w:lineRule="auto"/></w:pPr>"#
             );
             let page_run = TextRunIr {
                 text: entry.page.clone(),

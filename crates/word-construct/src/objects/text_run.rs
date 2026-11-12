@@ -63,11 +63,17 @@ pub struct TextRunConstruct<'a> {
     pub font_family: Option<&'a str>,
     pub east_asia_hint: EastAsiaHintPolicy,
     pub font_size: RunFontSizeConstruct,
+    pub char_spacing_dxa: Option<i32>,
     pub border_sz_eighths_pt: Option<u32>,
 }
 
 impl<'a> TextRunConstruct<'a> {
+    #[inline]
     pub fn solve(run: &'a TextRunIr) -> Self {
+        Self::solve_with_spacing(run, None)
+    }
+
+    pub fn solve_with_spacing(run: &'a TextRunIr, extra_char_spacing_dxa: Option<i32>) -> Self {
         let font_class = classify_font_family(run.font_family.as_deref(), run.is_code);
         let text_script = TextScriptClassIr::classify(&run.text);
         let east_asia_hint =
@@ -112,6 +118,22 @@ impl<'a> TextRunConstruct<'a> {
             }
         };
 
+        let base_spacing = match font_size {
+            RunFontSizeConstruct::ConsolasInlineCodeCompensated {
+                char_spacing_dxa, ..
+            } => Some(char_spacing_dxa),
+            _ => None,
+        };
+        let char_spacing_dxa = match (base_spacing, extra_char_spacing_dxa) {
+            (Some(b), Some(e)) => {
+                let sum = b + e;
+                (sum != 0).then_some(sum)
+            }
+            (None, Some(e)) => (e != 0).then_some(e),
+            (Some(b), None) => Some(b),
+            (None, None) => None,
+        };
+
         let border_sz_eighths_pt = run
             .border
             .as_ref()
@@ -131,6 +153,7 @@ impl<'a> TextRunConstruct<'a> {
                 .or(run.is_code.then_some("DejaVu Sans Mono")),
             east_asia_hint,
             font_size,
+            char_spacing_dxa,
             border_sz_eighths_pt,
         }
     }

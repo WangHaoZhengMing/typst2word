@@ -14,11 +14,20 @@ pub struct ShapeBlockConstruct {
 
 impl ShapeBlockConstruct {
     pub fn solve(shape: &ShapeIr, left_indent_dxa: usize) -> Self {
-        let (before_dxa, after_dxa) = if shape.width_pt >= 350.0 {
+        Self::solve_with_collapse(shape, left_indent_dxa, false)
+    }
+
+    pub fn solve_with_collapse(
+        shape: &ShapeIr,
+        left_indent_dxa: usize,
+        collapse_before: bool,
+    ) -> Self {
+        let (raw_before, after_dxa) = if shape.width_pt >= 350.0 {
             (0, 100)
         } else {
             (70, 210)
         };
+        let before_dxa = if collapse_before { 0 } else { raw_before };
         Self {
             align: shape.align,
             left_indent_dxa,

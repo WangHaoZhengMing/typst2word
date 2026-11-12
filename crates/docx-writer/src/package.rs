@@ -14,10 +14,25 @@ impl<'a> DocxWriter<'a> {
     pub(crate) fn build(&mut self) -> Result<Vec<u8>, String> {
         let setups: Vec<_> = std::iter::once(self.doc.page_setup.clone())
             .chain(self.doc.sections.iter().map(|s| s.page_setup.clone())).collect();
+        let mut seen_header = false;
+        let mut seen_footer = false;
         for setup in &setups {
-            // An explicit empty part prevents inheriting the previous section's furniture.
-            let header = if setups.len() > 1 || !setup.header.is_empty() { Some(self.alloc_rel_id()) } else { None };
-            let footer = if setups.len() > 1 || !setup.footer.is_empty() { Some(self.alloc_rel_id()) } else { None };
+            // An explicit empty part prevents inheriting a previous section's non-empty furniture,
+            // while avoiding phantom empty header/footer height when no section has used one yet.
+            let has_header = !setup.header.is_empty();
+            let has_footer = !setup.footer.is_empty();
+            let header = if has_header || seen_header {
+                Some(self.alloc_rel_id())
+            } else {
+                None
+            };
+            let footer = if has_footer || seen_footer {
+                Some(self.alloc_rel_id())
+            } else {
+                None
+            };
+            seen_header |= has_header;
+            seen_footer |= has_footer;
             self.section_furniture.push((header, footer));
         }
         let document_xml = self.render_document_xml();

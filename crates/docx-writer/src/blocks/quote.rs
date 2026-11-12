@@ -15,12 +15,29 @@ impl<'a> DocxWriter<'a> {
         attribution: Option<&[InlineNode]>,
         out: &mut String,
     ) {
+        self.render_quote_collapsed(body, attribution, false, out);
+    }
+
+    pub(crate) fn render_quote_collapsed(
+        &mut self,
+        body: &[BlockNode],
+        attribution: Option<&[InlineNode]>,
+        collapse_before: bool,
+        out: &mut String,
+    ) {
         let after_body = if attribution.is_some() { 100 } else { 240 };
-        for block in body {
+        for (idx, block) in body.iter().enumerate() {
             if let BlockNode::Paragraph { content, .. } = block {
+                let before = if idx == 0 && collapse_before {
+                    0
+                } else if idx == 0 {
+                    200
+                } else {
+                    80
+                };
                 let _ = write!(
                     out,
-                    r#"<w:p><w:pPr><w:pStyle w:val="Quote"/><w:ind w:left="220" w:right="220"/><w:spacing w:before="400" w:after="{after_body}" w:line="274" w:lineRule="auto"/></w:pPr>"#,
+                    r#"<w:p><w:pPr><w:pStyle w:val="Quote"/><w:ind w:left="220" w:right="220"/><w:spacing w:before="{before}" w:after="{after_body}" w:line="274" w:lineRule="auto"/></w:pPr>"#,
                 );
                 self.render_inlines(content, out);
                 out.push_str("</w:p>");

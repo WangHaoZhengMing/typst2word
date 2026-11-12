@@ -15,6 +15,141 @@ impl FirstFitBreaker {
         Self
     }
 
+    /// Break `tokens` with explicit first-line and hanging indents (`pt`).
+    pub fn break_tokens_with_indents(
+        &self,
+        tokens: &[InlineToken],
+        avail_width_pt: f64,
+        first_line_indent_pt: f64,
+        hanging_indent_pt: f64,
+        justify: bool,
+        kinsoku: &KinsokuSet,
+    ) -> Vec<BrokenLine> {
+        if tokens.is_empty() {
+            return Vec::new();
+        }
+        let line0_max_w = (avail_width_pt - first_line_indent_pt).max(1.0);
+        let rest_max_w = (avail_width_pt - hanging_indent_pt).max(1.0);
+        let mut lines: Vec<BrokenLine> = Vec::new();
+        let mut current: Vec<InlineToken> = Vec::new();
+        let mut current_w = 0.0_f64;
+
+        for tok in tokens {
+            let max_w = if lines.is_empty() {
+                line0_max_w
+            } else {
+                rest_max_w
+            };
+            if tok.is_mandatory_break() {
+                lines.push(Self::finalize_line(
+                    std::mem::take(&mut current),
+                    max_w,
+                    justify,
+                    LineBreakCause::MandatoryBreak,
+                    false,
+                ));
+                current_w = 0.0;
+                continue;
+            }
+
+            if current.is_empty() && tok.is_whitespace() {
+                continue;
+            }
+
+            if tok.is_whitespace() {
+                current.push(tok.clone());
+                current_w += tok.width_pt;
+                continue;
+            }
+
+            if current.is_empty() {
+                Self::push_with_emergency_truncation(
+                    tok.clone(),
+                    &mut current,
+                    &mut current_w,
+                    &mut lines,
+                    max_w,
+                    justify,
+                );
+            } else if current_w + tok.width_pt <= max_w + 1e-4 {
+                current.push(tok.clone());
+                current_w += tok.width_pt;
+            } else {
+                while current.last().is_some_and(|t| t.is_whitespace()) {
+                    current.pop();
+                }
+
+                let mut carried: Vec<InlineToken> = Vec::new();
+
+                while current.len() >= 2
+                    && current
+                        .last()
+                        .is_some_and(|last_t| last_t.is_kinsoku_line_end_forbidden(kinsoku))
+                {
+                    if let Some(popped) = current.pop() {
+                        carried.insert(0, popped);
+                    }
+                }
+
+                let next_first_forbidden = carried
+                    .first()
+                    .unwrap_or(tok)
+                    .is_kinsoku_line_start_forbidden(kinsoku);
+                if next_first_forbidden && current.len() >= 2 {
+                    while current.last().is_some_and(|t| t.is_whitespace()) {
+                        current.pop();
+                    }
+                    if current.len() >= 2
+                        && let Some(popped) = current.pop()
+                    {
+                        carried.insert(0, popped);
+                    }
+                }
+
+                lines.push(Self::finalize_line(
+                    std::mem::take(&mut current),
+                    max_w,
+                    justify,
+                    LineBreakCause::NormalWrap,
+                    false,
+                ));
+
+                current_w = carried.iter().map(|t| t.width_pt).sum();
+                current = carried;
+                let next_max_w = if lines.is_empty() {
+                    line0_max_w
+                } else {
+                    rest_max_w
+                };
+                Self::push_with_emergency_truncation(
+                    tok.clone(),
+                    &mut current,
+                    &mut current_w,
+                    &mut lines,
+                    next_max_w,
+                    justify,
+                );
+            }
+        }
+
+        if !current.is_empty() {
+            let final_max_w = if lines.is_empty() {
+                line0_max_w
+            } else {
+                rest_max_w
+            };
+            lines.push(Self::finalize_line(
+                current,
+                final_max_w,
+                justify,
+                LineBreakCause::NormalWrap,
+                true,
+            ));
+        }
+
+        lines
+    }
+
     fn finalize_line(
         mut tokens: Vec<InlineToken>,
         avail_width_pt: f64,
@@ -98,121 +233,6 @@ impl LineBreaker for FirstFitBreaker {
         justify: bool,
         kinsoku: &KinsokuSet,
     ) -> Vec<BrokenLine> {
-        if tokens.is_empty() {
-            return Vec::new();
-        }
-        let max_w = avail_width_pt.max(1.0);
-        let mut lines: Vec<BrokenLine> = Vec::new();
-        let mut current: Vec<InlineToken> = Vec::new();
-        let mut current_w = 0.0_f64;
-
-        for tok in tokens {
-            if tok.is_mandatory_break() {
-                lines.push(Self::finalize_line(
-                    std::mem::take(&mut current),
-                    max_w,
-                    justify,
-                    LineBreakCause::MandatoryBreak,
-                    false,
-                ));
-                current_w = 0.0;
-                continue;
-            }
-
-            // Skip leading whitespace at the beginning of a wrapped line.
-            if current.is_empty() && tok.is_whitespace() {
-                continue;
-            }
-
-            // Trailing whitespace is allowed to hang without triggering a wrap.
-            if tok.is_whitespace() {
-                current.push(tok.clone());
-                current_w += tok.width_pt;
-                continue;
-            }
-
-            if current.is_empty() {
-                Self::push_with_emergency_truncation(
-                    tok.clone(),
-                    &mut current,
-                    &mut current_w,
-                    &mut lines,
-                    max_w,
-                    justify,
-                );
-            } else if current_w + tok.width_pt <= max_w + 1e-4 {
-                current.push(tok.clone());
-                current_w += tok.width_pt;
-            } else {
-                // Trim trailing whitespace before checking kinsoku constraints.
-                while current.last().is_some_and(|t| t.is_whitespace()) {
-                    current.pop();
-                }
-
-                let mut carried: Vec<InlineToken> = Vec::new();
-
-                // 1. Kinsoku line-end forbidden check: if the last token on `current` is an opening
-                // bracket/quote (`（`, `“`, `《`, etc.) and `current` has at least 2 tokens, move it
-                // to the start of the next line.
-                while current.len() >= 2
-                    && current
-                        .last()
-                        .is_some_and(|last_t| last_t.is_kinsoku_line_end_forbidden(kinsoku))
-                {
-                    if let Some(popped) = current.pop() {
-                        carried.insert(0, popped);
-                    }
-                }
-
-                // 2. Kinsoku line-start forbidden check: if the first token of the new line (either
-                // `carried[0]` or `tok`) is forbidden at line start (`，`, `。`, `）`, etc.) and
-                // `current` still has >= 2 visible tokens, backtrack one token from `current`.
-                let next_first_forbidden = carried
-                    .first()
-                    .unwrap_or(tok)
-                    .is_kinsoku_line_start_forbidden(kinsoku);
-                if next_first_forbidden && current.len() >= 2 {
-                    while current.last().is_some_and(|t| t.is_whitespace()) {
-                        current.pop();
-                    }
-                    if current.len() >= 2
-                        && let Some(popped) = current.pop()
-                    {
-                        carried.insert(0, popped);
-                    }
-                }
-
-                lines.push(Self::finalize_line(
-                    std::mem::take(&mut current),
-                    max_w,
-                    justify,
-                    LineBreakCause::NormalWrap,
-                    false,
-                ));
-
-                current_w = carried.iter().map(|t| t.width_pt).sum();
-                current = carried;
-                Self::push_with_emergency_truncation(
-                    tok.clone(),
-                    &mut current,
-                    &mut current_w,
-                    &mut lines,
-                    max_w,
-                    justify,
-                );
-            }
-        }
-
-        if !current.is_empty() {
-            lines.push(Self::finalize_line(
-                current,
-                max_w,
-                justify,
-                LineBreakCause::NormalWrap,
-                true,
-            ));
-        }
-
-        lines
+        self.break_tokens_with_indents(tokens, avail_width_pt, 0.0, 0.0, justify, kinsoku)
     }
 }

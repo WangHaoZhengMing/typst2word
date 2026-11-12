@@ -472,4 +472,95 @@ mod tests {
         assert!(p9_lines[5].is_emergency_truncated());
         assert!(p9_lines[6].visible_text().starts_with("0亿美元，到2023年锐减到了2593亿美元。"));
     }
+
+    #[test]
+    fn test_t8_knuth_plass_shrunk_line_glue_compensation_latin_and_cjk() {
+        use ir::{HAlignIr, InlineNode, LinebreaksIr, ParagraphStyleIr, TextRunIr};
+        use crate::paragraph::{ParagraphConstruct, ParagraphInlineConstruct};
+
+        // 1. `par_pad_left_right`: 320pt page, left=24pt, right=24pt -> avail=272pt, 12pt Times New Roman
+        let latin_run = InlineNode::Text(TextRunIr {
+            text: "In olden times when wishing still helped one, there lived a king whose daughters were all beautiful, and the youngest was so beautiful that the sun itself wondered.".to_string(),
+            font_family: Some("Times New Roman".to_string()),
+            font_size_pt: Some(12.0),
+            ..Default::default()
+        });
+        let mut pad_style = ParagraphStyleIr::default().with_align(HAlignIr::Justify);
+        pad_style.justify = true;
+        pad_style.linebreaks = LinebreaksIr::Auto;
+        pad_style.left_indent_pt = 24.0;
+        pad_style.right_indent_pt = 24.0;
+
+        let solved_pad = ParagraphConstruct::solve_inlines(
+            std::slice::from_ref(&latin_run),
+            &pad_style,
+            320 * 20,
+        )
+        .expect("Knuth-Plass shrunk lines should produce glue adjustments");
+        assert!(solved_pad.iter().any(|it| matches!(
+            it,
+            ParagraphInlineConstruct::AdjustedText {
+                char_spacing_dxa: Some(d),
+                ..
+            } if *d < 0
+        )));
+
+        // 2. `par_cjk_latin_mixed`: 300pt page, 11pt Songti SC
+        let mixed_run = InlineNode::Text(TextRunIr {
+            text: "本项目通过 Spring Boot 集成 MyBatis-Plus 与 Redis 缓存组件，在 macOS 平台上验证 OpenXML 排版一致性。".to_string(),
+            font_family: Some("Songti SC".to_string()),
+            font_size_pt: Some(11.0),
+            ..Default::default()
+        });
+        let mut mix_style = ParagraphStyleIr::default().with_align(HAlignIr::Justify);
+        mix_style.justify = true;
+        mix_style.linebreaks = LinebreaksIr::Auto;
+
+        let solved_mix = ParagraphConstruct::solve_inlines(
+            std::slice::from_ref(&mixed_run),
+            &mix_style,
+            300 * 20,
+        )
+        .expect("CJK+Latin mixed paragraph should shrink spaces and fullwidth comma on Line 1");
+        assert!(solved_mix.iter().any(|it| matches!(
+            it,
+            ParagraphInlineConstruct::AdjustedText {
+                run,
+                char_spacing_dxa: Some(d),
+            } if run.text == "，" && *d < -40
+        )));
+
+        // 3. `par_cjk_kinsoku`: 240pt page, 12pt Songti SC — Line 2 attaches negative dxa to `号` preceding `（`
+        let kinsoku_run = InlineNode::Text(TextRunIr {
+            text: "测试中文排版避头尾规则，确保句号、逗号、感叹号不会出现在行首，并且左括号（如“引号”与《书名号》）不会孤立在行尾。".to_string(),
+            font_family: Some("Songti SC".to_string()),
+            font_size_pt: Some(12.0),
+            ..Default::default()
+        });
+        let solved_kin = ParagraphConstruct::solve_inlines(
+            std::slice::from_ref(&kinsoku_run),
+            &mix_style,
+            240 * 20,
+        )
+        .expect("CJK kinsoku paragraph should shrink fullwidth punctuation on Lines 1 & 2");
+        assert!(solved_kin.iter().any(|it| matches!(
+            it,
+            ParagraphInlineConstruct::AdjustedText {
+                run,
+                char_spacing_dxa: Some(d),
+            } if run.text == "号" && *d < -60
+        )));
+
+        // 4. `linebreaks: "simple"` must NEVER produce Knuth-Plass glue shrinkage!
+        let mut simple_style = mix_style.clone();
+        simple_style.linebreaks = LinebreaksIr::Simple;
+        assert!(
+            ParagraphConstruct::solve_inlines(
+                std::slice::from_ref(&mixed_run),
+                &simple_style,
+                300 * 20
+            )
+            .is_none()
+        );
+    }
 }
