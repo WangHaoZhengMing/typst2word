@@ -3,14 +3,20 @@
 
 pub(crate) mod queries;
 
-use typst::foundations::Content;
+use std::collections::HashSet;
+
+use typst::foundations::{Content, StyleChain, StyledElem};
 use typst::introspection::{Location, Tag};
 use typst::layout::{Frame, FrameItem, GroupItem, Inherit, Point, Size};
-use typst::model::Destination;
+use typst::model::{DirectLinkElem, EmphElem, LinkElem, LinkMarker, StrongElem, Destination};
 use typst::syntax::Span;
-use typst::text::TextItem;
+use typst::text::{
+    HighlightElem, OverlineElem, SmallcapsElem, StrikeElem, SubElem, SuperElem, TextElem,
+    TextItem, UnderlineElem,
+};
 use typst::visualize::{Image, Shape};
 
+use compiler::RealizedSemanticStore;
 use crate::ExtractorContext;
 
 /// Virtual vertical stride (`10000.0 pt`) separating consecutive pages in the unified
@@ -48,6 +54,8 @@ pub(crate) enum TreeNode {
     Text {
         text: TextItem,
         pos: Point,
+        tracking_pt: Option<f64>,
+        baseline_shift_pt: Option<f64>,
     },
     Shape {
         shape: Shape,
@@ -67,7 +75,6 @@ pub(crate) enum TreeNode {
         #[allow(dead_code)]
         pos: Point,
     },
-    PageBreak,
 }
 
 #[derive(Debug, Clone)]
@@ -87,8 +94,25 @@ pub(crate) struct PendingSplitGroup {
     pub(crate) cum_y: typst::layout::Abs,
 }
 
+fn is_reopenable_inline_tag(elem: &Content) -> bool {
+    elem.is::<StrongElem>()
+        || elem.is::<EmphElem>()
+        || elem.is::<UnderlineElem>()
+        || elem.is::<StrikeElem>()
+        || elem.is::<OverlineElem>()
+        || elem.is::<HighlightElem>()
+        || elem.is::<SmallcapsElem>()
+        || elem.is::<SubElem>()
+        || elem.is::<SuperElem>()
+        || elem.is::<LinkMarker>()
+        || elem.is::<LinkElem>()
+        || elem.is::<DirectLinkElem>()
+}
+
 impl<'a> ExtractorContext<'a> {
-    /// Pre-scan a frame to collect `GroupItem`s that have `group.parent.is_some()`.
+    /// Pre-scan a frame to collect `GroupItem`s that have `group.parent.is_some()`,
+    /// recursing into nested frames even inside parented groups so nested footnotes
+    /// or sub-cells inside floats/tables are never dropped.
     pub(crate) fn collect_detached_parent_groups(
         &mut self,
         page_idx: usize,
@@ -118,9 +142,8 @@ impl<'a> ExtractorContext<'a> {
                                 .push((abs_pos, group.clone()));
                         }
                     }
-                } else {
-                    self.collect_detached_parent_groups(page_idx, &group.frame, abs_pos);
                 }
+                self.collect_detached_parent_groups(page_idx, &group.frame, abs_pos);
             }
         }
     }
@@ -128,41 +151,35 @@ impl<'a> ExtractorContext<'a> {
     /// Build a hierarchical `Vec<TreeNode>` from `frame`, flattening soft untransformed
     /// line frames while keeping hard/transformed groups and pairing `Tag::Start` / `Tag::End`.
     pub(crate) fn build_frame_tree(&mut self, frame: &Frame, base_offset: Point) -> Vec<TreeNode> {
+        let saved_style = self.active_text_style;
         let mut root_nodes: Vec<TreeNode> = Vec::new();
         let mut stack: Vec<OpenElement> = Vec::new();
         self.append_frame_items_to_tree(frame, base_offset, &mut root_nodes, &mut stack);
         self.flush_open_stack(&mut root_nodes, &mut stack);
+        self.active_text_style = saved_style;
         root_nodes
     }
 
-    /// Build a continuous `Vec<TreeNode>` across all pages of the document, preserving
-    /// open tags (`EnumElem`, `ListElem`, `ParElem`, etc.) across natural page wraps and
-    /// only inserting `TreeNode::PageBreak` where an explicit `#pagebreak()` occurred.
+    /// Build a continuous `Vec<TreeNode>` across `page_range`, preserving open tags
+    /// (`EnumElem`, `ListElem`, `ParElem`, `BlockElem`, etc.) across natural page wraps.
+    /// Explicit user `#pagebreak()`s are carried directly as `PagebreakElem` tags from
+    /// `compiler::realize_document_pairs` rather than string-matching page text.
     pub(crate) fn build_document_frame_tree(
         &mut self,
-        mut pagebreak_targets: Vec<String>,
         page_range: std::ops::Range<usize>,
     ) -> Vec<TreeNode> {
+        let saved_style = self.active_text_style;
+        self.active_text_style = (None, None);
         let mut root_nodes: Vec<TreeNode> = Vec::new();
         let mut stack: Vec<OpenElement> = Vec::new();
         let pages = self.compiled.document.pages();
 
-        for (page_idx, page) in pages.iter().enumerate().take(page_range.end).skip(page_range.start) {
-            if page_idx > page_range.start && !pagebreak_targets.is_empty() {
-                let page_head: String = Self::frame_body_plain_text(&page.frame)
-                    .chars()
-                    .filter(|c| !c.is_whitespace())
-                    .take(40)
-                    .collect();
-                if let Some(pos_idx) = pagebreak_targets.iter().position(|t| {
-                    t == "__PAGEBREAK_ANY__"
-                        || (!page_head.is_empty() && page_head.contains(t.as_str()))
-                }) {
-                    pagebreak_targets.remove(pos_idx);
-                    self.flush_open_stack(&mut root_nodes, &mut stack);
-                    root_nodes.push(TreeNode::PageBreak);
-                }
-            }
+        for (page_idx, page) in pages
+            .iter()
+            .enumerate()
+            .take(page_range.end)
+            .skip(page_range.start)
+        {
             let x_shift_pt = if self.mirror_margins && page_idx % 2 == 1 {
                 let right_margin_pt = (self.page_width_pt - self.content_right_pt).max(0.0);
                 self.content_left_pt - right_margin_pt
@@ -177,6 +194,7 @@ impl<'a> ExtractorContext<'a> {
         }
 
         self.flush_open_stack(&mut root_nodes, &mut stack);
+        self.active_text_style = saved_style;
         root_nodes
     }
 
@@ -189,10 +207,32 @@ impl<'a> ExtractorContext<'a> {
     ) {
         let mut flat_items: Vec<(Point, FrameItem)> = Vec::new();
         Self::flatten_soft_groups(frame, base_offset, &mut flat_items);
+        let mut ignored_internal_locs: HashSet<Location> = HashSet::new();
 
         for (pos, item) in flat_items {
             match item {
                 FrameItem::Tag(Tag::Start(elem, _flags)) => {
+                    // Consume internal style-scope tags (`__typst2word_page_styles` /
+                    // `__typst2word_scope`) without emitting `TreeNode::Element`s.
+                    if elem
+                        .label()
+                        .is_some_and(|l| RealizedSemanticStore::is_internal_style_label(l.resolve().as_str()))
+                    {
+                        if let Some(loc) = elem.location() {
+                            ignored_internal_locs.insert(loc);
+                        }
+                        if let Some(styled) = elem.to_packed::<StyledElem>() {
+                            let chain = StyleChain::new(&styled.styles);
+                            let raw_tr = chain.resolve(TextElem::tracking).to_pt();
+                            let raw_bl = -chain.resolve(TextElem::baseline).to_pt();
+                            self.active_text_style = (
+                                (raw_tr.abs() > 1e-4).then_some(raw_tr),
+                                (raw_bl.abs() > 1e-4).then_some(raw_bl),
+                            );
+                        }
+                        continue;
+                    }
+
                     let loc = elem
                         .location()
                         .unwrap_or_else(|| Location::new(typst_utils::hash128(&elem)));
@@ -204,6 +244,9 @@ impl<'a> ExtractorContext<'a> {
                     });
                 }
                 FrameItem::Tag(Tag::End(loc, _key, _flags)) => {
+                    if ignored_internal_locs.remove(&loc) {
+                        continue;
+                    }
                     if let Some(match_idx) = stack.iter().rposition(|open| open.loc == loc) {
                         if self.group_tree_depth == 0
                             && !stack
@@ -212,16 +255,19 @@ impl<'a> ExtractorContext<'a> {
                         {
                             self.flush_pending_split_group(root_nodes, stack);
                         }
+
+                        // Preserve overlapping inner inline tags that were opened inside `match_idx`
+                        // and have not yet reached their own `Tag::End`.
+                        let mut reopen_inlines: Vec<(Content, Location)> = Vec::new();
+                        for inner in &stack[match_idx + 1..] {
+                            if is_reopenable_inline_tag(&inner.elem) {
+                                reopen_inlines.push((inner.elem.clone(), inner.loc));
+                            }
+                        }
+
                         while stack.len() > match_idx {
                             let mut closed = stack.pop().unwrap();
-                            if let Some(detached) = self.logical_child_groups.remove(&closed.loc) {
-                                for (gpos, grp) in detached {
-                                    self.group_tree_depth += 1;
-                                    let gchildren = self.build_frame_tree(&grp.frame, gpos);
-                                    self.group_tree_depth -= 1;
-                                    closed.children.extend(gchildren);
-                                }
-                            }
+                            self.attach_detached_child_groups(&mut closed);
                             let is_furniture = Self::is_page_furniture_elem(&closed.elem);
                             let node = TreeNode::Element {
                                 elem: closed.elem,
@@ -238,6 +284,15 @@ impl<'a> ExtractorContext<'a> {
                             } else {
                                 Self::push_node(root_nodes, stack, node);
                             }
+                        }
+
+                        for (re_elem, re_loc) in reopen_inlines {
+                            stack.push(OpenElement {
+                                elem: re_elem,
+                                loc: re_loc,
+                                pos,
+                                children: Vec::new(),
+                            });
                         }
                     }
                 }
@@ -258,6 +313,7 @@ impl<'a> ExtractorContext<'a> {
                         && ((self.pending_split_group.is_some()
                             && group.frame.size().x.to_pt() > 100.0)
                             || (!has_root_shape && group.frame.size().x.to_pt() > 350.0));
+                    let saved_text_style = self.active_text_style;
                     if can_split_merge {
                         if let Some(mut pending) = self.pending_split_group.take() {
                             let offset = Point::new(typst::layout::Abs::zero(), pending.cum_y);
@@ -323,9 +379,20 @@ impl<'a> ExtractorContext<'a> {
                         };
                         Self::push_node(root_nodes, stack, node);
                     }
+                    self.active_text_style = saved_text_style;
                 }
                 FrameItem::Text(text) => {
-                    Self::push_node(root_nodes, stack, TreeNode::Text { text, pos });
+                    let (tracking_pt, baseline_shift_pt) = self.active_text_style;
+                    Self::push_node(
+                        root_nodes,
+                        stack,
+                        TreeNode::Text {
+                            text,
+                            pos,
+                            tracking_pt,
+                            baseline_shift_pt,
+                        },
+                    );
                 }
                 FrameItem::Shape(shape, span) => {
                     Self::push_node(root_nodes, stack, TreeNode::Shape { shape, span, pos });
@@ -346,6 +413,25 @@ impl<'a> ExtractorContext<'a> {
                     Self::push_node(root_nodes, stack, TreeNode::Link { dest, size, pos });
                 }
             }
+        }
+    }
+
+    fn attach_detached_child_groups(&mut self, closed: &mut OpenElement) {
+        if let Some(detached) = self.logical_child_groups.remove(&closed.loc) {
+            let saved_style = self.active_text_style;
+            let mut det_stack: Vec<OpenElement> = Vec::new();
+            self.group_tree_depth += 1;
+            for (gpos, grp) in detached {
+                self.append_frame_items_to_tree(
+                    &grp.frame,
+                    gpos,
+                    &mut closed.children,
+                    &mut det_stack,
+                );
+            }
+            self.flush_open_stack(&mut closed.children, &mut det_stack);
+            self.group_tree_depth -= 1;
+            self.active_text_style = saved_style;
         }
     }
 
@@ -376,14 +462,7 @@ impl<'a> ExtractorContext<'a> {
             self.flush_pending_split_group(root_nodes, stack);
         }
         while let Some(mut closed) = stack.pop() {
-            if let Some(detached) = self.logical_child_groups.remove(&closed.loc) {
-                for (gpos, grp) in detached {
-                    self.group_tree_depth += 1;
-                    let gchildren = self.build_frame_tree(&grp.frame, gpos);
-                    self.group_tree_depth -= 1;
-                    closed.children.extend(gchildren);
-                }
-            }
+            self.attach_detached_child_groups(&mut closed);
             let node = TreeNode::Element {
                 elem: closed.elem,
                 loc: closed.loc,

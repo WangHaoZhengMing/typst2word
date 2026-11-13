@@ -1,9 +1,11 @@
 //! Styled container groups (`#block(fill: ..., stroke: ...)[...]`) ->
-//! either a breakable 1x1 `BlockNode::Table` (`is_styled_container: true`) or `BlockNode::ShapeBlock`.
+//! semantic `BlockNode::Container`, 2-row `TableKindIr::StyledContainer`, or `BlockNode::ShapeBlock`.
 
+use typst::introspection::Location;
 use typst::layout::{GridCell, GroupItem, Point, Size};
 use typst::model::TableCell;
 use typst::pdf::ArtifactElem;
+use typst::syntax::Span;
 use typst::text::RawElem;
 use typst::visualize::{CurveItem, Geometry};
 
@@ -11,8 +13,9 @@ use crate::color::paint_to_hex;
 use crate::ExtractorContext;
 use crate::frame_tree::TreeNode;
 use ir::{
-    BlockNode, BordersIr, DashPatternIr, HAlignIr, ShapeIr, ShapeKindIr, SidesPtIr, StrokeIr,
-    TableCellIr, TableIr, TableKindIr, TableRowIr, VAlignIr,
+    BlockNode, BordersIr, ContainerIr, ContainerStyleIr, DashPatternIr, HAlignIr, SemanticRoleIr,
+    ShapeIr, ShapeKindIr, SidesPtIr, StrokeIr, TableCellIr, TableIr, TableKindIr, TableRowIr,
+    VAlignIr,
 };
 
 impl<'a> ExtractorContext<'a> {
@@ -26,6 +29,10 @@ impl<'a> ExtractorContext<'a> {
     ) -> Option<BlockNode> {
         self.try_extract_styled_container_nodes(
             Some(group.frame.size()),
+            Span::detached(),
+            None,
+            true,
+            false,
             pos,
             children,
             list_level,
@@ -33,9 +40,14 @@ impl<'a> ExtractorContext<'a> {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn try_extract_styled_container_nodes(
         &mut self,
         frame_size: Option<Size>,
+        span: Span,
+        loc_opt: Option<Location>,
+        breakable: bool,
+        sticky: bool,
         _pos: Point,
         children: &[TreeNode],
         list_level: usize,
@@ -215,14 +227,22 @@ impl<'a> ExtractorContext<'a> {
                         && (group.frame.size().x.to_pt() - width_pt).abs() <= 4.0
             )
         });
+        let id = self.alloc_node_with_fragments(
+            span,
+            loc_opt,
+            Some(SemanticRoleIr::Container),
+            children,
+        );
         let prev_inset = self.container_inset_pt;
         let prev_gw = self.active_group_bounds_pt;
         if !has_full_width_child_group && has_box_sides {
             self.container_inset_pt += 2.0 * inferred_pad + 3.0;
         }
         self.active_group_bounds_pt = Some((0.0, width_pt));
+        self.parent_node_stack.push(id);
         let mut body_blocks =
             self.extract_blocks_from_nodes(&content_nodes, list_level, inherited_align);
+        self.parent_node_stack.pop();
         self.active_group_bounds_pt = prev_gw;
         self.container_inset_pt = prev_inset;
 
@@ -264,6 +284,9 @@ impl<'a> ExtractorContext<'a> {
             Some(BlockNode::ShapeBlock(hdr)) => {
                 hdr.fill.is_some() && hdr.fill != fill && (hdr.width_pt - width_pt).abs() <= 6.0
             }
+            Some(BlockNode::Container(hdr_c)) => {
+                hdr_c.style.fill.is_some() && hdr_c.style.fill != fill
+            }
             Some(BlockNode::Table(hdr_tbl)) => {
                 hdr_tbl.kind == TableKindIr::StyledContainer
                     && hdr_tbl.rows.len() == 1
@@ -286,6 +309,7 @@ impl<'a> ExtractorContext<'a> {
                         | BlockNode::Title { .. }
                         | BlockNode::EquationBlock(_)
                         | BlockNode::Table(_)
+                        | BlockNode::Container(_)
                         | BlockNode::List { .. }
                         | BlockNode::Enum { .. }
                         | BlockNode::CodeBlock { .. }
@@ -293,10 +317,6 @@ impl<'a> ExtractorContext<'a> {
                 )
             });
 
-        // If the styled `#block(stroke: ..., fill: ...)[...]` has partial side borders,
-        // or contains tables, lists, enums, figures, rules, code blocks, CeTZ canvases, or more than 3 blocks
-        // (and is not a compact rounded-corner card that `<wps:wsp>` can preserve with native `roundRect`),
-        // represent it as a breakable bordered `BlockNode::Table` (`kind: StyledContainer`).
         let needs_table_container = !can_use_rounded_shape_box
             && ((has_partial_border && stroke.is_none())
                 || body_blocks.iter().any(|b| {
@@ -310,7 +330,6 @@ impl<'a> ExtractorContext<'a> {
                 || body_blocks.len() > 3);
 
         if needs_table_container {
-            self.report.tables_count += 1;
             let cell_borders = if has_partial_border && stroke.is_none() {
                 BordersIr {
                     top: top_border,
@@ -339,6 +358,19 @@ impl<'a> ExtractorContext<'a> {
                     };
                     Some((hdr.fill, hdr.inset, hdr.stroke, hdr.body))
                 }
+                Some(BlockNode::Container(hdr_c))
+                    if hdr_c.style.fill.is_some() && hdr_c.style.fill != fill =>
+                {
+                    let BlockNode::Container(hdr_c) = body_blocks.remove(0) else {
+                        unreachable!()
+                    };
+                    Some((
+                        hdr_c.style.fill,
+                        hdr_c.style.inset,
+                        hdr_c.style.borders.bottom,
+                        hdr_c.body,
+                    ))
+                }
                 Some(BlockNode::Table(hdr_tbl))
                     if hdr_tbl.kind == TableKindIr::StyledContainer
                         && hdr_tbl.rows.len() == 1
@@ -356,6 +388,7 @@ impl<'a> ExtractorContext<'a> {
             };
 
             if let Some((hdr_fill, hdr_inset, hdr_stroke, hdr_blocks)) = header_bar {
+                self.report.tables_count += 1;
                 let divider = hdr_stroke.or_else(|| stroke.clone());
                 let hdr_cell = TableCellIr {
                     x: 0,
@@ -383,6 +416,7 @@ impl<'a> ExtractorContext<'a> {
                 let mut rows = vec![TableRowIr {
                     height_pt: None,
                     is_header: false,
+                    is_footer: false,
                     cells: vec![hdr_cell],
                 }];
                 if !body_blocks.is_empty() {
@@ -407,15 +441,18 @@ impl<'a> ExtractorContext<'a> {
                     rows.push(TableRowIr {
                         height_pt: None,
                         is_header: false,
+                        is_footer: false,
                         cells: vec![body_cell],
                     });
                 }
                 let row_heights_pt = vec![0.0; rows.len()];
                 return Some(BlockNode::Table(TableIr {
+                    id,
                     kind: TableKindIr::StyledContainer,
                     col_widths_pt: vec![width_pt],
                     row_heights_pt,
                     header_rows: 0,
+                    footer_rows: 0,
                     rows,
                     align: inherited_align,
                     left_indent_pt: 0.0,
@@ -423,36 +460,27 @@ impl<'a> ExtractorContext<'a> {
                 }));
             }
 
-            return Some(BlockNode::Table(TableIr {
-                kind: TableKindIr::StyledContainer,
-                col_widths_pt: vec![width_pt],
-                row_heights_pt: vec![0.0],
-                header_rows: 0,
-                rows: vec![TableRowIr {
-                    height_pt: None,
-                    is_header: false,
-                    cells: vec![TableCellIr {
-                        x: 0,
-                        y: 0,
-                        colspan: 1,
-                        rowspan: 1,
-                        fill,
-                        borders: cell_borders,
-                        inset,
-                        halign: inherited_align,
-                        valign: VAlignIr::Top,
-                        is_header_cell: false,
-                        blocks: body_blocks,
-                    }],
-                }],
+            return Some(BlockNode::Container(ContainerIr {
+                id,
+                style: ContainerStyleIr {
+                    fill,
+                    borders: cell_borders,
+                    corner_radius_pt,
+                    inset,
+                },
+                width_pt: Some(width_pt),
+                height_pt: Some(height_pt),
                 align: inherited_align,
                 left_indent_pt: 0.0,
-                summary: None,
+                breakable,
+                sticky,
+                body: body_blocks,
             }));
         }
 
         self.report.shapes_count += 1;
         Some(BlockNode::ShapeBlock(ShapeIr {
+            id,
             kind: ShapeKindIr::Rect,
             width_pt,
             height_pt,

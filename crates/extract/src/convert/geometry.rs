@@ -180,7 +180,7 @@ impl<'a> ExtractorContext<'a> {
     ) {
         for node in nodes {
             match node {
-                TreeNode::Text { text, pos } => {
+                TreeNode::Text { text, pos, .. } => {
                     let x = (offset.x + pos.x).to_pt();
                     let y = (offset.y + pos.y - text.size).to_pt();
                     *min_x = min_x.min(x);

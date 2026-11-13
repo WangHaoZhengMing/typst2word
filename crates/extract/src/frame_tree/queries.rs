@@ -1,7 +1,6 @@
 //! Generic queries and helpers on `Frame` and `TreeNode`.
 
 use typst::foundations::Content;
-use typst::introspection::Tag;
 use typst::layout::{Frame, FrameItem, FrameKind, Point, Transform};
 use typst::model::{EnumElem, ListElem, TermsElem};
 use typst::pdf::{PdfMarkerTag, PdfMarkerTagKind};
@@ -10,37 +9,6 @@ use crate::ExtractorContext;
 use crate::frame_tree::{OpenElement, TreeNode};
 
 impl<'a> ExtractorContext<'a> {
-    pub(crate) fn frame_body_plain_text(frame: &Frame) -> String {
-        let mut s = String::new();
-        let mut in_artifact_depth = 0usize;
-        let mut flat_items = Vec::new();
-        Self::flatten_soft_groups(frame, Point::zero(), &mut flat_items);
-        for (_, item) in flat_items {
-            match item {
-                FrameItem::Tag(Tag::Start(elem, _)) => {
-                    if elem.is::<typst::pdf::ArtifactElem>()
-                        || elem.is::<typst::model::FootnoteEntry>()
-                    {
-                        in_artifact_depth += 1;
-                    }
-                }
-                FrameItem::Tag(Tag::End(..)) => {
-                    if in_artifact_depth > 0 {
-                        in_artifact_depth -= 1;
-                    }
-                }
-                FrameItem::Text(t) if in_artifact_depth == 0 => {
-                    s.push_str(&t.text);
-                }
-                FrameItem::Group(g) if in_artifact_depth == 0 && g.parent.is_none() => {
-                    s.push_str(&Self::frame_body_plain_text(&g.frame));
-                }
-                _ => {}
-            }
-        }
-        s
-    }
-
     pub(crate) fn flatten_soft_groups(
         frame: &Frame,
         offset: Point,

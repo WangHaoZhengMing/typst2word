@@ -1,12 +1,16 @@
 //! `list` / `enum` / `terms` -> `BlockNode::List` / `Enum` / `Terms`.
 
 use typst::foundations::{Packed, StyleChain};
+use typst::introspection::Location;
 use typst::model::{EnumElem, ListElem, TermsElem};
 use typst::pdf::{ArtifactElem, PdfMarkerTagKind};
 
 use crate::ExtractorContext;
 use crate::frame_tree::TreeNode;
-use ir::{BlockNode, EnumItemIr, HAlignIr, ListItemIr, TermItemIr};
+use ir::{
+    BlockLayoutSpanIr, BlockNode, EnumItemIr, HAlignIr, ListItemIr, NextBlockKindIr,
+    NextBlockLayoutMeasureIr, SemanticRoleIr, TermItemIr,
+};
 
 /// Shared intermediate item extracted from `PdfMarkerTagKind::ListItemLabel` + `ListItemBody`
 /// before specializing into `ListItemIr` (bullet list) or `EnumItemIr` (numbered list).
@@ -22,11 +26,19 @@ impl<'a> ExtractorContext<'a> {
     pub(crate) fn extract_list_block(
         &mut self,
         list: &Packed<ListElem>,
+        loc: Location,
         children: &[TreeNode],
         blocks: &mut Vec<BlockNode>,
         list_level: usize,
     ) {
-        let chain = self.style_chain();
+        let id = self.alloc_node_with_fragments(
+            list.span(),
+            Some(loc),
+            Some(SemanticRoleIr::List),
+            children,
+        );
+        self.parent_node_stack.push(id);
+        let chain = self.scoped_style_chain(Some(loc));
         let default_font_pt =
             Self::resolve_length_pt(chain.get(typst::text::TextElem::size).0, 11.0);
         let tight = list.tight.get(chain);
@@ -40,6 +52,7 @@ impl<'a> ExtractorContext<'a> {
         }
         let body_indent_pt = Self::resolve_length_pt(list.body_indent.get(chain), default_font_pt);
         let (items, max_label_w_pt) = self.extract_list_items(children, list_level);
+        self.parent_node_stack.pop();
         let label_w = if max_label_w_pt > 0.5 {
             max_label_w_pt
         } else {
@@ -49,6 +62,7 @@ impl<'a> ExtractorContext<'a> {
         if !items.is_empty() {
             self.report.lists_count += 1;
             blocks.push(BlockNode::List {
+                id,
                 items,
                 tight,
                 level: list_level,
@@ -63,11 +77,19 @@ impl<'a> ExtractorContext<'a> {
     pub(crate) fn extract_enum_block(
         &mut self,
         en: &Packed<EnumElem>,
+        loc: Location,
         children: &[TreeNode],
         blocks: &mut Vec<BlockNode>,
         list_level: usize,
     ) {
-        let chain = self.style_chain();
+        let id = self.alloc_node_with_fragments(
+            en.span(),
+            Some(loc),
+            Some(SemanticRoleIr::Enum),
+            children,
+        );
+        self.parent_node_stack.push(id);
+        let chain = self.scoped_style_chain(Some(loc));
         let default_font_pt =
             Self::resolve_length_pt(chain.get(typst::text::TextElem::size).0, 11.0);
         let tight = en.tight.get(chain);
@@ -80,7 +102,8 @@ impl<'a> ExtractorContext<'a> {
             indent_pt = indent_pt.max(vis_indent);
         }
         let body_indent_pt = Self::resolve_length_pt(en.body_indent.get(chain), default_font_pt);
-        let (items, max_label_w_pt) = self.extract_enum_items(en, children, list_level);
+        let (items, max_label_w_pt) = self.extract_enum_items(en, Some(loc), children, list_level);
+        self.parent_node_stack.pop();
         let label_w = if max_label_w_pt > 0.5 {
             max_label_w_pt
         } else {
@@ -90,6 +113,7 @@ impl<'a> ExtractorContext<'a> {
         if !items.is_empty() {
             self.report.lists_count += 1;
             blocks.push(BlockNode::Enum {
+                id,
                 items,
                 tight,
                 level: list_level,
@@ -131,15 +155,25 @@ impl<'a> ExtractorContext<'a> {
     pub(crate) fn extract_terms_block(
         &mut self,
         terms: &Packed<TermsElem>,
+        loc: Location,
         children: &[TreeNode],
         blocks: &mut Vec<BlockNode>,
         list_level: usize,
     ) {
-        let tight = terms.tight.get(StyleChain::default());
+        let id = self.alloc_node_with_fragments(
+            terms.span(),
+            Some(loc),
+            Some(SemanticRoleIr::Terms),
+            children,
+        );
+        self.parent_node_stack.push(id);
+        let chain = self.scoped_style_chain(Some(loc));
+        let tight = terms.tight.get(chain);
         let items = self.extract_term_items(children, list_level);
+        self.parent_node_stack.pop();
         if !items.is_empty() {
             self.report.lists_count += 1;
-            blocks.push(BlockNode::Terms { items, tight });
+            blocks.push(BlockNode::Terms { id, items, tight });
         }
     }
 
@@ -162,10 +196,12 @@ impl<'a> ExtractorContext<'a> {
     pub(crate) fn extract_enum_items(
         &mut self,
         en: &Packed<EnumElem>,
+        loc_opt: Option<Location>,
         children: &[TreeNode],
         list_level: usize,
     ) -> (Vec<EnumItemIr>, f64) {
-        let start_num = en.start.get(StyleChain::default()).unwrap_or(1);
+        let chain = self.scoped_style_chain(loc_opt);
+        let start_num = en.start.get(chain).unwrap_or(1);
         let mut counter = start_num;
         let (raw_items, max_label_w_pt) = self.extract_raw_list_items(children, list_level, "1.");
         let items = raw_items
@@ -233,11 +269,11 @@ impl<'a> ExtractorContext<'a> {
         }
 
         for i in 0..items.len().saturating_sub(1) {
-            let span_a = ir::BlockPdfSpanIr::from_start_end(items[i].first_y, items[i].last_y);
+            let span_a = BlockLayoutSpanIr::from_start_end(items[i].first_y, items[i].last_y);
             let span_b =
-                ir::BlockPdfSpanIr::from_start_end(items[i + 1].first_y, items[i + 1].last_y);
-            let measure = ir::NextBlockMeasureIr {
-                kind: ir::NextBlockKindIr::ListItemSibling {
+                BlockLayoutSpanIr::from_start_end(items[i + 1].first_y, items[i + 1].last_y);
+            let measure = NextBlockLayoutMeasureIr {
+                kind: NextBlockKindIr::ListItemSibling {
                     list_level,
                     active_columns: self.active_columns.0,
                     prev_item_block_count: items[i].blocks.len(),
@@ -250,7 +286,7 @@ impl<'a> ExtractorContext<'a> {
                 prev_font_pt: 11.0,
                 next_font_pt: 11.0,
             };
-            Self::record_trailing_transition_on_last_block(&mut items[i].blocks, span_a, measure);
+            self.record_trailing_transition_on_last_block(&mut items[i].blocks, span_a, measure);
         }
 
         (items, max_label_w_pt)

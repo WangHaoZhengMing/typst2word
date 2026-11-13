@@ -3,11 +3,12 @@
 use typst::foundations::Packed;
 use typst::model::{EnumElem, ListElem};
 use typst::pdf::{PdfMarkerTag, PdfMarkerTagKind};
+use typst::syntax::Span;
 use typst::text::TextElem;
 
 use crate::ExtractorContext;
 use crate::frame_tree::TreeNode;
-use ir::{BlockNode, EnumItemIr, HAlignIr, ListItemIr};
+use ir::{BlockNode, EnumItemIr, HAlignIr, ListItemIr, SemanticRoleIr};
 
 impl<'a> ExtractorContext<'a> {
     /// Reconstruct list or enum items when a `ListElem` or `EnumElem` inside a hard `Group`
@@ -53,7 +54,7 @@ impl<'a> ExtractorContext<'a> {
                     {
                         items.push(item);
                     } else {
-                        let chain = self.style_chain();
+                        let chain = self.scoped_style_chain(None);
                         let default_font_pt =
                             Self::resolve_length_pt(chain.get(TextElem::size).0, 11.0);
                         let indent_pt =
@@ -62,8 +63,15 @@ impl<'a> ExtractorContext<'a> {
                             chain.get(EnumElem::body_indent),
                             default_font_pt,
                         );
+                        let id = self.alloc_node_with_fragments(
+                            Span::detached(),
+                            None,
+                            Some(SemanticRoleIr::Enum),
+                            children,
+                        );
                         self.report.lists_count += 1;
                         blocks.push(BlockNode::Enum {
+                            id,
                             items: vec![item],
                             tight: true,
                             level: list_level,
@@ -82,7 +90,7 @@ impl<'a> ExtractorContext<'a> {
                     {
                         items.push(item);
                     } else {
-                        let chain = self.style_chain();
+                        let chain = self.scoped_style_chain(None);
                         let default_font_pt =
                             Self::resolve_length_pt(chain.get(TextElem::size).0, 11.0);
                         let indent_pt =
@@ -91,8 +99,15 @@ impl<'a> ExtractorContext<'a> {
                             chain.get(ListElem::body_indent),
                             default_font_pt,
                         );
+                        let id = self.alloc_node_with_fragments(
+                            Span::detached(),
+                            None,
+                            Some(SemanticRoleIr::List),
+                            children,
+                        );
                         self.report.lists_count += 1;
                         blocks.push(BlockNode::List {
+                            id,
                             items: vec![item],
                             tight: true,
                             level: list_level,

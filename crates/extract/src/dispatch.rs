@@ -17,13 +17,14 @@ use typst::model::{
     ParElem, QuoteElem, TableElem, TermsElem, TitleElem,
 };
 use typst::pdf::{ArtifactElem, ArtifactKind, PdfMarkerTag};
+use typst::syntax::Span;
 use typst::text::RawElem;
 use typst::visualize::ImageElem;
 
 use compiler::compile::is_cetz_span;
 use crate::ExtractorContext;
 use crate::frame_tree::TreeNode;
-use ir::{BlockNode, HAlignIr, ParagraphPdfMetricsIr, ShapeKindIr, TableKindIr};
+use ir::{BlockNode, HAlignIr, NodeId, SemanticRoleIr, ShapeKindIr, TableKindIr};
 
 impl<'a> ExtractorContext<'a> {
     pub(crate) fn extract_block_from_node(
@@ -34,9 +35,6 @@ impl<'a> ExtractorContext<'a> {
         inherited_align: HAlignIr,
     ) {
         match node {
-            TreeNode::PageBreak => {
-                blocks.push(BlockNode::PageBreak);
-            }
             TreeNode::Group {
                 group,
                 pos,
@@ -99,14 +97,15 @@ impl<'a> ExtractorContext<'a> {
                 self.apply_group_left_offset(group, *pos, list_level, &mut inner);
                 let group_h_pt = group.frame.size().y.to_pt();
                 if inner.len() >= 2
-                    && let Some(BlockNode::Paragraph { style, .. }) = inner.last_mut()
+                    && let Some(BlockNode::Paragraph { id, style, .. }) = inner.last_mut()
                 {
-                    if let ParagraphPdfMetricsIr::Measured {
-                        in_multi_block_group_tail,
-                        ..
-                    } = &mut style.pdf_metrics
-                    {
-                        *in_multi_block_group_tail = true;
+                    if style.resolved_par_spacing_pt.is_some() && !id.is_unset() {
+                        self.reference_layout
+                            .entry(*id)
+                            .or_default()
+                            .flow
+                            .get_or_insert_with(Default::default)
+                            .in_multi_block_group_tail = true;
                     } else if (1.5..6.0).contains(&style.space_after_pt) {
                         style.space_after_pt = 6.05;
                     }
@@ -168,6 +167,10 @@ impl<'a> ExtractorContext<'a> {
                 pos,
                 children,
             } => {
+                let prev_scope = self.active_scope_loc;
+                if self.compiled.semantics.get(*loc).is_some() {
+                    self.active_scope_loc = Some(*loc);
+                }
                 self.extract_element_block(
                     elem,
                     *loc,
@@ -177,6 +180,7 @@ impl<'a> ExtractorContext<'a> {
                     list_level,
                     inherited_align,
                 );
+                self.active_scope_loc = prev_scope;
             }
             TreeNode::Text { .. } | TreeNode::Link { .. } => {}
         }
@@ -233,7 +237,7 @@ impl<'a> ExtractorContext<'a> {
 
         // 4. Title (`#title[...]`).
         if elem.is::<TitleElem>() {
-            self.extract_title_block(children, blocks);
+            self.extract_title_block(elem.span(), loc, children, blocks);
             return;
         }
 
@@ -251,15 +255,15 @@ impl<'a> ExtractorContext<'a> {
 
         // 7. Lists (`ListElem`, `EnumElem`, `TermsElem`) & orphaned cross-page list markers.
         if let Some(list) = elem.to_packed::<ListElem>() {
-            self.extract_list_block(list, children, blocks, list_level);
+            self.extract_list_block(list, loc, children, blocks, list_level);
             return;
         }
         if let Some(en) = elem.to_packed::<EnumElem>() {
-            self.extract_enum_block(en, children, blocks, list_level);
+            self.extract_enum_block(en, loc, children, blocks, list_level);
             return;
         }
         if let Some(terms) = elem.to_packed::<TermsElem>() {
-            self.extract_terms_block(terms, children, blocks, list_level);
+            self.extract_terms_block(terms, loc, children, blocks, list_level);
             return;
         }
         if let Some(marker) = elem.to_packed::<PdfMarkerTag>()
@@ -269,26 +273,31 @@ impl<'a> ExtractorContext<'a> {
         }
 
         // 8. Table (`TableElem`) and Grid (`GridElem`).
-        if let Some(table) = elem.to_packed::<TableElem>()
-            && let Some(table_ir) = self.extract_table_or_grid(
+        if let Some(table) = elem.to_packed::<TableElem>() {
+            let summary = table
+                .summary
+                .get_cloned(self.scoped_style_chain(Some(loc)))
+                .map(|s| s.to_string());
+            if let Some(table_ir) = self.extract_table_or_grid(
                 table.grid.as_deref(),
+                elem.span(),
+                Some(loc),
                 TableKindIr::SemanticTable,
-                table
-                    .summary
-                    .get_cloned(StyleChain::default())
-                    .map(|s| s.to_string()),
+                summary,
                 children,
                 list_level,
                 inherited_align,
-            )
-        {
-            self.report.tables_count += 1;
-            blocks.push(BlockNode::Table(table_ir));
-            return;
+            ) {
+                self.report.tables_count += 1;
+                blocks.push(BlockNode::Table(table_ir));
+                return;
+            }
         }
         if let Some(grid) = elem.to_packed::<GridElem>()
             && let Some(table_ir) = self.extract_table_or_grid(
                 grid.grid.as_deref(),
+                elem.span(),
+                Some(loc),
                 TableKindIr::LayoutGrid,
                 None,
                 children,
@@ -303,17 +312,17 @@ impl<'a> ExtractorContext<'a> {
 
         // 9. Block Quote (`QuoteElem`).
         if let Some(quote) = elem.to_packed::<QuoteElem>()
-            && quote.block.get(StyleChain::default())
+            && quote.block.get(self.scoped_style_chain(Some(loc)))
         {
-            self.extract_quote_block(quote, children, blocks, list_level, inherited_align);
+            self.extract_quote_block(quote, loc, children, blocks, list_level, inherited_align);
             return;
         }
 
         // 10. Fenced / Block Code (`RawElem`) or Cross-Page Split `RawLine`.
         if let Some(raw) = elem.to_packed::<RawElem>()
-            && raw.block.get(StyleChain::default())
+            && raw.block.get(self.scoped_style_chain(Some(loc)))
         {
-            let code_block = self.extract_code_block(raw, children);
+            let code_block = self.extract_code_block(raw, loc, children);
             self.report.code_blocks_count += 1;
             blocks.push(code_block);
             return;
@@ -335,7 +344,14 @@ impl<'a> ExtractorContext<'a> {
             } else {
                 let mut lines = vec![runs];
                 Self::normalize_empty_code_line_metrics(&mut lines);
+                let id = self.alloc_node_with_fragments(
+                    elem.span(),
+                    Some(loc),
+                    Some(SemanticRoleIr::CodeBlock { lang: None }),
+                    children,
+                );
                 blocks.push(BlockNode::CodeBlock {
+                    id,
                     lang: None,
                     lines,
                     fill: None,
@@ -467,6 +483,7 @@ impl<'a> ExtractorContext<'a> {
         if let Some(cols_elem) = elem.to_packed::<ColumnsElem>() {
             self.extract_columns_container(
                 cols_elem,
+                loc,
                 children,
                 blocks,
                 list_level,
@@ -477,9 +494,17 @@ impl<'a> ExtractorContext<'a> {
 
         // 18. Generic container fallback (recurse into children), honoring `BlockElem`
         // styled containers (`fill`/`stroke`) as well as `sticky` and `breakable: false`.
-        if elem.is::<BlockElem>()
+        let blk_props = elem.to_packed::<BlockElem>().map(|blk| {
+            let ch = self.scoped_style_chain(Some(loc));
+            (blk.breakable.get(ch), blk.sticky.get(ch))
+        });
+        if let Some((breakable, sticky)) = blk_props
             && let Some(styled_box) = self.try_extract_styled_container_nodes(
                 None,
+                elem.span(),
+                Some(loc),
+                breakable,
+                sticky,
                 pos,
                 children,
                 list_level,
@@ -491,9 +516,8 @@ impl<'a> ExtractorContext<'a> {
         }
         let mut child_blocks =
             self.extract_blocks_from_nodes(children, list_level, inherited_align);
-        if let Some(blk) = elem.to_packed::<BlockElem>() {
-            let sticky = blk.sticky.get(StyleChain::default());
-            let unbreakable = !blk.breakable.get(StyleChain::default());
+        if let Some((breakable, sticky)) = blk_props {
+            let unbreakable = !breakable;
             if sticky || unbreakable {
                 let last_idx = child_blocks.len().saturating_sub(1);
                 for (idx, b) in child_blocks.iter_mut().enumerate() {
@@ -592,6 +616,7 @@ impl<'a> ExtractorContext<'a> {
         let mut inlines: Vec<ir::InlineNode> = Vec::new();
         // Invisible inline spacer reserving `gh_pt` vertical height in normal flow.
         inlines.push(ir::InlineNode::ShapeInline(ir::ShapeIr {
+            id: NodeId::UNSET,
             kind: ir::ShapeKindIr::Rect,
             width_pt: 1.0,
             height_pt: gh_pt,
@@ -681,6 +706,7 @@ impl<'a> ExtractorContext<'a> {
                     self.active_group_bounds_pt = prev_gw;
                     self.report.shapes_count += 1;
                     inlines.push(ir::InlineNode::ShapeInline(ir::ShapeIr {
+                        id: NodeId::UNSET,
                         kind: ir::ShapeKindIr::Rect,
                         width_pt: cw_pt.max(20.0),
                         height_pt: (ch_pt + 20.0).max(24.0),
@@ -702,7 +728,14 @@ impl<'a> ExtractorContext<'a> {
             }
         }
 
+        let id = self.alloc_node_with_fragments(
+            Span::detached(),
+            None,
+            Some(SemanticRoleIr::Paragraph),
+            children,
+        );
         Some(BlockNode::Paragraph {
+            id,
             content: inlines,
             style: ir::ParagraphStyleIr {
                 align: HAlignIr::Left,

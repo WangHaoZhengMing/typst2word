@@ -1,22 +1,25 @@
-//! Document-level extraction: metadata, page setup (size, margins, columns, fill),
-//! header / footer artifacts and page-break bookkeeping.
+//! Document-level extraction: metadata, page setup (size, margins, columns, fill,
+//! page numbering format), and header / footer artifacts.
 
-use typst::foundations::{Content, NativeElement as _, SequenceElem, Smart, StyleChain, StyledElem};
-use typst::layout::{PageElem, PagebreakElem};
-use typst::model::Document;
+use typst::foundations::{NativeElement as _, Smart, StyleChain, StyledElem, Styles};
+use typst::introspection::Tag;
+use typst::layout::{Dir, Frame, FrameItem, PageElem};
+use typst::model::{Document, Numbering};
 use typst::pdf::{ArtifactElem, ArtifactKind};
+use typst::text::TextElem;
 
-use crate::color::paint_to_hex;
+use compiler::PAGE_STYLES_LABEL;
 use crate::ExtractorContext;
+use crate::color::paint_to_hex;
 use crate::frame_tree::TreeNode;
-use ir::{
-    BlockNode, FlowMeasureIr, HAlignIr, MetadataIr, PageSetupIr, ParagraphPdfMetricsIr,
-};
+use ir::{BlockNode, HAlignIr, LocaleIr, MetadataIr, PageNumberFormatIr, PageSetupIr, TextDirIr};
 
 impl<'a> ExtractorContext<'a> {
-    pub(crate) fn page_styles(nodes: &[TreeNode]) -> Option<typst::foundations::Styles> {
+    /// Extract the shared page-level `Styles` trunk directly from `__typst2word_page_styles`
+    /// tags in `frame`.
+    pub(crate) fn page_styles_from_frame(frame: &Frame) -> Option<Styles> {
         let mut style_maps = Vec::new();
-        Self::collect_all_page_styles(nodes, &mut style_maps);
+        Self::collect_frame_page_styles(frame, &mut style_maps);
         let (first, rest) = style_maps.split_first()?;
         let mut prefix = first.as_slice();
         for s in rest {
@@ -31,58 +34,79 @@ impl<'a> ExtractorContext<'a> {
             prefix
                 .iter()
                 .filter(|style| {
-                    style.outside()
-                        && (style.liftable() || style.element() == Some(PageElem::ELEM))
+                    // Keep standard library defaults (!outside / standard) + liftable/page styles.
+                    !style.outside()
+                        || style.liftable()
+                        || style.element() == Some(PageElem::ELEM)
                 })
                 .cloned()
                 .collect(),
         )
     }
 
-    pub(crate) fn collect_all_page_styles<'b>(
-        nodes: &'b [TreeNode],
-        out: &mut Vec<&'b typst::foundations::Styles>,
-    ) {
-        for node in nodes {
-            if let TreeNode::Element { elem, children, .. } = node {
-                if elem
-                    .label()
-                    .is_some_and(|l| l.resolve().as_str() == "__typst2word_page_styles")
-                    && let Some(styled) = elem.to_packed::<StyledElem>()
-                {
-                    out.push(&styled.styles);
+    fn collect_frame_page_styles<'b>(frame: &'b Frame, out: &mut Vec<&'b Styles>) {
+        for (_, item) in frame.items() {
+            match item {
+                FrameItem::Tag(Tag::Start(elem, _)) => {
+                    if elem
+                        .label()
+                        .is_some_and(|l| l.resolve().as_str() == PAGE_STYLES_LABEL)
+                        && let Some(styled) = elem.to_packed::<StyledElem>()
+                    {
+                        out.push(&styled.styles);
+                    }
                 }
-                Self::collect_all_page_styles(children, out);
-            } else if let TreeNode::Group { children, .. } = node {
-                Self::collect_all_page_styles(children, out);
+                FrameItem::Group(group) if group.parent.is_none() => {
+                    Self::collect_frame_page_styles(&group.frame, out);
+                }
+                _ => {}
             }
         }
     }
 
-    pub(crate) fn page_root_font_size_pt(&self, page_nodes: &[TreeNode]) -> f64 {
-        if let Some(trunk) = Self::page_styles(page_nodes) {
-            return Self::resolve_length_pt(
-                StyleChain::new(&trunk).get(typst::text::TextElem::size).0,
-                11.0,
-            );
+    pub(crate) fn page_root_font_size_pt(&self, page_index: usize) -> f64 {
+        if let Some(page) = self.compiled.document.pages().get(page_index)
+            && let Some(trunk) = Self::page_styles_from_frame(&page.frame)
+        {
+            return Self::resolve_length_pt(StyleChain::new(&trunk).get(TextElem::size).0, 11.0);
         }
-        Self::resolve_length_pt(
-            self.style_chain().get(typst::text::TextElem::size).0,
-            11.0,
-        )
+        Self::resolve_length_pt(self.style_chain().get(TextElem::size).0, 11.0)
     }
 
     pub(crate) fn extract_metadata(&self) -> MetadataIr {
         let info = self.compiled.document.info();
+        let root_snap = self.compiled.semantics.style_of(None);
+        let locale = info
+            .locale
+            .custom()
+            .map(|loc| LocaleIr::new(loc.lang.as_str(), loc.region.map(|r| r.as_str().to_string())))
+            .or_else(|| {
+                (root_snap.lang != "en" || root_snap.region.is_some())
+                    .then(|| LocaleIr::new(root_snap.lang.clone(), root_snap.region.clone()))
+            });
+        let dir = Some(
+            if root_snap.dir_rtl || self.style_chain().resolve(TextElem::dir) == Dir::RTL {
+                TextDirIr::Rtl
+            } else {
+                TextDirIr::Ltr
+            },
+        );
+
         MetadataIr {
             title: info.title.as_ref().map(|s| s.to_string()),
             authors: info.author.iter().map(|s| s.to_string()).collect(),
             description: info.description.as_ref().map(|s| s.to_string()),
             keywords: info.keywords.iter().map(|s| s.to_string()).collect(),
+            locale,
+            dir,
         }
     }
 
-    pub(crate) fn extract_page_setup(&mut self, page_index: usize, page_nodes: &[TreeNode]) -> PageSetupIr {
+    pub(crate) fn extract_page_setup(
+        &mut self,
+        page_index: usize,
+        page_nodes: &[TreeNode],
+    ) -> PageSetupIr {
         self.current_page_index = page_index;
         let mut setup = PageSetupIr::default();
         if let Some(first_page) = self.compiled.document.pages().get(page_index) {
@@ -95,23 +119,29 @@ impl<'a> ExtractorContext<'a> {
                 .custom()
                 .and_then(|p| p.as_ref().and_then(paint_to_hex));
 
-            // Check if the document uses page-level columns (`#set page(columns: N)`).
-            // Scoped `#columns(N)[...]` (`ColumnsElem`) is extracted as `BlockNode::Columns`
-            // so that 1-column pages are not forced into multi-column layout.
+            if let Some(Numbering::Pattern(ref pat)) = first_page.numbering
+                && let Some((_, system)) = pat.pieces.first()
+            {
+                let mut single = pat.clone();
+                single.pieces = [(Default::default(), *system)].into_iter().collect();
+                single.suffix = Default::default();
+                setup.page_number_format = match single.apply(None, &[1]).unwrap_or_default().as_str() {
+                    "1" => Some(PageNumberFormatIr::Arabic),
+                    "i" => Some(PageNumberFormatIr::LowerRoman),
+                    "I" => Some(PageNumberFormatIr::UpperRoman),
+                    "a" => Some(PageNumberFormatIr::LowerAlpha),
+                    "A" => Some(PageNumberFormatIr::UpperAlpha),
+                    _ => None,
+                };
+            }
+
             setup.columns = self.style_chain().get(PageElem::columns).get();
             self.page_columns = setup.columns;
             if setup.columns > 1 {
                 self.active_columns = (setup.columns, 18.0);
             }
 
-            // Match `typst-layout/src/pages/run.rs` & `finalize.rs` margin resolution 1:1:
-            // - `em` lengths resolve against the page-root `TextElem::size` (unpolluted by
-            //   inner scoped `#[#set text(size: ...); ...]` blocks).
-            // - `auto` / omitted sides resolve to `(2.5 / 21.0) * min(width, height)`, where
-            //   an infinite (`auto`) axis falls back to `Paper::A4.width()` (`595.276pt`).
-            // - Two-sided `inside` / `outside` sets `mirror_margins = true` and orders odd-page
-            //   `(left, right)` according to `PageElem::binding` (`auto` -> `Right` in RTL, `Left` in LTR).
-            let base_font_pt = self.page_root_font_size_pt(page_nodes);
+            let base_font_pt = self.page_root_font_size_pt(page_index);
             let chain = self.style_chain();
             let cfg_width_pt = match chain.get(PageElem::width) {
                 Smart::Custom(len) => Some(Self::resolve_length_pt(len, base_font_pt)),
@@ -164,7 +194,7 @@ impl<'a> ExtractorContext<'a> {
                 let binding = match chain.get(PageElem::binding) {
                     Smart::Custom(b) => b,
                     Smart::Auto => {
-                        if chain.resolve(typst::text::TextElem::dir) == typst::layout::Dir::RTL {
+                        if chain.resolve(TextElem::dir) == Dir::RTL {
                             typst::layout::Binding::Right
                         } else {
                             typst::layout::Binding::Left
@@ -188,12 +218,11 @@ impl<'a> ExtractorContext<'a> {
             self.page_width_pt = setup.width_pt;
             self.mirror_margins = setup.mirror_margins;
 
-            // Extract header & footer from ArtifactElem(Header / Footer) on the first page.
             for node in page_nodes {
                 self.collect_header_footer_artifacts(node, &mut setup.header, &mut setup.footer);
             }
-            Self::zero_header_footer_paragraph_spacing(&mut setup.header);
-            Self::zero_header_footer_paragraph_spacing(&mut setup.footer);
+            self.zero_header_footer_paragraph_spacing(&mut setup.header);
+            self.zero_header_footer_paragraph_spacing(&mut setup.footer);
 
             setup.header_margin_pt = self
                 .find_artifact_y_bounds(page_nodes, ArtifactKind::Header)
@@ -234,13 +263,16 @@ impl<'a> ExtractorContext<'a> {
         setup
     }
 
-    pub(crate) fn zero_header_footer_paragraph_spacing(blocks: &mut [BlockNode]) {
+    pub(crate) fn zero_header_footer_paragraph_spacing(&mut self, blocks: &mut [BlockNode]) {
         for block in blocks {
-            if let BlockNode::Paragraph { style, .. } = block {
+            if let BlockNode::Paragraph { id, style, .. } = block {
+                if !id.is_unset() {
+                    self.reference_layout.remove(id);
+                }
                 style.space_before_pt = 0.0;
                 style.space_after_pt = 0.0;
-                style.pdf_metrics = ParagraphPdfMetricsIr::Unmeasured;
-                style.flow_measure = FlowMeasureIr::default();
+                style.resolved_par_spacing_pt = None;
+                style.resolved_par_leading_pt = None;
             }
         }
     }
@@ -253,15 +285,13 @@ impl<'a> ExtractorContext<'a> {
         for node in nodes {
             match node {
                 TreeNode::Element { elem, children, .. } => {
-                    if let Some(artifact) = elem.to_packed::<ArtifactElem>() {
-                        if artifact.kind.get(StyleChain::default()) == target_kind {
-                            let (_, min_y, width, height) = Self::estimate_nodes_bbox(children);
-                            if (width > 0.0 || height > 0.0)
-                                && min_y.is_finite()
-                                && height.is_finite()
-                            {
-                                return Some((min_y, min_y + height));
-                            }
+                    if let Some(artifact) = elem.to_packed::<ArtifactElem>()
+                        && artifact.kind.get(StyleChain::default()) == target_kind
+                    {
+                        let (_, min_y, width, height) = Self::estimate_nodes_bbox(children);
+                        if (width > 0.0 || height > 0.0) && min_y.is_finite() && height.is_finite()
+                        {
+                            return Some((min_y, min_y + height));
                         }
                     }
                     if let Some(bounds) = self.find_artifact_y_bounds(children, target_kind) {
@@ -314,46 +344,6 @@ impl<'a> ExtractorContext<'a> {
                 }
             }
             _ => {}
-        }
-    }
-
-    pub(crate) fn flatten_content_leaves<'b>(content: &'b Content, out: &mut Vec<&'b Content>) {
-        if let Some(styled) = content.to_packed::<StyledElem>() {
-            Self::flatten_content_leaves(&styled.child, out);
-        } else if let Some(seq) = content.to_packed::<SequenceElem>() {
-            for child in &seq.children {
-                Self::flatten_content_leaves(child, out);
-            }
-        } else if let Some(align) = content.to_packed::<typst::layout::AlignElem>() {
-            Self::flatten_content_leaves(&align.body, out);
-        } else {
-            out.push(content);
-        }
-    }
-
-    pub(crate) fn collect_pagebreak_following_texts(content: &Content, out: &mut Vec<String>) {
-        let mut leaves = Vec::new();
-        Self::flatten_content_leaves(content, &mut leaves);
-        for (i, leaf) in leaves.iter().enumerate() {
-            if leaf.is::<PagebreakElem>() {
-                let mut found_text = None;
-                for next in &leaves[i + 1..] {
-                    if next.is::<PagebreakElem>() {
-                        break;
-                    }
-                    let plain: String = next
-                        .plain_text()
-                        .chars()
-                        .filter(|c| !c.is_whitespace())
-                        .take(10)
-                        .collect();
-                    if !plain.is_empty() {
-                        found_text = Some(plain);
-                        break;
-                    }
-                }
-                out.push(found_text.unwrap_or_else(|| "__PAGEBREAK_ANY__".to_string()));
-            }
         }
     }
 }

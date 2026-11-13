@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use typst::foundations::{Content, Smart, StyleChain};
-use typst::layout::grid::resolve::{Cell, CellGrid};
+use typst::layout::grid::resolve::{Cell, CellGrid, LinePosition};
 use typst::layout::{GridCell, GridElem};
 use typst::model::{EnumElem, ListElem, TableCell, TableElem};
 use typst::pdf::TableCellKind;
@@ -133,6 +133,10 @@ impl<'a> ExtractorContext<'a> {
         num_rows: usize,
         _is_semantic_table: bool,
     ) -> BordersIr {
+        let cs = colspan.max(1);
+        let rs = rowspan.max(1);
+
+        // Tier 1 & 2: GridStroke < CellStroke (including neighbor CellStroke across shared non-gutter edges).
         let mut borders = BordersIr {
             top: cell.stroke.top.as_deref().map(Self::abs_stroke_to_ir),
             bottom: cell.stroke.bottom.as_deref().map(Self::abs_stroke_to_ir),
@@ -140,43 +144,89 @@ impl<'a> ExtractorContext<'a> {
             right: cell.stroke.right.as_deref().map(Self::abs_stroke_to_ir),
         };
 
-        if !cell.stroke_overridden.top
-            && let Some(lines) = grid.hlines.get(y)
-        {
+        if !grid.has_gutter {
+            let neighbor_cell = |nx: usize, ny: usize| -> Option<&Cell> {
+                grid.parent_cell_position(nx, ny)
+                    .and_then(|p| grid.cell(p.x, p.y))
+            };
+            if !cell.stroke_overridden.top
+                && y > 0
+                && let Some(nb) = neighbor_cell(x, y - 1)
+                && nb.stroke_overridden.bottom
+            {
+                borders.top = nb.stroke.bottom.as_deref().map(Self::abs_stroke_to_ir);
+            }
+            if !cell.stroke_overridden.bottom
+                && y + rs < num_rows
+                && let Some(nb) = neighbor_cell(x, y + rs)
+                && nb.stroke_overridden.top
+            {
+                borders.bottom = nb.stroke.top.as_deref().map(Self::abs_stroke_to_ir);
+            }
+            if !cell.stroke_overridden.left
+                && x > 0
+                && let Some(nb) = neighbor_cell(x - 1, y)
+                && nb.stroke_overridden.right
+            {
+                borders.left = nb.stroke.right.as_deref().map(Self::abs_stroke_to_ir);
+            }
+            if !cell.stroke_overridden.right
+                && x + cs < num_cols
+                && let Some(nb) = neighbor_cell(x + cs, y)
+                && nb.stroke_overridden.left
+            {
+                borders.right = nb.stroke.left.as_deref().map(Self::abs_stroke_to_ir);
+            }
+        }
+
+        // Tier 3: Explicit `table.hline` / `table.vline` overrides BOTH GridStroke and CellStroke!
+        if let Some(lines) = grid.hlines.get(y) {
             for line in lines {
-                let end = line.end.map_or(num_cols, |e| e.get());
-                if (line.start..end).contains(&x) {
-                    borders.top = line.stroke.as_deref().map(Self::abs_stroke_to_ir);
+                if line.position == LinePosition::Before {
+                    let end = line.end.map_or(num_cols, |e| e.get());
+                    if (line.start..end).contains(&x) {
+                        borders.top = line.stroke.as_deref().map(Self::abs_stroke_to_ir);
+                    }
                 }
             }
         }
-        if !cell.stroke_overridden.bottom
-            && let Some(lines) = grid.hlines.get(y + rowspan.max(1))
-        {
+        let (bot_hline_idx, bot_hline_pos) = if grid.has_gutter && y + rs < num_rows {
+            (y + rs - 1, LinePosition::After)
+        } else {
+            (y + rs, LinePosition::Before)
+        };
+        if let Some(lines) = grid.hlines.get(bot_hline_idx) {
             for line in lines {
-                let end = line.end.map_or(num_cols, |e| e.get());
-                if (line.start..end).contains(&x) {
-                    borders.bottom = line.stroke.as_deref().map(Self::abs_stroke_to_ir);
+                if line.position == bot_hline_pos {
+                    let end = line.end.map_or(num_cols, |e| e.get());
+                    if (line.start..end).contains(&x) {
+                        borders.bottom = line.stroke.as_deref().map(Self::abs_stroke_to_ir);
+                    }
                 }
             }
         }
-        if !cell.stroke_overridden.left
-            && let Some(lines) = grid.vlines.get(x)
-        {
+        if let Some(lines) = grid.vlines.get(x) {
             for line in lines {
-                let end = line.end.map_or(num_rows, |e| e.get());
-                if (line.start..end).contains(&y) {
-                    borders.left = line.stroke.as_deref().map(Self::abs_stroke_to_ir);
+                if line.position == LinePosition::Before {
+                    let end = line.end.map_or(num_rows, |e| e.get());
+                    if (line.start..end).contains(&y) {
+                        borders.left = line.stroke.as_deref().map(Self::abs_stroke_to_ir);
+                    }
                 }
             }
         }
-        if !cell.stroke_overridden.right
-            && let Some(lines) = grid.vlines.get(x + colspan.max(1))
-        {
+        let (right_vline_idx, right_vline_pos) = if grid.has_gutter && x + cs < num_cols {
+            (x + cs - 1, LinePosition::After)
+        } else {
+            (x + cs, LinePosition::Before)
+        };
+        if let Some(lines) = grid.vlines.get(right_vline_idx) {
             for line in lines {
-                let end = line.end.map_or(num_rows, |e| e.get());
-                if (line.start..end).contains(&y) {
-                    borders.right = line.stroke.as_deref().map(Self::abs_stroke_to_ir);
+                if line.position == right_vline_pos {
+                    let end = line.end.map_or(num_rows, |e| e.get());
+                    if (line.start..end).contains(&y) {
+                        borders.right = line.stroke.as_deref().map(Self::abs_stroke_to_ir);
+                    }
                 }
             }
         }

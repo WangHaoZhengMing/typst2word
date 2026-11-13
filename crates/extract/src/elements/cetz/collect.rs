@@ -195,7 +195,7 @@ impl<'a> ExtractorContext<'a> {
                         labels,
                     );
                 }
-                TreeNode::Text { text, pos } => {
+                TreeNode::Text { text, pos, .. } => {
                     let abs_pos = offset + *pos;
                     let mut run = Self::text_item_to_run(text, &ActiveInlineState::default());
                     run.text = run.text.trim().to_string();
@@ -228,7 +228,7 @@ impl<'a> ExtractorContext<'a> {
     ) {
         for node in nodes {
             match node {
-                TreeNode::Text { text, pos } => {
+                TreeNode::Text { text, pos, .. } => {
                     if text.text.trim().is_empty() {
                         continue;
                     }

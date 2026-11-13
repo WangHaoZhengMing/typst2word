@@ -3,7 +3,7 @@
 
 pub(crate) mod raw;
 
-use typst::foundations::{Content, Smart, StyleChain};
+use typst::foundations::{Content, Smart};
 use typst::layout::{MoveElem, Point, RotateElem, ScaleAmount, ScaleElem, Size};
 use typst::syntax::Span;
 use typst::text::TextElem;
@@ -16,7 +16,8 @@ use crate::color::paint_to_hex;
 use crate::ExtractorContext;
 use crate::frame_tree::TreeNode;
 use ir::{
-    BlockNode, BordersIr, DashPatternIr, HAlignIr, ShapeIr, ShapeKindIr, SidesPtIr, StrokeIr,
+    BlockNode, BordersIr, DashPatternIr, HAlignIr, SemanticRoleIr, ShapeIr, ShapeKindIr, SidesPtIr,
+    StrokeIr,
 };
 
 impl<'a> ExtractorContext<'a> {
@@ -42,7 +43,7 @@ impl<'a> ExtractorContext<'a> {
         let mut scale = (1.0, 1.0);
         let mut move_offset: Option<(f64, f64)> = None;
 
-        let chain = self.style_chain();
+        let chain = self.scoped_style_chain(None);
         let base_font_pt = Self::resolve_length_pt(chain.get(TextElem::size).0, 11.0);
 
         if let Some(rot) = elem.to_packed::<RotateElem>() {
@@ -162,12 +163,20 @@ impl<'a> ExtractorContext<'a> {
         let body_blocks =
             self.extract_blocks_from_nodes(&body_tree_nodes, list_level, default_body_align);
 
+        let id = self.alloc_node_with_fragments(
+            elem.span(),
+            self.active_scope_loc,
+            Some(SemanticRoleIr::Shape),
+            children,
+        );
+
         for (_, sh, sp) in &shape_items {
             if let Some(Paint::Tiling(_)) = &sh.fill {
                 let unsup = self.record_unsupported_paint(elem.elem().name(), *sp);
                 let mut body = body_blocks;
                 body.insert(0, BlockNode::UnsupportedBlock(unsup));
                 return Some(ShapeIr {
+                    id,
                     kind: ShapeKindIr::Rect,
                     width_pt: group_size.map(|s| s.x.to_pt()).unwrap_or(100.0),
                     height_pt: group_size.map(|s| s.y.to_pt()).unwrap_or(36.0),
@@ -237,29 +246,30 @@ impl<'a> ExtractorContext<'a> {
             .iter()
             .find_map(|(_, s, _)| s.stroke.as_ref().map(Self::fixed_stroke_to_ir));
 
+        let chain = self.scoped_style_chain(None);
         let (kind, corner_radius_pt, inset) = if let Some(rect) = elem.to_packed::<RectElem>() {
             let rad = Self::corners_radius_to_pt(
-                &rect.radius.get(StyleChain::default()),
+                &rect.radius.get(chain),
                 width_pt.min(height_pt),
             );
             let ins =
-                Self::sides_rel_length_to_pt(&Smart::Custom(rect.inset.get(StyleChain::default())));
+                Self::sides_rel_length_to_pt(&Smart::Custom(rect.inset.get(chain)));
             (ShapeKindIr::Rect, rad, ins)
         } else if let Some(sq) = elem.to_packed::<SquareElem>() {
             let rad = Self::corners_radius_to_pt(
-                &sq.radius.get(StyleChain::default()),
+                &sq.radius.get(chain),
                 width_pt.min(height_pt),
             );
             let ins =
-                Self::sides_rel_length_to_pt(&Smart::Custom(sq.inset.get(StyleChain::default())));
+                Self::sides_rel_length_to_pt(&Smart::Custom(sq.inset.get(chain)));
             (ShapeKindIr::Rect, rad, ins)
         } else if let Some(cir) = elem.to_packed::<CircleElem>() {
             let ins =
-                Self::sides_rel_length_to_pt(&Smart::Custom(cir.inset.get(StyleChain::default())));
+                Self::sides_rel_length_to_pt(&Smart::Custom(cir.inset.get(chain)));
             (ShapeKindIr::Ellipse, None, ins)
         } else if let Some(ell) = elem.to_packed::<EllipseElem>() {
             let ins =
-                Self::sides_rel_length_to_pt(&Smart::Custom(ell.inset.get(StyleChain::default())));
+                Self::sides_rel_length_to_pt(&Smart::Custom(ell.inset.get(chain)));
             (ShapeKindIr::Ellipse, None, ins)
         } else if elem.is::<LineElem>() {
             if let Some((
@@ -345,6 +355,7 @@ impl<'a> ExtractorContext<'a> {
         ;
 
         Some(ShapeIr {
+            id,
             kind,
             width_pt: width_pt.max(1.0),
             height_pt: height_pt.max(1.0),

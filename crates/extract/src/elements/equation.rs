@@ -10,7 +10,7 @@ use typst::pdf::{PdfMarkerTag, PdfMarkerTagKind};
 use crate::ExtractorContext;
 use crate::frame_tree::TreeNode;
 use crate::math::extract_equation_math_nodes;
-use ir::{EquationIr, EquationPdfMetricsIr};
+use ir::{EquationIr, EquationLayoutMetricsIr, SemanticRoleIr};
 
 struct EquationTypography {
     context_font_size_pt: f64,
@@ -27,7 +27,7 @@ impl<'a> ExtractorContext<'a> {
         loc: Location,
         children: &[TreeNode],
     ) -> EquationIr {
-        let chain = self.style_chain();
+        let chain = self.scoped_style_chain(Some(loc));
         let is_block = eq.block.get(chain);
         let typo = Self::resolve_equation_typography(children, chain);
         let measured_bbox = Self::measure_equation_bbox(
@@ -37,6 +37,8 @@ impl<'a> ExtractorContext<'a> {
         );
 
         let body = extract_equation_math_nodes(
+            self.compiled,
+            self.world,
             eq,
             chain,
             Some(typo.context_font_size_pt),
@@ -46,7 +48,7 @@ impl<'a> ExtractorContext<'a> {
         let max_available_width_pt =
             Some((self.current_column_width_pt() - self.container_inset_pt).max(60.0));
 
-        let pdf_metrics = EquationPdfMetricsIr::from_bbox(
+        let layout_metrics = EquationLayoutMetricsIr::from_bbox(
             measured_bbox,
             typo.context_font_size_pt,
             typo.max_glyph_pt,
@@ -95,14 +97,25 @@ impl<'a> ExtractorContext<'a> {
             None
         };
 
+        let id = self.alloc_node_with_fragments(
+            eq.span(),
+            Some(loc),
+            Some(SemanticRoleIr::Equation {
+                is_block,
+                numbering: numbering_text.clone(),
+            }),
+            children,
+        );
+
         EquationIr {
+            id,
             is_block,
             body,
             source_text,
             numbering_text,
             bookmark,
             font_size_pt: Some((base_font_pt * 2.0).round() / 2.0),
-            pdf_metrics,
+            layout_metrics,
         }
     }
 
@@ -279,7 +292,7 @@ impl<'a> ExtractorContext<'a> {
     ) {
         for node in nodes {
             match node {
-                TreeNode::Text { text, pos } => {
+                TreeNode::Text { text, pos, .. } => {
                     if text.text.trim().is_empty() {
                         continue;
                     }
@@ -496,7 +509,7 @@ impl<'a> ExtractorContext<'a> {
     ) {
         for node in nodes {
             match node {
-                TreeNode::Text { text, pos } => {
+                TreeNode::Text { text, pos, .. } => {
                     if offset_x_pt + pos.x.to_pt() > 260.0 {
                         out.push_str(&text.text);
                     }

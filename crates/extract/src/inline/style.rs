@@ -1,7 +1,7 @@
 //! Inline style wrappers (`strong`, `emph`, `underline`, `strike`, `overline`,
 //! `highlight`, `sub`, `super`, `smallcaps`, inline `raw`).
 
-use typst::foundations::{Content, StyleChain};
+use typst::foundations::Content;
 use typst::model::{EmphElem, StrongElem};
 use typst::text::{
     HighlightElem, OverlineElem, RawElem, SmallcapsElem, StrikeElem, SubElem, SuperElem,
@@ -38,9 +38,10 @@ impl<'a> ExtractorContext<'a> {
             state.italic = prev;
             return true;
         }
+        let chain = self.scoped_style_chain(state.scope_loc);
         if let Some(ul) = elem.to_packed::<UnderlineElem>() {
             let prev = state.underline.clone();
-            let stroke = ul.stroke.resolve(StyleChain::default()).unwrap_or_default();
+            let stroke = ul.stroke.resolve(chain).unwrap_or_default();
             state.underline = Some(Self::abs_stroke_to_ir(&stroke));
             let text_only = Self::filter_non_shape_nodes(children);
             self.extract_inlines_from_nodes(&text_only, out, state, last_y, last_x_end);
@@ -49,7 +50,7 @@ impl<'a> ExtractorContext<'a> {
         }
         if let Some(st) = elem.to_packed::<StrikeElem>() {
             let prev = state.strike.clone();
-            let stroke = st.stroke.resolve(StyleChain::default()).unwrap_or_default();
+            let stroke = st.stroke.resolve(chain).unwrap_or_default();
             state.strike = Some(Self::abs_stroke_to_ir(&stroke));
             let text_only = Self::filter_non_shape_nodes(children);
             self.extract_inlines_from_nodes(&text_only, out, state, last_y, last_x_end);
@@ -58,7 +59,7 @@ impl<'a> ExtractorContext<'a> {
         }
         if let Some(ol) = elem.to_packed::<OverlineElem>() {
             let prev = state.overline.clone();
-            let stroke = ol.stroke.resolve(StyleChain::default()).unwrap_or_default();
+            let stroke = ol.stroke.resolve(chain).unwrap_or_default();
             state.overline = Some(Self::abs_stroke_to_ir(&stroke));
             let text_only = Self::filter_non_shape_nodes(children);
             self.extract_inlines_from_nodes(&text_only, out, state, last_y, last_x_end);
@@ -69,7 +70,7 @@ impl<'a> ExtractorContext<'a> {
             let prev = state.highlight.clone();
             state.highlight = hl
                 .fill
-                .get_ref(StyleChain::default())
+                .get_ref(chain)
                 .as_ref()
                 .and_then(paint_to_hex)
                 .or_else(|| Some("FFF59D".to_string()));

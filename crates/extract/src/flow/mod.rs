@@ -15,6 +15,7 @@ use typst::model::{
     TermsElem,
 };
 use typst::pdf::{ArtifactElem, PdfMarkerTag};
+use typst::syntax::Span;
 use typst::text::{
     HighlightElem, OverlineElem, RawElem, SmallcapsElem, StrikeElem, SubElem, SuperElem,
     UnderlineElem,
@@ -24,7 +25,7 @@ use typst::visualize::LineElem;
 use crate::ExtractorContext;
 use crate::frame_tree::TreeNode;
 use crate::inline::ActiveInlineState;
-use ir::{BlockNode, HAlignIr, ParagraphStyleIr};
+use ir::{BlockNode, HAlignIr, ParagraphStyleIr, SemanticRoleIr};
 
 impl<'a> ExtractorContext<'a> {
     pub(crate) fn extract_blocks_from_nodes(
@@ -74,7 +75,14 @@ impl<'a> ExtractorContext<'a> {
                             } else {
                                 let mut lines = vec![runs];
                                 Self::normalize_empty_code_line_metrics(&mut lines);
+                                let id = self.alloc_node_with_fragments(
+                                    Span::detached(),
+                                    None,
+                                    Some(SemanticRoleIr::CodeBlock { lang: None }),
+                                    &stray_inlines,
+                                );
                                 blocks.push(BlockNode::CodeBlock {
+                                    id,
                                     lang: None,
                                     lines,
                                     fill: None,
@@ -114,7 +122,7 @@ impl<'a> ExtractorContext<'a> {
             }
         }
 
-        Self::record_inter_block_pdf_gaps(&mut blocks, &block_source_spans);
+        self.record_inter_block_pdf_gaps(&mut blocks, &block_source_spans);
         blocks
     }
 
@@ -377,6 +385,7 @@ impl<'a> ExtractorContext<'a> {
                             .block
                             .get(StyleChain::default()))
                     || elem.is::<typst::text::LinebreakElem>()
+                    || elem.is::<typst::layout::HElem>()
             }
             _ => false,
         }
@@ -410,16 +419,29 @@ impl<'a> ExtractorContext<'a> {
         let mut right_indent_pt = 0.0;
         let mut line_spacing_pt = None;
 
-        let chain = self.style_chain();
-        let chain_justify = chain.get(ParElem::justify);
-        let chain_linebreaks = match chain.get(ParElem::linebreaks) {
-            typst::foundations::Smart::Custom(typst::model::Linebreaks::Optimized) => {
-                ir::LinebreaksIr::Optimized
-            }
-            typst::foundations::Smart::Custom(typst::model::Linebreaks::Simple) => {
-                ir::LinebreaksIr::Simple
-            }
-            typst::foundations::Smart::Auto => ir::LinebreaksIr::Auto,
+        let (chain_justify, chain_linebreaks, chain_font_pt, chain_leading, chain_locale, chain_dir) = {
+            let chain = self.scoped_style_chain(None);
+            let justify = chain.get(ParElem::justify);
+            let linebreaks = match chain.get(ParElem::linebreaks) {
+                typst::foundations::Smart::Custom(typst::model::Linebreaks::Optimized) => {
+                    ir::LinebreaksIr::Optimized
+                }
+                typst::foundations::Smart::Custom(typst::model::Linebreaks::Simple) => {
+                    ir::LinebreaksIr::Simple
+                }
+                typst::foundations::Smart::Auto => ir::LinebreaksIr::Auto,
+            };
+            let font_pt =
+                Self::resolve_length_pt(chain.get(typst::text::TextElem::size).0, 11.0);
+            let leading = chain.get(ParElem::leading);
+            let lang = chain.get(typst::text::TextElem::lang);
+            let region = chain.get(typst::text::TextElem::region);
+            let locale = (lang.as_str() != "en" || region.is_some()).then(|| {
+                ir::LocaleIr::new(lang.as_str(), region.map(|r| r.as_str().to_string()))
+            });
+            let dir = (chain.resolve(typst::text::TextElem::dir) == typst::layout::Dir::RTL)
+                .then_some(ir::TextDirIr::Rtl);
+            (justify, linebreaks, font_pt, leading, locale, dir)
         };
 
         if line_spans.len() >= 2 {
@@ -473,16 +495,14 @@ impl<'a> ExtractorContext<'a> {
                     }
                 }
             }
-            let default_font_pt =
-                Self::resolve_length_pt(chain.get(typst::text::TextElem::size).0, 11.0);
-            line_spacing_pt = Some(Self::resolve_length_pt(
-                chain.get(ParElem::leading),
-                default_font_pt,
-            ));
+            line_spacing_pt = Some(Self::resolve_length_pt(chain_leading, chain_font_pt));
         }
 
         let mut inlines = Vec::new();
-        let mut state = ActiveInlineState::default();
+        let mut state = ActiveInlineState {
+            scope_loc: self.active_scope_loc,
+            ..Default::default()
+        };
         let mut last_y: Option<f64> = None;
         let mut last_x_end: Option<f64> = None;
         self.extract_inlines_from_nodes(
@@ -492,6 +512,16 @@ impl<'a> ExtractorContext<'a> {
             &mut last_y,
             &mut last_x_end,
         );
+        let id = if !inlines.is_empty() {
+            self.alloc_node_with_fragments(
+                Span::detached(),
+                None,
+                Some(SemanticRoleIr::Paragraph),
+                stray,
+            )
+        } else {
+            ir::NodeId::UNSET
+        };
         stray.clear();
         if !inlines.is_empty() {
             self.report.paragraphs_count += 1;
@@ -505,7 +535,12 @@ impl<'a> ExtractorContext<'a> {
             style.line_spacing_pt = line_spacing_pt;
             style.justify = eff_align == HAlignIr::Justify;
             style.linebreaks = chain_linebreaks;
+            style.ends_with_explicit_linebreak =
+                matches!(inlines.last(), Some(ir::InlineNode::LineBreak));
+            style.locale = chain_locale;
+            style.dir = chain_dir;
             blocks.push(BlockNode::Paragraph {
+                id,
                 content: inlines,
                 style,
                 bookmark: None,

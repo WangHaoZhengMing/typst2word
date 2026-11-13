@@ -7,14 +7,14 @@ use typst::visualize::{ExchangeFormat, Image, ImageKind, RasterFormat};
 
 use crate::ExtractorContext;
 use crate::frame_tree::TreeNode;
-use ir::{HAlignIr, ImageFormatIr, ImageIr};
+use ir::{HAlignIr, ImageFormatIr, ImageIr, SemanticRoleIr};
 
 impl<'a> ExtractorContext<'a> {
     // =========================================================================
     // Image Extraction
     // =========================================================================
     pub(crate) fn extract_image_elem(
-        &self,
+        &mut self,
         _img_elem: &Packed<typst::visualize::ImageElem>,
         children: &[TreeNode],
         align: HAlignIr,
@@ -41,12 +41,13 @@ impl<'a> ExtractorContext<'a> {
     }
 
     pub(crate) fn extract_image_item(
-        &self,
+        &mut self,
         image: &Image,
         size: Size,
         span: Span,
         align: HAlignIr,
     ) -> Option<ImageIr> {
+        let id = self.alloc_node_id(span, None, Some(SemanticRoleIr::Image));
         let width_pt = size.x.to_pt().max(1.0);
         let height_pt = size.y.to_pt().max(1.0);
         let alt = image.alt().map(|s| s.to_string());
@@ -78,6 +79,7 @@ impl<'a> ExtractorContext<'a> {
         };
 
         Some(ImageIr {
+            id,
             data,
             format,
             width_pt,

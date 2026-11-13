@@ -6,23 +6,28 @@ mod sizing;
 use std::collections::HashMap;
 
 use typst::foundations::Content;
+use typst::introspection::Location;
 use typst::layout::grid::resolve::{CellGrid, Entry};
 use typst::layout::{Size, Sizing};
+use typst::syntax::Span;
 use typst::visualize::Paint;
 
 use crate::color::paint_to_hex;
 use crate::ExtractorContext;
 use crate::frame_tree::TreeNode;
 use ir::{
-    HAlignIr, SidesPtIr, TableCellIr, TableIr, TableKindIr, TableRowIr, VAlignIr,
+    HAlignIr, SemanticRoleIr, SidesPtIr, TableCellIr, TableIr, TableKindIr, TableRowIr, VAlignIr,
 };
 
 pub(super) type CellNodeMap = HashMap<(usize, usize), (Content, Vec<TreeNode>, Size)>;
 
 impl<'a> ExtractorContext<'a> {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn extract_table_or_grid(
         &mut self,
         cell_grid: Option<&CellGrid>,
+        span: Span,
+        loc_opt: Option<Location>,
         kind: TableKindIr,
         summary: Option<String>,
         children: &[TreeNode],
@@ -36,6 +41,14 @@ impl<'a> ExtractorContext<'a> {
         if num_cols == 0 || num_rows == 0 {
             return None;
         }
+
+        let role = if is_semantic_table {
+            SemanticRoleIr::Table
+        } else {
+            SemanticRoleIr::Grid
+        };
+        let table_id = self.alloc_node_with_fragments(span, loc_opt, Some(role), children);
+        self.parent_node_stack.push(table_id);
 
         // 1. Collect laid-out non-repeated cell nodes keyed by `(x, y)` (non-gutter indices).
         let factor = if grid.has_gutter { 2 } else { 1 };
@@ -71,11 +84,19 @@ impl<'a> ExtractorContext<'a> {
             .map(|h| h.range.end / factor)
             .max()
             .unwrap_or(0);
+        let footer_range = grid
+            .footer
+            .as_ref()
+            .map(|f| (f.start / factor)..((f.end + factor - 1) / factor));
+        let footer_rows = footer_range
+            .as_ref()
+            .map_or(0, |r| r.end.saturating_sub(r.start));
 
         // 3. Extract rows and cells.
         let mut rows = Vec::with_capacity(num_rows);
         for y in 0..num_rows {
             let is_header = y < header_rows;
+            let is_footer = footer_range.as_ref().is_some_and(|r| r.contains(&y));
             let row_cells = self.extract_table_row_cells(
                 grid,
                 &cell_nodes_map,
@@ -95,9 +116,11 @@ impl<'a> ExtractorContext<'a> {
                     None
                 },
                 is_header,
+                is_footer,
                 cells: row_cells,
             });
         }
+        self.parent_node_stack.pop();
 
         // Shift horizontal column gutter from a bottom-bordered field column `x` to the next column `x + 1`'s left inset.
         if !is_semantic_table && grid.has_gutter && num_cols > 1 {
@@ -159,10 +182,12 @@ impl<'a> ExtractorContext<'a> {
         };
 
         Some(TableIr {
+            id: table_id,
             kind,
             col_widths_pt: dims.col_widths_pt,
             row_heights_pt: dims.row_heights_pt,
             header_rows,
+            footer_rows,
             rows,
             align,
             left_indent_pt: eff_left_indent_pt,
@@ -262,7 +287,22 @@ impl<'a> ExtractorContext<'a> {
                                 && fill.is_none()
                                 && !borders.has_any()
                                 && blks.len() == 1
-                                && matches!(
+                            {
+                                if matches!(
+                                    &blks[0],
+                                    ir::BlockNode::Container(inner)
+                                        if inner.style.fill.is_none()
+                                            && inner.style.borders.left.is_none()
+                                            && inner.style.borders.right.is_none()
+                                            && inner.style.borders.has_any()
+                                ) {
+                                    let Some(ir::BlockNode::Container(inner)) = blks.pop() else {
+                                        unreachable!()
+                                    };
+                                    borders = inner.style.borders;
+                                    ins = inner.style.inset;
+                                    blks = inner.body;
+                                } else if matches!(
                                     &blks[0],
                                     ir::BlockNode::Table(inner)
                                         if inner.kind == TableKindIr::StyledContainer
@@ -272,17 +312,17 @@ impl<'a> ExtractorContext<'a> {
                                             && inner.rows[0].cells[0].borders.left.is_none()
                                             && inner.rows[0].cells[0].borders.right.is_none()
                                             && inner.rows[0].cells[0].borders.has_any()
-                                )
-                            {
-                                let Some(ir::BlockNode::Table(mut inner)) = blks.pop() else {
-                                    unreachable!()
-                                };
-                                let inner_cell = inner.rows.remove(0).cells.remove(0);
-                                borders = inner_cell.borders;
-                                ins = inner_cell.inset;
-                                blks = inner_cell.blocks;
-                                self.report.tables_count =
-                                    self.report.tables_count.saturating_sub(1);
+                                ) {
+                                    let Some(ir::BlockNode::Table(mut inner)) = blks.pop() else {
+                                        unreachable!()
+                                    };
+                                    let inner_cell = inner.rows.remove(0).cells.remove(0);
+                                    borders = inner_cell.borders;
+                                    ins = inner_cell.inset;
+                                    blks = inner_cell.blocks;
+                                    self.report.tables_count =
+                                        self.report.tables_count.saturating_sub(1);
+                                }
                             }
                             if !is_semantic_table
                                 && row_min_y.is_finite()

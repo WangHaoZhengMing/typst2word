@@ -8,7 +8,8 @@ use typst::model::{Linebreaks, ParElem};
 use crate::ExtractorContext;
 use crate::frame_tree::TreeNode;
 use ir::{
-    BlockNode, HAlignIr, InlineNode, LinebreaksIr, ParagraphPdfMetricsIr, ParagraphStyleIr,
+    BlockNode, HAlignIr, InlineNode, LinebreaksIr, LocaleIr, ParagraphStyleIr, SemanticRoleIr,
+    TextDirIr,
 };
 
 impl<'a> ExtractorContext<'a> {
@@ -60,14 +61,18 @@ impl<'a> ExtractorContext<'a> {
                 }
                 TreeNode::Element {
                     elem,
+                    loc: eloc,
                     pos: epos,
                     children: echildren,
-                    ..
                 } if elem.is::<typst::layout::BoxElem>()
                     && Self::is_block_structured_box_group(echildren) =>
                 {
                     if let Some(styled_box) = self.try_extract_styled_container_nodes(
                         None,
+                        elem.span(),
+                        Some(*eloc),
+                        false,
+                        false,
                         *epos,
                         echildren,
                         list_level,
@@ -92,7 +97,7 @@ impl<'a> ExtractorContext<'a> {
             return;
         }
 
-        let chain = self.style_chain();
+        let chain = self.scoped_style_chain(Some(loc));
         let default_font_pt =
             Self::resolve_length_pt(chain.get(typst::text::TextElem::size).0, 11.0);
         let base_font_pt = content
@@ -183,6 +188,12 @@ impl<'a> ExtractorContext<'a> {
             Smart::Auto => LinebreaksIr::Auto,
         };
         let justify = par.justify.get(chain);
+        let lang = chain.get(typst::text::TextElem::lang);
+        let region = chain.get(typst::text::TextElem::region);
+        let locale = (lang.as_str() != "en" || region.is_some())
+            .then(|| LocaleIr::new(lang.as_str(), region.map(|r| r.as_str().to_string())));
+        let dir = (chain.resolve(typst::text::TextElem::dir) == typst::layout::Dir::RTL)
+            .then_some(TextDirIr::Rtl);
 
         let style = ParagraphStyleIr {
             align,
@@ -194,19 +205,25 @@ impl<'a> ExtractorContext<'a> {
             line_spacing_pt: Some(line_leading_pt),
             linebreaks,
             justify,
-            pdf_metrics: ParagraphPdfMetricsIr::Measured {
-                ends_with_explicit_linebreak,
-                base_font_pt,
-                default_font_pt,
-                par_spacing_pt: spacing_pt,
-                par_leading_pt: leading_pt,
-                in_multi_block_group_tail: false,
-            },
+            ends_with_explicit_linebreak,
+            resolved_font_size_pt: Some(base_font_pt),
+            resolved_default_font_size_pt: Some(default_font_pt),
+            resolved_par_spacing_pt: Some(spacing_pt),
+            resolved_par_leading_pt: Some(leading_pt),
+            locale,
+            dir,
             ..Default::default()
         };
 
+        let id = self.alloc_node_with_fragments(
+            par.span(),
+            Some(loc),
+            Some(SemanticRoleIr::Paragraph),
+            children,
+        );
         self.report.paragraphs_count += 1;
         blocks.push(BlockNode::Paragraph {
+            id,
             content,
             style,
             bookmark: self.bookmarks.get(&loc).cloned(),
@@ -238,7 +255,7 @@ impl<'a> ExtractorContext<'a> {
     ) {
         for node in nodes {
             match node {
-                TreeNode::Text { text, pos } => {
+                TreeNode::Text { text, pos, .. } => {
                     if text.text.trim().is_empty() {
                         continue;
                     }
@@ -274,7 +291,7 @@ impl<'a> ExtractorContext<'a> {
     ) {
         for node in nodes {
             match node {
-                TreeNode::Text { text, pos } => {
+                TreeNode::Text { text, pos, .. } => {
                     if text.text.trim().is_empty() {
                         continue;
                     }

@@ -8,7 +8,7 @@ use typst::visualize::{FillRule, Geometry, Paint, Shape};
 use crate::color::paint_to_hex;
 use crate::ExtractorContext;
 use crate::frame_tree::TreeNode;
-use ir::{BlockNode, BordersIr, HAlignIr, ShapeIr, ShapeKindIr, SidesPtIr};
+use ir::{BlockNode, BordersIr, HAlignIr, SemanticRoleIr, ShapeIr, ShapeKindIr, SidesPtIr};
 
 impl<'a> ExtractorContext<'a> {
     pub(crate) fn partition_shape_and_body_nodes(
@@ -110,7 +110,9 @@ impl<'a> ExtractorContext<'a> {
             }
         };
 
+        let id = self.alloc_node_id(span, None, Some(SemanticRoleIr::Shape));
         Some(ShapeIr {
+            id,
             kind,
             width_pt,
             height_pt,

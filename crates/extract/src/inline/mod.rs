@@ -31,6 +31,7 @@ use ir::{ColorHex, HAlignIr, InlineNode, ScriptKindIr, StrokeIr, TextRunIr};
 /// Active inline formatting context accumulated while walking inside a paragraph.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ActiveInlineState {
+    pub(crate) scope_loc: Option<Location>,
     pub(crate) bold: bool,
     pub(crate) italic: bool,
     pub(crate) underline: Option<StrokeIr>,
@@ -56,6 +57,7 @@ impl<'a> ExtractorContext<'a> {
     ) -> Vec<InlineNode> {
         let mut out = Vec::new();
         let mut state = ActiveInlineState {
+            scope_loc: self.active_scope_loc,
             bold: force_bold,
             ..Default::default()
         };
@@ -75,16 +77,22 @@ impl<'a> ExtractorContext<'a> {
     ) {
         for node in nodes {
             match node {
-                TreeNode::Text { text, pos } => {
+                TreeNode::Text {
+                    text,
+                    pos,
+                    tracking_pt,
+                    baseline_shift_pt,
+                } => {
                     if state.hidden {
                         continue;
                     }
                     let y_pt = pos.y.to_pt();
+                    let line_y_pt = y_pt + baseline_shift_pt.unwrap_or(0.0);
                     let x_pt = pos.x.to_pt();
 
                     // Detect inter-word or inter-line spacing from laid-out glyph coordinates.
                     if let Some(prev_y) = *last_y {
-                        if (y_pt - prev_y).abs() > text.size.to_pt() * 0.55
+                        if (line_y_pt - prev_y).abs() > text.size.to_pt() * 0.55
                             && state.script == ScriptKindIr::Normal
                         {
                             if Self::strip_trailing_soft_hyphen_on_line_wrap(out) {
@@ -92,7 +100,12 @@ impl<'a> ExtractorContext<'a> {
                             } else if Self::should_insert_line_join_space(out, &text.text) {
                                 out.push(InlineNode::Text(TextRunIr {
                                     text: " ".to_string(),
-                                    ..Self::text_item_to_run(text, state)
+                                    ..Self::text_item_to_run_with_metrics(
+                                        text,
+                                        state,
+                                        *tracking_pt,
+                                        *baseline_shift_pt,
+                                    )
                                 }));
                             }
                         } else if let Some(prev_x_end) = *last_x_end {
@@ -104,7 +117,7 @@ impl<'a> ExtractorContext<'a> {
                     }
 
                     if state.script == ScriptKindIr::Normal {
-                        *last_y = Some(y_pt);
+                        *last_y = Some(line_y_pt);
                     }
                     *last_x_end = Some(x_pt + text.width().to_pt());
 
@@ -113,7 +126,12 @@ impl<'a> ExtractorContext<'a> {
                         out.push(InlineNode::UnsupportedInline(unsup));
                     }
 
-                    out.push(InlineNode::Text(Self::text_item_to_run(text, state)));
+                    out.push(InlineNode::Text(Self::text_item_to_run_with_metrics(
+                        text,
+                        state,
+                        *tracking_pt,
+                        *baseline_shift_pt,
+                    )));
                 }
                 TreeNode::Image {
                     image, size, span, ..
@@ -189,11 +207,16 @@ impl<'a> ExtractorContext<'a> {
                     pos,
                     children,
                 } => {
+                    let prev_scope = state.scope_loc;
+                    if self.compiled.semantics.get(*loc).is_some() {
+                        state.scope_loc = Some(*loc);
+                    }
                     self.extract_inline_element(
                         elem, *loc, *pos, children, out, state, last_y, last_x_end,
                     );
+                    state.scope_loc = prev_scope;
                 }
-                TreeNode::Link { .. } | TreeNode::PageBreak => {}
+                TreeNode::Link { .. } => {}
             }
         }
     }
@@ -223,6 +246,25 @@ impl<'a> ExtractorContext<'a> {
             out.push(InlineNode::LineBreak);
             *last_y = None;
             *last_x_end = None;
+            return;
+        }
+
+        if let Some(h) = elem.to_packed::<typst::layout::HElem>() {
+            let chain = self.scoped_style_chain(Some(loc));
+            if !h.weak.get(chain)
+                && let typst::layout::Spacing::Rel(rel) = h.amount
+            {
+                let base_em =
+                    Self::resolve_length_pt(chain.get(typst::text::TextElem::size).0, 11.0);
+                let col_w = self.current_column_width_pt();
+                let w_pt = Self::resolve_length_pt(rel.abs, base_em) + rel.rel.get() * col_w;
+                if w_pt > 0.5 {
+                    out.push(InlineNode::HorizontalSpace { width_pt: w_pt });
+                    if let Some(prev_x) = last_x_end.as_mut() {
+                        *prev_x += w_pt;
+                    }
+                }
+            }
             return;
         }
 
@@ -261,7 +303,33 @@ impl<'a> ExtractorContext<'a> {
                     *last_x_end = None;
                     return;
                 }
-
+            }
+            let auto_page = CounterDisplayElem::new(
+                Counter::new(CounterKey::Page),
+                typst::foundations::Smart::Auto,
+                false,
+            );
+            if typst_utils::hash128(&**counter) == typst_utils::hash128(&auto_page) {
+                let cached = self.extract_inlines_flat(children);
+                let mut run = cached
+                    .iter()
+                    .find_map(|i| {
+                        if let InlineNode::Text(r) = i {
+                            Some(r.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or_default();
+                run.text = "1".to_string();
+                out.push(InlineNode::Field {
+                    kind: ir::FieldKindIr::Page,
+                    format: Some("Arabic".into()),
+                    content: vec![InlineNode::Text(run)],
+                });
+                *last_y = None;
+                *last_x_end = None;
+                return;
             }
         }
 

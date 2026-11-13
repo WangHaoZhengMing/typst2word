@@ -1,12 +1,12 @@
 //! `figure` -> `BlockNode::Figure` (body + caption).
 
-use typst::foundations::{Packed, StyleChain};
+use typst::foundations::Packed;
 use typst::introspection::Location;
 use typst::model::{FigureCaption, FigureElem};
 
 use crate::ExtractorContext;
 use crate::frame_tree::TreeNode;
-use ir::{BlockNode, CaptionPositionIr, FigureKindIr, HAlignIr};
+use ir::{BlockNode, CaptionPositionIr, FigureKindIr, HAlignIr, SemanticRoleIr};
 
 impl<'a> ExtractorContext<'a> {
     pub(crate) fn extract_figure(
@@ -16,6 +16,21 @@ impl<'a> ExtractorContext<'a> {
         children: &[TreeNode],
         list_level: usize,
     ) -> BlockNode {
+        let (kind, bookmark) = {
+            let chain = self.scoped_style_chain(Some(loc));
+            let k = FigureKindIr::from_typst_repr(&format!("{:?}", fig.kind.get_ref(chain)));
+            let bm = self.bookmarks.get(&loc).cloned();
+            (k, bm)
+        };
+        let id = self.alloc_node_with_fragments(
+            fig.span(),
+            Some(loc),
+            Some(SemanticRoleIr::Figure {
+                kind: format!("{kind:?}"),
+                bookmark: bookmark.clone(),
+            }),
+            children,
+        );
         let mut body_nodes = Vec::new();
         let mut caption_nodes_opt = None;
         let mut caption_pos = CaptionPositionIr::Bottom;
@@ -46,16 +61,14 @@ impl<'a> ExtractorContext<'a> {
             };
         }
 
+        self.parent_node_stack.push(id);
         let caption_inlines =
             caption_nodes_opt.map(|cap_nodes| self.extract_inlines_flat(&cap_nodes));
         let body = self.extract_blocks_from_nodes(&body_nodes, list_level, HAlignIr::Center);
-        let kind = FigureKindIr::from_typst_repr(&format!(
-            "{:?}",
-            fig.kind.get_ref(StyleChain::default())
-        ));
-        let bookmark = self.bookmarks.get(&loc).cloned();
+        self.parent_node_stack.pop();
 
         BlockNode::Figure {
+            id,
             body,
             caption: caption_inlines,
             caption_pos,
@@ -169,7 +182,7 @@ impl<'a> ExtractorContext<'a> {
                         body_min_y,
                     );
                 }
-                TreeNode::Text { text, pos } => {
+                TreeNode::Text { text, pos, .. } => {
                     if text.text.trim().is_empty() {
                         continue;
                     }

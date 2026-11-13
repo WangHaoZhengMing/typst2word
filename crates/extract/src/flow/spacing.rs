@@ -1,17 +1,19 @@
-//! Raw inter-block PDF vertical span measurements (`FlowMeasureIr` / `BlockPdfSpanIr`).
+//! Reference layout vertical span measurements (`FlowReferenceIr` / `BlockLayoutSpanIr`).
 //!
-//! Records physical `(page_idx, top_y_pt, bottom_y_pt)` spans on `ParagraphStyleIr::flow_measure`
-//! without embedding Word-specific spacing thresholds.
+//! Records physical `(page_idx, top_y_pt, bottom_y_pt)` spans into `DocumentIr::reference_layout`
+//! keyed by `NodeId` without embedding Word-specific spacing thresholds on `ParagraphStyleIr`.
+
+use typst::syntax::Span;
 
 use crate::ExtractorContext;
 use crate::frame_tree::{TreeNode, decode_page_and_local_y};
-use ir::{BlockNode, BlockPdfSpanIr, NextBlockKindIr, NextBlockMeasureIr};
+use ir::{BlockLayoutSpanIr, BlockNode, NextBlockKindIr, NextBlockLayoutMeasureIr, SemanticRoleIr};
 
 impl<'a> ExtractorContext<'a> {
     pub(crate) fn nodes_first_page_top_y(nodes: &[TreeNode]) -> Option<(usize, f64, f64)> {
         for node in nodes {
             match node {
-                TreeNode::Text { text, pos } => {
+                TreeNode::Text { text, pos, .. } => {
                     if text.text.trim().is_empty() {
                         continue;
                     }
@@ -49,7 +51,7 @@ impl<'a> ExtractorContext<'a> {
     pub(crate) fn nodes_last_page_bottom_y(nodes: &[TreeNode]) -> Option<(usize, f64, f64)> {
         for node in nodes.iter().rev() {
             match node {
-                TreeNode::Text { text, pos } => {
+                TreeNode::Text { text, pos, .. } => {
                     if text.text.trim().is_empty() {
                         continue;
                     }
@@ -87,21 +89,32 @@ impl<'a> ExtractorContext<'a> {
     }
 
     pub(crate) fn record_trailing_transition_on_last_block(
+        &mut self,
         blocks: &mut [BlockNode],
-        span_a: BlockPdfSpanIr,
-        measure: NextBlockMeasureIr,
+        span_a: BlockLayoutSpanIr,
+        measure: NextBlockLayoutMeasureIr,
     ) {
         if let Some(last) = blocks.last_mut() {
             match last {
-                BlockNode::Paragraph { style, .. } => {
-                    style
-                        .flow_measure
+                BlockNode::Paragraph { id, .. } => {
+                    if id.is_unset() {
+                        *id = self.alloc_node_id(
+                            Span::detached(),
+                            None,
+                            Some(SemanticRoleIr::Paragraph),
+                        );
+                    }
+                    self.reference_layout
+                        .entry(*id)
+                        .or_default()
+                        .flow
+                        .get_or_insert_with(Default::default)
                         .trailing_transitions
                         .push((span_a, measure));
                 }
                 BlockNode::Enum { items, .. } => {
                     if let Some(last_item) = items.last_mut() {
-                        Self::record_trailing_transition_on_last_block(
+                        self.record_trailing_transition_on_last_block(
                             &mut last_item.blocks,
                             span_a,
                             measure,
@@ -110,7 +123,7 @@ impl<'a> ExtractorContext<'a> {
                 }
                 BlockNode::List { items, .. } => {
                     if let Some(last_item) = items.last_mut() {
-                        Self::record_trailing_transition_on_last_block(
+                        self.record_trailing_transition_on_last_block(
                             &mut last_item.blocks,
                             span_a,
                             measure,
@@ -124,12 +137,25 @@ impl<'a> ExtractorContext<'a> {
 
     #[allow(clippy::type_complexity)]
     pub(super) fn record_inter_block_pdf_gaps(
+        &mut self,
         blocks: &mut [BlockNode],
         spans: &[(usize, Option<(usize, f64, f64)>, Option<(usize, f64, f64)>)],
     ) {
         for &(idx, start, end) in spans {
-            if let Some(BlockNode::Paragraph { style, .. }) = blocks.get_mut(idx) {
-                style.flow_measure.self_span = BlockPdfSpanIr::from_start_end(start, end);
+            if let Some(BlockNode::Paragraph { id, .. }) = blocks.get_mut(idx) {
+                if id.is_unset() {
+                    *id = self.alloc_node_id(
+                        Span::detached(),
+                        None,
+                        Some(SemanticRoleIr::Paragraph),
+                    );
+                }
+                let span = BlockLayoutSpanIr::from_start_end(start, end);
+                let entry = self.reference_layout.entry(*id).or_default();
+                if matches!(entry.span, BlockLayoutSpanIr::Unmeasured) {
+                    entry.span = span;
+                }
+                entry.flow.get_or_insert_with(Default::default).self_span = span;
             }
         }
 
@@ -139,8 +165,8 @@ impl<'a> ExtractorContext<'a> {
             if idx_a >= blocks.len() || idx_b >= blocks.len() || idx_b != idx_a + 1 {
                 continue;
             }
-            let span_a = BlockPdfSpanIr::from_start_end(start_a, end_a);
-            let span_b = BlockPdfSpanIr::from_start_end(start_b, end_b);
+            let span_a = BlockLayoutSpanIr::from_start_end(start_a, end_a);
+            let span_b = BlockLayoutSpanIr::from_start_end(start_b, end_b);
             let font_a = Self::block_primary_font_size_pt(&blocks[idx_a]);
             let font_b = Self::block_primary_font_size_pt(&blocks[idx_b]);
             let kind = match &blocks[idx_b] {
@@ -155,17 +181,30 @@ impl<'a> ExtractorContext<'a> {
                 }
                 _ => NextBlockKindIr::Other,
             };
-            let measure = NextBlockMeasureIr {
+            let measure = NextBlockLayoutMeasureIr {
                 kind,
                 span: span_b,
                 prev_font_pt: font_a,
                 next_font_pt: font_b,
             };
-            if let BlockNode::Paragraph { style, .. } = &mut blocks[idx_a] {
-                style.flow_measure.self_span = span_a;
-                style.flow_measure.next = Some(measure);
+            if let BlockNode::Paragraph { id, .. } = &mut blocks[idx_a] {
+                if id.is_unset() {
+                    *id = self.alloc_node_id(
+                        Span::detached(),
+                        None,
+                        Some(SemanticRoleIr::Paragraph),
+                    );
+                }
+                let flow = self
+                    .reference_layout
+                    .entry(*id)
+                    .or_default()
+                    .flow
+                    .get_or_insert_with(Default::default);
+                flow.self_span = span_a;
+                flow.next = Some(measure);
             } else {
-                Self::record_trailing_transition_on_last_block(
+                self.record_trailing_transition_on_last_block(
                     &mut blocks[..=idx_a],
                     span_a,
                     measure,

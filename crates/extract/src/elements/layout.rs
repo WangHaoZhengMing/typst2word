@@ -1,13 +1,14 @@
 //! Layout container extractors (`AlignElem`, `PadElem`, `ColumnsElem`) and
 //! group horizontal offset propagation.
 
-use typst::foundations::{Packed, Smart, StyleChain};
+use typst::foundations::{Packed, Smart};
+use typst::introspection::Location;
 use typst::layout::{AlignElem, ColumnsElem, GroupItem, PadElem, Point};
 use typst::text::TextElem;
 
 use crate::ExtractorContext;
 use crate::frame_tree::TreeNode;
-use ir::{BlockNode, HAlignIr};
+use ir::{BlockNode, HAlignIr, SemanticRoleIr};
 
 impl<'a> ExtractorContext<'a> {
     /// Propagate horizontal indentation when a laid-out `GroupItem` (such as an indented
@@ -59,6 +60,11 @@ impl<'a> ExtractorContext<'a> {
                             t.left_indent_pt = group_left_offset;
                         }
                     }
+                    BlockNode::Container(c) => {
+                        if c.left_indent_pt < group_left_offset {
+                            c.left_indent_pt = group_left_offset;
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -72,7 +78,8 @@ impl<'a> ExtractorContext<'a> {
         blocks: &mut Vec<BlockNode>,
         list_level: usize,
     ) {
-        let (ha, _) = Self::alignment_to_ir(Smart::Custom(al.alignment.get(StyleChain::default())));
+        let chain = self.scoped_style_chain(None);
+        let (ha, _) = Self::alignment_to_ir(Smart::Custom(al.alignment.get(chain)));
         let child_blocks = self.extract_blocks_from_nodes(children, list_level, ha);
         blocks.extend(child_blocks);
     }
@@ -85,7 +92,7 @@ impl<'a> ExtractorContext<'a> {
         list_level: usize,
         inherited_align: HAlignIr,
     ) {
-        let chain = self.style_chain();
+        let chain = self.scoped_style_chain(None);
         let base_font_pt = Self::resolve_length_pt(chain.get(TextElem::size).0, 11.0);
         let pad_left_pt = Self::resolve_length_pt(pad.left.get(chain).abs, base_font_pt);
         let pad_right_pt = Self::resolve_length_pt(pad.right.get(chain).abs, base_font_pt);
@@ -112,6 +119,9 @@ impl<'a> ExtractorContext<'a> {
                     BlockNode::Table(t) => {
                         t.left_indent_pt += pad_left_pt;
                     }
+                    BlockNode::Container(c) => {
+                        c.left_indent_pt += pad_left_pt;
+                    }
                     BlockNode::ShapeBlock(sh) => {
                         let dy = if idx == 0 { pad_top_pt } else { 0.0 };
                         if pad_left_pt > 0.1 || dy > 0.1 {
@@ -131,12 +141,20 @@ impl<'a> ExtractorContext<'a> {
     pub(crate) fn extract_columns_container(
         &mut self,
         cols_elem: &Packed<ColumnsElem>,
+        loc: Location,
         children: &[TreeNode],
         blocks: &mut Vec<BlockNode>,
         list_level: usize,
         inherited_align: HAlignIr,
     ) {
-        let chain = self.style_chain();
+        let id = self.alloc_node_with_fragments(
+            cols_elem.span(),
+            Some(loc),
+            Some(SemanticRoleIr::Columns),
+            children,
+        );
+        self.parent_node_stack.push(id);
+        let chain = self.scoped_style_chain(Some(loc));
         let count = cols_elem.count.get(chain).get();
         let gutter_rel = cols_elem.gutter.get(chain);
         let base_font_pt = Self::resolve_length_pt(chain.get(TextElem::size).0, 11.0);
@@ -151,9 +169,11 @@ impl<'a> ExtractorContext<'a> {
         }
         let child_blocks = self.extract_blocks_from_nodes(children, list_level, inherited_align);
         self.active_columns = prev_cols;
+        self.parent_node_stack.pop();
 
         if count > 1 && self.page_columns <= 1 {
             blocks.push(BlockNode::Columns {
+                id,
                 count,
                 gutter_pt,
                 body: child_blocks,

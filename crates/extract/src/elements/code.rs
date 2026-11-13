@@ -1,6 +1,7 @@
 //! Block `raw` -> `BlockNode::CodeBlock` with syntax-highlighted runs per line.
 
-use typst::foundations::{Packed, StyleChain};
+use typst::foundations::Packed;
+use typst::introspection::Location;
 use typst::text::{RawElem, RawLine};
 use typst::visualize::Geometry;
 
@@ -8,22 +9,30 @@ use crate::color::paint_to_hex;
 use crate::ExtractorContext;
 use crate::frame_tree::TreeNode;
 use crate::inline::ActiveInlineState;
-use ir::{BlockNode, StrokeIr, TextRunIr};
+use ir::{BlockNode, SemanticRoleIr, StrokeIr, TextRunIr};
 
 impl<'a> ExtractorContext<'a> {
     // =========================================================================
     // Code Blocks, Figures, Equations, Outlines, Bibliographies
     // =========================================================================
     pub(crate) fn extract_code_block(
-        &self,
+        &mut self,
         raw: &Packed<RawElem>,
+        loc: Location,
         children: &[TreeNode],
     ) -> BlockNode {
+        let chain = self.scoped_style_chain(Some(loc));
         let lang = raw
             .lang
-            .get_ref(StyleChain::default())
+            .get_ref(chain)
             .as_ref()
             .map(|s| s.to_string());
+        let id = self.alloc_node_with_fragments(
+            raw.span(),
+            Some(loc),
+            Some(SemanticRoleIr::CodeBlock { lang: lang.clone() }),
+            children,
+        );
 
         let mut lines: Vec<Vec<TextRunIr>> = Vec::new();
         Self::collect_raw_lines(children, &mut lines);
@@ -47,6 +56,7 @@ impl<'a> ExtractorContext<'a> {
         let (fill, stroke) = Self::find_code_block_box_style(children);
 
         BlockNode::CodeBlock {
+            id,
             lang,
             lines,
             fill,

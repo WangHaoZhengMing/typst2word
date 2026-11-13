@@ -22,9 +22,14 @@ mod nary;
 mod node;
 mod symbol;
 
-use typst::foundations::{Content, Packed, SequenceElem, StyleChain, StyledElem};
+use compiler::{CompiledTypstDocument, TypstWorld};
+use typst::foundations::{Content, NativeElement, Packed, SequenceElem, StyleChain, StyledElem};
 use typst::introspection::TagElem;
-use typst::math::{AlignPointElem, EquationElem};
+use typst::math::{
+    AccentElem, AlignPointElem, AttachElem, BinomElem, CancelElem, CasesElem, ClassElem,
+    EquationElem, FracElem, LimitsElem, LrElem, MatElem, MidElem, RootElem, ScriptsElem,
+    StretchElem, VecElem,
+};
 use typst::text::{LinebreakElem, SpaceElem, TextElem};
 
 use ir::{MathNodeIr, MathRunIr, MathStyleIr};
@@ -42,8 +47,12 @@ pub(crate) struct MathStyleCtx {
     pub(crate) cjk_font: Option<&'static str>,
 }
 
-/// Extract a Typst `EquationElem` into a list of semantic `MathNodeIr` nodes.
+/// Extract a Typst `EquationElem` into a list of semantic `MathNodeIr` nodes,
+/// first running `RealizationKind::Math` so `#show` rules, `context`, and nested
+/// `$...$` equation references are evaluated faithfully.
 pub(crate) fn extract_equation_math_nodes(
+    compiled: &CompiledTypstDocument,
+    world: &TypstWorld,
     eq: &Packed<EquationElem>,
     styles: StyleChain,
     base_font_size_pt: Option<f64>,
@@ -59,9 +68,161 @@ pub(crate) fn extract_equation_math_nodes(
         math_font,
         cjk_font,
     };
+    let realized_body = realize_math_content_deep(compiled, world, &eq.body, styles, 0);
     let mut nodes = Vec::new();
-    extract_math_root(&eq.body, styles, ctx, &mut nodes);
+    extract_math_root(&realized_body, styles, ctx, &mut nodes);
     nodes
+}
+
+fn realize_math_content_deep(
+    compiled: &CompiledTypstDocument,
+    world: &TypstWorld,
+    content: &Content,
+    styles: StyleChain,
+    depth: usize,
+) -> Content {
+    if depth > 16 {
+        return content.clone();
+    }
+    let parent_map = styles.to_map();
+    let Some(pairs) = compiled.realize_math_owned(world, content, Some(&parent_map)) else {
+        return content.clone();
+    };
+    let mut out_items = Vec::with_capacity(pairs.len());
+    for (item, item_map) in pairs {
+        if item.is::<TagElem>() {
+            continue;
+        }
+        let item_chain = StyleChain::new(&item_map);
+        let transformed =
+            realize_math_compound_children(compiled, world, &item, item_chain, depth + 1);
+        let is_structural = transformed.is::<LinebreakElem>()
+            || transformed.is::<AlignPointElem>()
+            || transformed.is::<SpaceElem>();
+        if !is_structural && item_map != parent_map {
+            out_items.push(transformed.styled_with_map(item_map));
+            continue;
+        }
+        out_items.push(transformed);
+    }
+    match out_items.len() {
+        0 => Content::empty(),
+        1 => out_items.pop().unwrap(),
+        _ => Content::sequence(out_items),
+    }
+}
+
+fn realize_math_compound_children(
+    compiled: &CompiledTypstDocument,
+    world: &TypstWorld,
+    item: &Content,
+    styles: StyleChain,
+    depth: usize,
+) -> Content {
+    let rec = |sub: &Content| realize_math_content_deep(compiled, world, sub, styles, depth);
+    if let Some(frac) = item.to_packed::<FracElem>() {
+        let mut c = (**frac).clone();
+        c.num = rec(&frac.num);
+        c.denom = rec(&frac.denom);
+        return c.pack().spanned(frac.span());
+    }
+    if let Some(binom) = item.to_packed::<BinomElem>() {
+        let mut c = (**binom).clone();
+        c.upper = rec(&binom.upper);
+        c.lower = binom.lower.iter().map(rec).collect();
+        return c.pack().spanned(binom.span());
+    }
+    if let Some(root) = item.to_packed::<RootElem>() {
+        let mut c = (**root).clone();
+        c.radicand = rec(&root.radicand);
+        if let Some(idx) = root.index.get_ref(styles) {
+            c.index.set(Some(rec(idx)));
+        }
+        return c.pack().spanned(root.span());
+    }
+    if let Some(attach) = item.to_packed::<AttachElem>() {
+        let mut c = (**attach).clone();
+        c.base = rec(&attach.base);
+        if let Some(v) = attach.t.get_ref(styles) {
+            c.t.set(Some(rec(v)));
+        }
+        if let Some(v) = attach.b.get_ref(styles) {
+            c.b.set(Some(rec(v)));
+        }
+        if let Some(v) = attach.tl.get_ref(styles) {
+            c.tl.set(Some(rec(v)));
+        }
+        if let Some(v) = attach.bl.get_ref(styles) {
+            c.bl.set(Some(rec(v)));
+        }
+        if let Some(v) = attach.tr.get_ref(styles) {
+            c.tr.set(Some(rec(v)));
+        }
+        if let Some(v) = attach.br.get_ref(styles) {
+            c.br.set(Some(rec(v)));
+        }
+        return c.pack().spanned(attach.span());
+    }
+    if let Some(scripts) = item.to_packed::<ScriptsElem>() {
+        let mut c = (**scripts).clone();
+        c.body = rec(&scripts.body);
+        return c.pack().spanned(scripts.span());
+    }
+    if let Some(limits) = item.to_packed::<LimitsElem>() {
+        let mut c = (**limits).clone();
+        c.body = rec(&limits.body);
+        return c.pack().spanned(limits.span());
+    }
+    if let Some(stretch) = item.to_packed::<StretchElem>() {
+        let mut c = (**stretch).clone();
+        c.body = rec(&stretch.body);
+        return c.pack().spanned(stretch.span());
+    }
+    if let Some(cls) = item.to_packed::<ClassElem>() {
+        let mut c = (**cls).clone();
+        c.body = rec(&cls.body);
+        return c.pack().spanned(cls.span());
+    }
+    if let Some(lr) = item.to_packed::<LrElem>() {
+        let mut c = (**lr).clone();
+        c.body = rec(&lr.body);
+        return c.pack().spanned(lr.span());
+    }
+    if let Some(mid) = item.to_packed::<MidElem>() {
+        let mut c = (**mid).clone();
+        c.body = rec(&mid.body);
+        return c.pack().spanned(mid.span());
+    }
+    if let Some(acc) = item.to_packed::<AccentElem>() {
+        let mut c = (**acc).clone();
+        c.base = rec(&acc.base);
+        return c.pack().spanned(acc.span());
+    }
+    if let Some(can) = item.to_packed::<CancelElem>() {
+        let mut c = (**can).clone();
+        c.body = rec(&can.body);
+        return c.pack().spanned(can.span());
+    }
+    if let Some(vec_el) = item.to_packed::<VecElem>() {
+        let mut c = (**vec_el).clone();
+        c.children = vec_el.children.iter().map(rec).collect();
+        return c.pack().spanned(vec_el.span());
+    }
+    if let Some(mat_el) = item.to_packed::<MatElem>() {
+        let mut c = (**mat_el).clone();
+        c.rows = mat_el
+            .rows
+            .iter()
+            .map(|row| row.iter().map(rec).collect())
+            .collect();
+        return c.pack().spanned(mat_el.span());
+    }
+    if let Some(cases_el) = item.to_packed::<CasesElem>() {
+        let mut c = (**cases_el).clone();
+        c.children = cases_el.children.iter().map(rec).collect();
+        return c.pack().spanned(cases_el.span());
+    }
+    item.clone()
 }
 
 pub(crate) fn extract_math_root(
@@ -149,6 +310,19 @@ pub(crate) fn flatten_sequence_preserving_styles<'a>(
         }
         if let Some(seq) = item.to_packed::<SequenceElem>() {
             out.extend(flatten_sequence_preserving_styles(&seq.children, styles));
+        } else if let Some(styled) = item.to_packed::<StyledElem>()
+            && let Some(seq) = styled.child.to_packed::<SequenceElem>()
+        {
+            for sub in flatten_sequence_preserving_styles(&seq.children, styles) {
+                let is_structural = sub.0.is::<LinebreakElem>()
+                    || sub.0.is::<AlignPointElem>()
+                    || sub.0.is::<SpaceElem>();
+                if is_structural {
+                    out.push(sub);
+                } else {
+                    out.push((sub.0.styled_with_map(styled.styles.clone()), styles));
+                }
+            }
         } else {
             out.push((item.clone(), styles));
         }

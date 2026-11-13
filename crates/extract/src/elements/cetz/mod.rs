@@ -9,7 +9,9 @@ use typst::visualize::CurveElem;
 use compiler::compile::is_cetz_span;
 use crate::ExtractorContext;
 use crate::frame_tree::TreeNode;
-use ir::{CetzCanvasIr, CetzLabelDrawableIr, CetzPathDrawableIr, ColorHex, HAlignIr};
+use ir::{
+    CetzCanvasIr, CetzLabelDrawableIr, CetzPathDrawableIr, ColorHex, HAlignIr, SemanticRoleIr,
+};
 
 impl<'a> ExtractorContext<'a> {
     pub(crate) fn contains_cetz_shapes_recursive(nodes: &[TreeNode]) -> bool {
@@ -161,7 +163,14 @@ impl<'a> ExtractorContext<'a> {
             (max_lx, max_ly)
         };
 
+        let id = self.alloc_node_with_fragments(
+            typst::syntax::Span::detached(),
+            self.active_scope_loc,
+            Some(SemanticRoleIr::CetzCanvas),
+            nodes,
+        );
         Some(CetzCanvasIr {
+            id,
             width_pt,
             height_pt,
             background,
