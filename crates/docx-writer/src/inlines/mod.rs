@@ -82,6 +82,7 @@ impl<'a> DocxWriter<'a> {
                     out.push_str("<w:r><w:tab/></w:r>");
                 } else if *width_pt >= 4.0 {
                     let spacer = word_construct::model::ShapeIr {
+                        id: Default::default(),
                         kind: word_construct::model::ShapeKindIr::Rect,
                         width_pt: *width_pt,
                         height_pt: 1.0,

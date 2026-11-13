@@ -38,6 +38,8 @@ impl<'a> DocxWriter<'a> {
                 content,
                 bookmark,
                 align,
+                box_style,
+                ..
             } = block
             {
                 let compact_after = matches!(blocks.get(idx + 1), Some(BlockNode::Paragraph { .. }));
@@ -47,6 +49,7 @@ impl<'a> DocxWriter<'a> {
                     content,
                     bookmark.as_deref(),
                     *align,
+                    box_style.as_ref(),
                     collapse_before,
                     compact_after,
                     out,
@@ -57,6 +60,7 @@ impl<'a> DocxWriter<'a> {
                 content,
                 style,
                 bookmark,
+                ..
             } = block
             {
                 let adj_style = ParagraphConstruct::solve_adjacent_paragraph_style(
@@ -99,6 +103,7 @@ impl<'a> DocxWriter<'a> {
                     spacing_pt,
                     indent_pt,
                     hanging_pt,
+                    ..
                 } => {
                     self.render_list_collapsed(
                         items,
@@ -118,6 +123,7 @@ impl<'a> DocxWriter<'a> {
                     spacing_pt,
                     indent_pt,
                     hanging_pt,
+                    ..
                 } => {
                     self.render_enum_collapsed(
                         items,
@@ -130,7 +136,9 @@ impl<'a> DocxWriter<'a> {
                         out,
                     );
                 }
-                BlockNode::Quote { body, attribution } => {
+                BlockNode::Quote {
+                    body, attribution, ..
+                } => {
                     self.render_quote_collapsed(
                         body,
                         attribution.as_deref(),
@@ -181,7 +189,7 @@ impl<'a> DocxWriter<'a> {
 
     pub(crate) fn render_block(&mut self, block: &BlockNode, out: &mut String) {
         match block {
-            BlockNode::Title { content, align } => {
+            BlockNode::Title { content, align, .. } => {
                 self.render_title(content, *align, out);
             }
             BlockNode::Heading {
@@ -190,6 +198,8 @@ impl<'a> DocxWriter<'a> {
                 content,
                 bookmark,
                 align,
+                box_style,
+                ..
             } => {
                 self.render_heading(
                     *level,
@@ -197,6 +207,7 @@ impl<'a> DocxWriter<'a> {
                     content,
                     bookmark.as_deref(),
                     *align,
+                    box_style.as_ref(),
                     out,
                 );
             }
@@ -204,6 +215,7 @@ impl<'a> DocxWriter<'a> {
                 content,
                 style,
                 bookmark,
+                ..
             } => {
                 self.render_paragraph(content, style, bookmark.as_deref(), out);
             }
@@ -214,6 +226,7 @@ impl<'a> DocxWriter<'a> {
                 spacing_pt,
                 indent_pt,
                 hanging_pt,
+                ..
             } => {
                 self.render_list(
                     items,
@@ -232,6 +245,7 @@ impl<'a> DocxWriter<'a> {
                 spacing_pt,
                 indent_pt,
                 hanging_pt,
+                ..
             } => {
                 self.render_enum(
                     items,
@@ -243,13 +257,18 @@ impl<'a> DocxWriter<'a> {
                     out,
                 );
             }
-            BlockNode::Terms { items, tight } => {
+            BlockNode::Terms { items, tight, .. } => {
                 self.render_terms(items, *tight, out);
+            }
+            BlockNode::Container(container) => {
+                self.render_blocks(&container.body, out);
             }
             BlockNode::Table(table_ir) => {
                 self.render_table(table_ir, out);
             }
-            BlockNode::Quote { body, attribution } => {
+            BlockNode::Quote {
+                body, attribution, ..
+            } => {
                 self.render_quote(body, attribution.as_deref(), out);
             }
             BlockNode::CodeBlock {
@@ -257,6 +276,7 @@ impl<'a> DocxWriter<'a> {
                 lines,
                 fill,
                 stroke,
+                ..
             } => {
                 self.render_code_block(
                     lang.as_deref(),
@@ -270,8 +290,8 @@ impl<'a> DocxWriter<'a> {
                 body,
                 caption,
                 caption_pos,
-                kind: _,
                 bookmark,
+                ..
             } => {
                 self.render_figure(
                     body,
@@ -320,6 +340,7 @@ impl<'a> DocxWriter<'a> {
                 count,
                 gutter_pt,
                 body,
+                ..
             } => {
                 // 1. End the preceding 1-column section with a section-break paragraph.
                 out.push_str(
@@ -342,6 +363,8 @@ impl<'a> DocxWriter<'a> {
                     content,
                     bookmark,
                     align,
+                    box_style,
+                    ..
                 }) = body.first()
                 {
                     let compact_after = matches!(body.get(1), Some(BlockNode::Paragraph { .. }));
@@ -351,6 +374,7 @@ impl<'a> DocxWriter<'a> {
                         content,
                         bookmark.as_deref(),
                         *align,
+                        box_style.as_ref(),
                         true,
                         compact_after,
                         out,

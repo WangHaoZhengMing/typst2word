@@ -22,6 +22,7 @@ pub fn cetz_canvas_to_drawingml_run(canvas: &CetzCanvasIr) -> String {
     // 1. Optional canvas background rectangle
     if let Some(ref bg_hex) = canvas.background {
         let bg_shape = ShapeIr {
+            id: Default::default(),
             kind: ShapeKindIr::Rect,
             width_pt: canvas.width_pt,
             height_pt: canvas.height_pt,
@@ -54,6 +55,7 @@ pub fn cetz_canvas_to_drawingml_run(canvas: &CetzCanvasIr) -> String {
     // Ensure `<wpg:wgp>` has at least one child shape so Word never complains about an empty group
     if children_xml.is_empty() {
         let empty_shape = ShapeIr {
+            id: Default::default(),
             kind: ShapeKindIr::Rect,
             width_pt: canvas.width_pt.max(1.0),
             height_pt: canvas.height_pt.max(1.0),

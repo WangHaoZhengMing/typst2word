@@ -49,6 +49,9 @@ impl<'a> DocxWriter<'a> {
                 r#"<w:tabs><w:tab w:val="right" w:pos="{tab_pos}"/></w:tabs>"#
             );
         }
+        if construct.rtl {
+            out.push_str("<w:bidi/>");
+        }
         let _ = write!(
             out,
             r#"<w:spacing w:before="{}" w:after="{}" w:line="{}" w:lineRule="auto"/>"#,

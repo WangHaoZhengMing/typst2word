@@ -45,6 +45,7 @@ impl<'a> DocxWriter<'a> {
                     content,
                     style,
                     bookmark,
+                    ..
                 } if idx == 0 => {
                     self.render_list_item_first_paragraph(
                         content,
@@ -62,6 +63,7 @@ impl<'a> DocxWriter<'a> {
                     content,
                     style,
                     bookmark,
+                    ..
                 } => {
                     let mut cont_style = style.clone();
                     if cont_style.left_indent_pt < 1.0 {
@@ -97,6 +99,7 @@ impl<'a> DocxWriter<'a> {
                     lines,
                     fill,
                     stroke,
+                    ..
                 } => {
                     self.render_code_block_indented(
                         lang.as_deref(),
@@ -129,6 +132,7 @@ impl<'a> DocxWriter<'a> {
                     spacing_pt: child_spacing_pt,
                     indent_pt: child_indent_pt,
                     hanging_pt: child_hanging_pt,
+                    ..
                 } => {
                     let child_trailing = if idx + 1 == blocks.len() {
                         Some(ctx.item_end_after_dxa)
@@ -155,6 +159,7 @@ impl<'a> DocxWriter<'a> {
                     spacing_pt: child_spacing_pt,
                     indent_pt: child_indent_pt,
                     hanging_pt: child_hanging_pt,
+                    ..
                 } => {
                     let child_trailing = if idx + 1 == blocks.len() {
                         Some(ctx.item_end_after_dxa)

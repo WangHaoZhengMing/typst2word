@@ -24,7 +24,8 @@ pub(crate) fn render_textbox_blocks(writer: &mut DocxWriter<'_>, blocks: &[Block
                     after_dxa,
                 ));
             }
-            BlockNode::Heading { content, align, .. } | BlockNode::Title { content, align } => {
+            BlockNode::Heading { content, align, .. }
+            | BlockNode::Title { content, align, .. } => {
                 let after_dxa = if idx + 1 < len { 120 } else { 0 };
                 out.push_str(&render_inline_nodes_as_txbx_para_with_after(
                     content,
@@ -40,6 +41,9 @@ pub(crate) fn render_textbox_blocks(writer: &mut DocxWriter<'_>, blocks: &[Block
                 ));
                 render_equation_omml(eq, &mut out);
                 out.push_str("</w:p>");
+            }
+            BlockNode::Container(container) => {
+                out.push_str(&render_textbox_blocks(writer, &container.body));
             }
             BlockNode::Table(tbl) => {
                 writer.render_table(tbl, &mut out);

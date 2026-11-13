@@ -49,7 +49,11 @@ impl<'a> DocxWriter<'a> {
                 escape_xml(summary)
             );
         }
-        out.push_str(r#"<w:tblLook w:val="04A0" w:firstRow="1" w:lastRow="0" w:firstColumn="0" w:lastColumn="0" w:noHBand="0" w:noVBand="1"/>"#);
+        let last_row_attr = if table.footer_rows > 0 { "1" } else { "0" };
+        let _ = write!(
+            out,
+            r#"<w:tblLook w:val="04A0" w:firstRow="1" w:lastRow="{last_row_attr}" w:firstColumn="0" w:lastColumn="0" w:noHBand="0" w:noVBand="1"/>"#
+        );
         out.push_str("</w:tblPr>");
 
         // `<w:tblGrid>`
@@ -234,6 +238,7 @@ impl<'a> DocxWriter<'a> {
                 content,
                 style,
                 bookmark,
+                ..
             } = block
             {
                 let prev_block = (idx > 0).then(|| &blocks[idx - 1]);
@@ -285,6 +290,7 @@ impl<'a> DocxWriter<'a> {
                         spacing_pt,
                         indent_pt,
                         hanging_pt,
+                        ..
                     } => {
                         self.render_list_with_trailing_gap(
                             items,
@@ -305,6 +311,7 @@ impl<'a> DocxWriter<'a> {
                         spacing_pt,
                         indent_pt,
                         hanging_pt,
+                        ..
                     } => {
                         self.render_enum_with_trailing_gap(
                             items,

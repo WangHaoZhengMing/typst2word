@@ -122,6 +122,7 @@ impl<'a> DocxWriter<'a> {
                     content,
                     style,
                     bookmark,
+                    ..
                 } => {
                     let mut adj_style = style.clone();
                     if indent_left > 0 {
@@ -141,6 +142,7 @@ impl<'a> DocxWriter<'a> {
                     lines,
                     fill,
                     stroke,
+                    ..
                 } => {
                     self.render_code_block_with_layout(
                         lang.as_deref(),

@@ -66,6 +66,7 @@ impl<'a> DocxWriter<'a> {
         );
         if let Some((_, dy_pt)) = shape.placed_offset_pt {
             let spacer = ShapeIr {
+                id: Default::default(),
                 kind: word_construct::model::ShapeKindIr::Rect,
                 width_pt: 1.0,
                 height_pt: (shape.height_pt + dy_pt.max(0.0)).max(1.0),

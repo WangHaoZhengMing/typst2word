@@ -3,7 +3,7 @@
 use std::fmt::Write as _;
 
 use crate::writer::DocxWriter;
-use word_construct::model::{BlockNode, InlineNode};
+use word_construct::model::{BlockNode, InlineNode, PageNumberFormatIr};
 use word_construct::units::pt_to_dxa;
 
 impl<'a> DocxWriter<'a> {
@@ -49,8 +49,13 @@ impl<'a> DocxWriter<'a> {
         for (index, (setup, blocks)) in sections.iter().enumerate() {
             self.current_setup = setup.clone();
             self.current_blocks = blocks.clone();
-            self.header_rel_id = self.section_furniture[index].0.clone();
-            self.footer_rel_id = self.section_furniture[index].1.clone();
+            let rels = &self.section_furniture[index];
+            self.header_rel_id = rels.default_hdr.clone();
+            self.footer_rel_id = rels.default_ftr.clone();
+            self.first_header_rel_id = rels.first_hdr.clone();
+            self.first_footer_rel_id = rels.first_ftr.clone();
+            self.even_header_rel_id = rels.even_hdr.clone();
+            self.even_footer_rel_id = rels.even_ftr.clone();
             self.active_columns = (setup.columns, 18.0);
             self.has_scoped_columns = false;
             self.render_blocks(blocks, &mut out);
@@ -154,8 +159,24 @@ impl<'a> DocxWriter<'a> {
         if let Some(hid) = &self.header_rel_id {
             let _ = write!(out, r#"<w:headerReference w:type="default" r:id="{hid}"/>"#);
         }
+        if !is_continuous {
+            if let Some(fhid) = &self.first_header_rel_id {
+                let _ = write!(out, r#"<w:headerReference w:type="first" r:id="{fhid}"/>"#);
+            }
+            if let Some(ehid) = &self.even_header_rel_id {
+                let _ = write!(out, r#"<w:headerReference w:type="even" r:id="{ehid}"/>"#);
+            }
+        }
         if let Some(fid) = &self.footer_rel_id {
             let _ = write!(out, r#"<w:footerReference w:type="default" r:id="{fid}"/>"#);
+        }
+        if !is_continuous {
+            if let Some(ffid) = &self.first_footer_rel_id {
+                let _ = write!(out, r#"<w:footerReference w:type="first" r:id="{ffid}"/>"#);
+            }
+            if let Some(efid) = &self.even_footer_rel_id {
+                let _ = write!(out, r#"<w:footerReference w:type="even" r:id="{efid}"/>"#);
+            }
         }
         if is_continuous {
             out.push_str(r#"<w:type w:val="continuous"/>"#);
@@ -189,11 +210,36 @@ impl<'a> DocxWriter<'a> {
             pt_to_dxa(ps.header_margin_pt),
             pt_to_dxa(ps.footer_margin_pt),
         );
+        if !is_continuous
+            && (ps
+                .page_number_format
+                .is_some_and(|f| f != PageNumberFormatIr::Arabic)
+                || ps.page_number_start.is_some())
+        {
+            let fmt_val = match ps.page_number_format.unwrap_or(PageNumberFormatIr::Arabic) {
+                PageNumberFormatIr::Arabic => "decimal",
+                PageNumberFormatIr::LowerRoman => "lowerRoman",
+                PageNumberFormatIr::UpperRoman => "upperRoman",
+                PageNumberFormatIr::LowerAlpha => "lowerLetter",
+                PageNumberFormatIr::UpperAlpha => "upperLetter",
+            };
+            if let Some(start) = ps.page_number_start {
+                let _ = write!(
+                    out,
+                    r#"<w:pgNumType w:fmt="{fmt_val}" w:start="{start}"/>"#
+                );
+            } else {
+                let _ = write!(out, r#"<w:pgNumType w:fmt="{fmt_val}"/>"#);
+            }
+        }
         if cols > 1 {
             let space_dxa = pt_to_dxa(gutter_pt).max(120);
             let _ = write!(out, r#"<w:cols w:num="{cols}" w:space="{space_dxa}"/>"#);
         } else if self.has_scoped_columns {
             out.push_str(r#"<w:cols w:space="720"/>"#);
+        }
+        if ps.different_first_page && !is_continuous {
+            out.push_str("<w:titlePg/>");
         }
         out.push_str("</w:sectPr>");
     }

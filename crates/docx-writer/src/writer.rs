@@ -27,11 +27,21 @@ pub(crate) struct FootnoteRecord {
     pub(crate) blocks: Vec<BlockNode>,
 }
 
+#[derive(Debug, Clone, Default)]
+pub(crate) struct SectionFurnitureRels {
+    pub(crate) default_hdr: Option<String>,
+    pub(crate) default_ftr: Option<String>,
+    pub(crate) first_hdr: Option<String>,
+    pub(crate) first_ftr: Option<String>,
+    pub(crate) even_hdr: Option<String>,
+    pub(crate) even_ftr: Option<String>,
+}
+
 pub(crate) struct DocxWriter<'a> {
     pub(crate) options: crate::DocxWriteOptions,
     pub(crate) current_setup: PageSetupIr,
     pub(crate) current_blocks: Vec<BlockNode>,
-    pub(crate) section_furniture: Vec<(Option<String>, Option<String>)>,
+    pub(crate) section_furniture: Vec<SectionFurnitureRels>,
     pub(crate) active_part: String,
     pub(crate) doc: &'a WordDocument,
     pub(crate) next_rel_id: usize,
@@ -44,6 +54,10 @@ pub(crate) struct DocxWriter<'a> {
     pub(crate) next_enum_num_id: usize,
     pub(crate) header_rel_id: Option<String>,
     pub(crate) footer_rel_id: Option<String>,
+    pub(crate) first_header_rel_id: Option<String>,
+    pub(crate) first_footer_rel_id: Option<String>,
+    pub(crate) even_header_rel_id: Option<String>,
+    pub(crate) even_footer_rel_id: Option<String>,
     pub(crate) active_columns: (usize, f64),
     pub(crate) has_scoped_columns: bool,
     pub(crate) in_right_tab_paragraph: bool,
@@ -69,6 +83,10 @@ impl<'a> DocxWriter<'a> {
             next_enum_num_id: 2,
             header_rel_id: None,
             footer_rel_id: None,
+            first_header_rel_id: None,
+            first_footer_rel_id: None,
+            even_header_rel_id: None,
+            even_footer_rel_id: None,
             active_columns: (1, 0.0),
             has_scoped_columns: false,
             in_right_tab_paragraph: false,

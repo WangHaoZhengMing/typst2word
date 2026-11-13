@@ -16,6 +16,17 @@ impl<'a> DocxWriter<'a> {
         } else {
             ""
         };
+        let has_odd_even = self.doc.page_setup.different_odd_even
+            || self
+                .doc
+                .sections
+                .iter()
+                .any(|s| s.page_setup.different_odd_even);
+        let even_odd_pr = if has_odd_even {
+            "\n  <w:evenAndOddHeaders/>"
+        } else {
+            ""
+        };
         if self.doc.has_cjk {
             format!(
                 r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -23,7 +34,7 @@ impl<'a> DocxWriter<'a> {
   <w:zoom w:percent="100"/>
   <w:defaultTabStop w:val="720"/>
   <w:characterSpacingControl w:val="doNotCompress"/>
-  <w:doNotExpandShiftReturn/>{mirror_pr}{fn_pr}
+  <w:doNotExpandShiftReturn/>{mirror_pr}{even_odd_pr}{fn_pr}
   <w:compat>
     <w:useFELayout/>
     <w:doNotExpandShiftReturn/>
@@ -55,7 +66,7 @@ impl<'a> DocxWriter<'a> {
   <w:characterSpacingControl w:val="doNotCompress"/>
   <w:autoSpaceDE w:val="1"/>
   <w:autoSpaceDN w:val="1"/>
-  <w:doNotExpandShiftReturn/>{mirror_pr}{fn_pr}
+  <w:doNotExpandShiftReturn/>{mirror_pr}{even_odd_pr}{fn_pr}
   <w:compat>
     <w:doNotExpandShiftReturn/>
     <w:noColumnBalance/>

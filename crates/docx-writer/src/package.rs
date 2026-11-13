@@ -7,13 +7,14 @@ use std::io::{Cursor, Write};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
-use crate::writer::DocxWriter;
+use crate::writer::{DocxWriter, SectionFurnitureRels};
 use crate::xml::escape_xml;
 
 impl<'a> DocxWriter<'a> {
     pub(crate) fn build(&mut self) -> Result<Vec<u8>, String> {
         let setups: Vec<_> = std::iter::once(self.doc.page_setup.clone())
-            .chain(self.doc.sections.iter().map(|s| s.page_setup.clone())).collect();
+            .chain(self.doc.sections.iter().map(|s| s.page_setup.clone()))
+            .collect();
         let mut seen_header = false;
         let mut seen_footer = false;
         for setup in &setups {
@@ -21,30 +22,82 @@ impl<'a> DocxWriter<'a> {
             // while avoiding phantom empty header/footer height when no section has used one yet.
             let has_header = !setup.header.is_empty();
             let has_footer = !setup.footer.is_empty();
-            let header = if has_header || seen_header {
+            let default_hdr = if has_header || seen_header {
                 Some(self.alloc_rel_id())
             } else {
                 None
             };
-            let footer = if has_footer || seen_footer {
+            let default_ftr = if has_footer || seen_footer {
                 Some(self.alloc_rel_id())
             } else {
                 None
             };
-            seen_header |= has_header;
-            seen_footer |= has_footer;
-            self.section_furniture.push((header, footer));
+            let first_hdr = (setup.different_first_page && setup.first_page_header.is_some())
+                .then(|| self.alloc_rel_id());
+            let first_ftr = (setup.different_first_page && setup.first_page_footer.is_some())
+                .then(|| self.alloc_rel_id());
+            let even_hdr = (setup.different_odd_even && setup.even_page_header.is_some())
+                .then(|| self.alloc_rel_id());
+            let even_ftr = (setup.different_odd_even && setup.even_page_footer.is_some())
+                .then(|| self.alloc_rel_id());
+            seen_header |= has_header || first_hdr.is_some() || even_hdr.is_some();
+            seen_footer |= has_footer || first_ftr.is_some() || even_ftr.is_some();
+            self.section_furniture.push(SectionFurnitureRels {
+                default_hdr,
+                default_ftr,
+                first_hdr,
+                first_ftr,
+                even_hdr,
+                even_ftr,
+            });
         }
         let document_xml = self.render_document_xml();
         let mut furniture_xml = Vec::new();
         for (index, setup) in setups.iter().enumerate() {
             self.current_setup = setup.clone();
-            for (tag, blocks, present) in [
-                ("hdr", &setup.header, self.section_furniture[index].0.is_some()),
-                ("ftr", &setup.footer, self.section_furniture[index].1.is_some()),
-            ] {
+            let sec_num = index + 1;
+            let rels = self.section_furniture[index].clone();
+            let empty: &[word_construct::model::BlockNode] = &[];
+            let slots: [(&str, String, &[word_construct::model::BlockNode], bool); 6] = [
+                (
+                    "hdr",
+                    format!("header{sec_num}"),
+                    &setup.header,
+                    rels.default_hdr.is_some(),
+                ),
+                (
+                    "ftr",
+                    format!("footer{sec_num}"),
+                    &setup.footer,
+                    rels.default_ftr.is_some(),
+                ),
+                (
+                    "hdr",
+                    format!("header{sec_num}_first"),
+                    setup.first_page_header.as_deref().unwrap_or(empty),
+                    rels.first_hdr.is_some(),
+                ),
+                (
+                    "ftr",
+                    format!("footer{sec_num}_first"),
+                    setup.first_page_footer.as_deref().unwrap_or(empty),
+                    rels.first_ftr.is_some(),
+                ),
+                (
+                    "hdr",
+                    format!("header{sec_num}_even"),
+                    setup.even_page_header.as_deref().unwrap_or(empty),
+                    rels.even_hdr.is_some(),
+                ),
+                (
+                    "ftr",
+                    format!("footer{sec_num}_even"),
+                    setup.even_page_footer.as_deref().unwrap_or(empty),
+                    rels.even_ftr.is_some(),
+                ),
+            ];
+            for (tag, part, blocks, present) in slots {
                 if present {
-                    let part = format!("{}{}", if tag == "hdr" { "header" } else { "footer" }, index + 1);
                     self.active_part = part.clone();
                     furniture_xml.push((part, self.render_header_or_footer_xml(blocks, tag)));
                 }
@@ -141,10 +194,21 @@ impl<'a> DocxWriter<'a> {
   <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
   <Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>"#,
         );
-        for (index, (header, footer)) in self.section_furniture.iter().enumerate() {
-            for (kind, present) in [("header", header.is_some()), ("footer", footer.is_some())] {
+        for (index, rels) in self.section_furniture.iter().enumerate() {
+            let sec_num = index + 1;
+            for (kind, part_name, present) in [
+                ("header", format!("header{sec_num}"), rels.default_hdr.is_some()),
+                ("footer", format!("footer{sec_num}"), rels.default_ftr.is_some()),
+                ("header", format!("header{sec_num}_first"), rels.first_hdr.is_some()),
+                ("footer", format!("footer{sec_num}_first"), rels.first_ftr.is_some()),
+                ("header", format!("header{sec_num}_even"), rels.even_hdr.is_some()),
+                ("footer", format!("footer{sec_num}_even"), rels.even_ftr.is_some()),
+            ] {
                 if present {
-                    let _ = write!(out, r#"<Override PartName="/word/{kind}{}.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.{kind}+xml"/>"#, index + 1);
+                    let _ = write!(
+                        out,
+                        r#"<Override PartName="/word/{part_name}.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.{kind}+xml"/>"#
+                    );
                 }
             }
         }
@@ -174,10 +238,21 @@ impl<'a> DocxWriter<'a> {
   <Relationship Id="rId5" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/fontTable" Target="fontTable.xml"/>"#,
         );
 
-        for (index, (header, footer)) in self.section_furniture.iter().enumerate() {
-            for (kind, id) in [("header", header), ("footer", footer)] {
-                if let Some(id) = id {
-                    let _ = write!(out, r#"<Relationship Id="{id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/{kind}" Target="{kind}{}.xml"/>"#, index + 1);
+        for (index, rels) in self.section_furniture.iter().enumerate() {
+            let sec_num = index + 1;
+            for (kind, target_name, id_opt) in [
+                ("header", format!("header{sec_num}.xml"), &rels.default_hdr),
+                ("footer", format!("footer{sec_num}.xml"), &rels.default_ftr),
+                ("header", format!("header{sec_num}_first.xml"), &rels.first_hdr),
+                ("footer", format!("footer{sec_num}_first.xml"), &rels.first_ftr),
+                ("header", format!("header{sec_num}_even.xml"), &rels.even_hdr),
+                ("footer", format!("footer{sec_num}_even.xml"), &rels.even_ftr),
+            ] {
+                if let Some(id) = id_opt {
+                    let _ = write!(
+                        out,
+                        r#"<Relationship Id="{id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/{kind}" Target="{target_name}"/>"#
+                    );
                 }
             }
         }

@@ -71,6 +71,9 @@ pub(crate) fn render_text_run_xml_with_spacing(
     if let Some(char_spacing_dxa) = construct.char_spacing_dxa {
         let _ = write!(out, r#"<w:spacing w:val="{char_spacing_dxa}"/>"#);
     }
+    if let Some(pos_half_pts) = construct.position_half_pts {
+        let _ = write!(out, r#"<w:position w:val="{pos_half_pts}"/>"#);
+    }
     match construct.font_size {
         RunFontSizeConstruct::Inherited => {}
         RunFontSizeConstruct::StandardHalfPts(half_pts)
@@ -85,6 +88,18 @@ pub(crate) fn render_text_run_xml_with_spacing(
         ScriptKindIr::Sub => out.push_str(r#"<w:vertAlign w:val="subscript"/>"#),
         ScriptKindIr::Super => out.push_str(r#"<w:vertAlign w:val="superscript"/>"#),
         ScriptKindIr::Normal => {}
+    }
+    if let Some(loc) = construct.locale {
+        let bcp = escape_xml(&loc.to_word_lang_tag());
+        let _ = write!(out, r#"<w:lang w:val="{bcp}" w:eastAsia="{bcp}"/>"#);
+    }
+    if let Some(outline) = construct.text_outline {
+        let emu = ((outline.thickness_pt * 12700.0).round() as i64).max(3175);
+        let _ = write!(
+            out,
+            r#"<w14:textOutline w14:w="{emu}"><w14:solidFill><w14:srgbClr w14:val="{}"/></w14:solidFill></w14:textOutline>"#,
+            outline.color
+        );
     }
     out.push_str("</w:rPr><w:t xml:space=\"preserve\">");
     out.push_str(&escape_xml(&run.text));
