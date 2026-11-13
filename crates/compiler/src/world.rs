@@ -69,6 +69,7 @@ pub struct TypstWorld {
     virtual_files: RwLock<HashMap<FileId, Bytes>>,
     slots: RwLock<HashMap<FileId, FileSlot>>,
     now: Time,
+    custom_library: Option<LazyHash<Library>>,
 }
 
 impl TypstWorld {
@@ -98,6 +99,7 @@ impl TypstWorld {
             virtual_files: RwLock::new(HashMap::new()),
             slots: RwLock::new(HashMap::new()),
             now: Time::system(),
+            custom_library: None,
         })
     }
 
@@ -117,6 +119,41 @@ impl TypstWorld {
             virtual_files: RwLock::new(virtual_files),
             slots: RwLock::new(HashMap::new()),
             now: Time::system(),
+            custom_library: None,
+        }
+    }
+
+    /// Configure `sys.inputs` dictionary for template compilation (`--input key=val`).
+    pub fn with_inputs(mut self, inputs: typst::foundations::Dict) -> Self {
+        let features: Features = [Feature::Html, Feature::A11yExtras].into_iter().collect();
+        let library = LibraryBuilder::from_routines(&CUSTOM_ROUTINES)
+            .with_features(features)
+            .with_inputs(inputs)
+            .build();
+        self.custom_library = Some(LazyHash::new(library));
+        self
+    }
+
+    /// Configure `sys.inputs` from string key/value pairs (CLI `--input key=value`).
+    ///
+    /// An empty iterator keeps the shared global library unchanged.
+    pub fn with_string_inputs<K: AsRef<str>, V: AsRef<str>>(
+        self,
+        inputs: impl IntoIterator<Item = (K, V)>,
+    ) -> Self {
+        let dict: typst::foundations::Dict = inputs
+            .into_iter()
+            .map(|(k, v)| {
+                (
+                    typst::foundations::Str::from(k.as_ref()),
+                    typst::foundations::Value::Str(typst::foundations::Str::from(v.as_ref())),
+                )
+            })
+            .collect();
+        if dict.is_empty() {
+            self
+        } else {
+            self.with_inputs(dict)
         }
     }
 
@@ -177,8 +214,7 @@ impl TypstWorld {
 
         // A validated source must resolve the exact version it requests. Never
         // silently substitute a cached version: its API and output may differ.
-        let root = GlobalTypstResources::get().packages.obtain(spec)
-            .unwrap_or_else(|error| panic!("failed to obtain exact Typst package {spec}: {error}"));
+        let root = GlobalTypstResources::get().packages.obtain(spec)?;
         Ok(root.path().to_path_buf())
     }
 
@@ -217,7 +253,9 @@ impl TypstWorld {
 
 impl World for TypstWorld {
     fn library(&self) -> &LazyHash<Library> {
-        &GlobalTypstResources::get().library
+        self.custom_library
+            .as_ref()
+            .unwrap_or(&GlobalTypstResources::get().library)
     }
 
     fn book(&self) -> &LazyHash<FontBook> {

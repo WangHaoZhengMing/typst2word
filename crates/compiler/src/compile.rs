@@ -1,32 +1,40 @@
 //! Self-contained Typst 0.15 compilation & introspection/query engine.
 //!
 //! Provides:
-//! 1. Custom `Routines` that preserve `Tag::Start` / `Tag::End` with materialized
-//!    styles for shapes (`rect`, `square`, `circle`, `ellipse`, `polygon`, `curve`,
-//!    `path`, `line`), transforms (`rotate`, `scale`, `skew`, `move`), and HTML/PDF
-//!    elements (`html.elem`, `html.frame`, `pdf.attach`) in `Target::Paged`.
-//! 2. Pre-layout `Content` tree evaluation + `Span -> Vec<Content>` index.
-//! 3. Full `PagedDocument` layout convergence + `Introspector` query helpers.
+//! 1. Custom `Routines` that preserve zero-interference (`introspectable: false, tagged: false`)
+//!    `Tag::Start` / `Tag::End` markers for realized scoped `Styles`, explicit page/column/line
+//!    breaks, non-weak horizontal spacing, containers (`BlockElem`, `BoxElem`), shapes,
+//!    transforms, and HTML/PDF elements in `Target::Paged`.
+//! 2. Post-convergence `RealizedSemanticStore` mapping every surviving `Location` to its
+//!    exact scoped `Styles`, pre-resolved `RealizedStyleSnapshot`, and `semantic_parent`.
+//! 3. Pre-layout `Content` tree evaluation + `Span -> Vec<Content>` index + on-demand
+//!    `RealizationKind::Math` realization for equations containing `#show` or `context`.
+//! 4. Full `PagedDocument` layout convergence with `typst::introspection::analyze` diagnostics.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::ControlFlow;
 use std::sync::LazyLock;
 
 use comemo::Track;
 use ecow::{EcoString, EcoVec};
-use typst::diag::{SourceDiagnostic, SourceResult, warning};
+use typst::diag::{SourceDiagnostic, SourceResult};
 use typst::engine::{Engine, Route, Sink, Traced};
 use typst::foundations::{
     Content, Label, NativeElement, NativeRuleMap, Packed, Selector, SequenceElem, StyleChain,
-    StyledElem, Target, TargetElem,
+    StyledElem, Styles, Target, TargetElem,
 };
-use typst::introspection::{EmptyIntrospector, Introspector, MAX_ITERS, SplitLocator};
+use typst::introspection::{
+    EmptyIntrospector, Introspector, Locatable, Location, MAX_ITERS, SplitLocator, Tag, TagElem,
+    TagFlags, Tagged,
+};
 use typst::layout::{
-    BlockBody, BlockElem, ColbreakElem, ColumnsElem, HideElem, MoveElem, RepeatElem, RotateElem,
-    ScaleElem, SkewElem,
+    AlignElem, BlockBody, BlockElem, BoxElem, ColbreakElem, ColumnsElem, HElem, HideElem, MoveElem,
+    PagebreakElem, RepeatElem, RotateElem, ScaleElem, SkewElem,
 };
+use typst::model::StrongElem;
 use typst::routines::{Arenas, Pair, RealizationKind, Routines};
 use typst::syntax::{Span, VirtualRoot};
+use typst::text::{FontWeight, LinebreakElem, SmallcapsElem, SmartQuoteElem, SpaceElem, TextElem};
 use typst::utils::Protected;
 use typst::visualize::{
     CircleElem, CurveElem, EllipseElem, LineElem, PolygonElem, RectElem, SquareElem,
@@ -35,10 +43,19 @@ use typst::{World, WorldExt};
 use typst_html::{FrameElem, HtmlElem};
 use typst_layout::PagedDocument;
 
+use crate::semantic::{PAGE_STYLES_LABEL, RealizedSemanticStore, SCOPE_STYLES_LABEL};
 use crate::world::TypstWorld;
 
+/// Zero-interference tag flags: preserved inside `FrameItem::Tag` in `PagedDocument`,
+/// completely ignored by `Introspector` (`query(...)`) and `typst_pdf` tagged PDF trees.
+const INTERNAL_TAG_FLAGS: TagFlags = TagFlags {
+    introspectable: false,
+    tagged: false,
+};
+
 /// Custom compiler routines that enrich `Target::Paged` realization with semantic tags
-/// for shapes, transforms, and unsupported elements (`html.elem`, `html.frame`).
+/// for scoped styles, explicit breaks, containers, shapes, transforms, and unsupported
+/// elements (`html.elem`, `html.frame`).
 ///
 /// Since Typst 0.15 the routines are attached to the `Library` (see
 /// `GlobalTypstResources`) instead of being passed through the `Engine`.
@@ -48,10 +65,9 @@ pub static CUSTOM_ROUTINES: LazyLock<Routines> = LazyLock::new(|| Routines {
         typst_layout::register(&mut rules);
         typst_html::register(&mut rules);
 
-        // Register `HtmlElem` and `FrameElem` on `Target::Paged` so they are not
-        // silently dropped with a warning during paged layout, allowing our
-        // extractor to see their `Tag::Start` / `Tag::End` and emit a visible
-        // unsupported-element placeholder.
+        // Register `HtmlElem` on `Target::Paged` so it is not silently dropped with a
+        // warning during paged layout, allowing our extractor to see its `Tag::Start` /
+        // `Tag::End` and emit a visible unsupported-element placeholder.
         rules.register::<HtmlElem>(Target::Paged, |elem, _, styles| {
             let body = elem.body.get_cloned(styles).unwrap_or_default();
             Ok(BlockElem::new()
@@ -78,10 +94,10 @@ pub fn is_cetz_span(span: Span) -> bool {
     )
 }
 
-/// Check whether an element should receive a synthetic `Location` during realization
-/// so that `typst_realize::prepare` materializes its styles and wraps its laid-out
-/// frame items in `Tag::Start(elem)` / `Tag::End(loc)`.
-fn should_locate_for_extraction(elem: &Content) -> bool {
+/// Check whether an element transformed by a built-in `Target::Paged` native show rule
+/// should receive a synthetic `Location` before `typst_realize::realize` so `prepare`
+/// materializes its styles and preserves its original element identity across realization.
+fn should_locate_pre_realization(elem: &Content) -> bool {
     if elem.is_prepared() || elem.location().is_some() {
         return false;
     }
@@ -103,19 +119,20 @@ fn should_locate_for_extraction(elem: &Content) -> bool {
         || elem.is::<MoveElem>()
         || elem.is::<RepeatElem>()
         || elem.is::<HideElem>()
-        || elem.is::<typst::text::LinebreakElem>()
+        || elem.is::<LinebreakElem>()
         || elem.is::<ColbreakElem>()
         || elem.is::<ColumnsElem>()
 }
 
-/// Recursively annotate top-level `SequenceElem` and `StyledElem` nodes so that
-/// shape, transform, and HTML elements get locations before `typst_realize::realize`.
+/// Recursively annotate pre-realization containers so shape, transform, and HTML
+/// elements receive locations even when nested inside `#block[...]`, `#box[...]`,
+/// `#align[...]`, or `#set`/`#show` wrappers.
 fn annotate_content_for_realization(
     content: &Content,
     engine: &mut Engine,
     locator: &mut SplitLocator,
 ) -> Option<Content> {
-    if should_locate_for_extraction(content) {
+    if should_locate_pre_realization(content) {
         let mut cloned = content.clone();
         let key = typst_utils::hash128(&cloned);
         let loc = locator.next_location(engine, key, cloned.span());
@@ -167,7 +184,7 @@ fn annotate_content_for_realization(
         return None;
     }
 
-    if let Some(align) = content.to_packed::<typst_library::layout::AlignElem>() {
+    if let Some(align) = content.to_packed::<AlignElem>() {
         if let Some(updated_child) = annotate_content_for_realization(&align.body, engine, locator)
         {
             let mut cloned = align.clone();
@@ -177,7 +194,144 @@ fn annotate_content_for_realization(
         return None;
     }
 
+    if let Some(blk) = content.to_packed::<BlockElem>()
+        && !is_cetz_span(content.span())
+        && let Some(BlockBody::Content(body)) = blk.body.get_ref(StyleChain::default())
+        && let Some(updated_body) = annotate_content_for_realization(body, engine, locator)
+    {
+        let mut cloned = blk.clone();
+        cloned.body.set(Some(BlockBody::Content(updated_body)));
+        return Some(cloned.pack());
+    }
+
+    if let Some(bx) = content.to_packed::<BoxElem>()
+        && !is_cetz_span(content.span())
+        && let Some(body) = bx.body.get_ref(StyleChain::default())
+        && let Some(updated_body) = annotate_content_for_realization(body, engine, locator)
+    {
+        let mut cloned = bx.clone();
+        cloned.body.set(Some(updated_body));
+        return Some(cloned.pack());
+    }
+
     None
+}
+
+use typst::foundations::Smart;
+
+/// Emit a zero-size scope-style marker `(Tag::Start, Tag::End)` into `out`.
+fn push_scope_marker<'a>(
+    out: &mut Vec<Pair<'a>>,
+    label_str: &'static str,
+    chain: StyleChain<'a>,
+    span: Span,
+    salt: usize,
+    engine: &mut Engine,
+    locator: &mut SplitLocator,
+    arenas: &'a Arenas,
+) {
+    let mut marker = StyledElem::new(Content::empty(), chain.to_map()).pack();
+    marker.set_label(
+        Label::new(typst_utils::PicoStr::intern(label_str)).expect("nonempty internal label"),
+    );
+    let key = typst_utils::hash128(&(label_str, salt, span));
+    let loc = locator.next_location(engine, key, span);
+    marker.set_location(loc);
+    out.push((
+        &*arenas
+            .content
+            .alloc(TagElem::packed(Tag::Start(marker, INTERNAL_TAG_FLAGS))),
+        chain,
+    ));
+    out.push((
+        &*arenas.content.alloc(TagElem::packed(Tag::End(
+            loc,
+            key,
+            INTERNAL_TAG_FLAGS,
+        ))),
+        chain,
+    ));
+}
+
+/// Downgrade pre-realization synthetic locations (for unlabelled non-locatable elements
+/// such as shapes/transforms) to `INTERNAL_TAG_FLAGS` so `Introspector` stays 100% clean.
+fn sanitize_synthetic_tag_flags<'a>(pairs: Vec<Pair<'a>>, arenas: &'a Arenas) -> Vec<Pair<'a>> {
+    let mut synthetic_locs: HashSet<Location> = HashSet::new();
+    for &(item, _) in &pairs {
+        if let Some(tag_elem) = item.to_packed::<TagElem>()
+            && let Tag::Start(inner, flags) = &tag_elem.tag
+            && flags.any()
+            && !inner.can::<dyn Locatable>()
+            && !inner.can::<dyn Tagged>()
+            && inner.label().is_none()
+            && let Some(loc) = inner.location()
+        {
+            synthetic_locs.insert(loc);
+        }
+    }
+    if synthetic_locs.is_empty() {
+        return pairs;
+    }
+
+    pairs
+        .into_iter()
+        .map(|(item, chain)| {
+            if let Some(tag_elem) = item.to_packed::<TagElem>() {
+                match &tag_elem.tag {
+                    Tag::Start(inner, _)
+                        if inner
+                            .location()
+                            .is_some_and(|loc| synthetic_locs.contains(&loc)) =>
+                    {
+                        let updated =
+                            TagElem::packed(Tag::Start(inner.clone(), INTERNAL_TAG_FLAGS));
+                        return (&*arenas.content.alloc(updated), chain);
+                    }
+                    Tag::End(loc, key, _) if synthetic_locs.contains(loc) => {
+                        let updated = TagElem::packed(Tag::End(*loc, *key, INTERNAL_TAG_FLAGS));
+                        return (&*arenas.content.alloc(updated), chain);
+                    }
+                    _ => {}
+                }
+            }
+            (item, chain)
+        })
+        .collect()
+}
+
+/// Wrap post-realize container / break / spacing items (`BlockElem`, `BoxElem`,
+/// `ColbreakElem`, `LinebreakElem`, non-weak `HElem`) that were generated inside
+/// `#show` rules or closures (and thus missed pre-realize annotation) with
+/// `INTERNAL_TAG_FLAGS` `Tag::Start` / `Tag::End` markers.
+fn wrap_item_with_internal_tag<'a>(
+    out: &mut Vec<Pair<'a>>,
+    item: &'a Content,
+    chain: StyleChain<'a>,
+    salt: usize,
+    engine: &mut Engine,
+    locator: &mut SplitLocator,
+    arenas: &'a Arenas,
+) {
+    let mut marker = item.clone();
+    marker.materialize(chain);
+    let key = typst_utils::hash128(&(salt, &marker));
+    let loc = locator.next_location(engine, key, item.span());
+    marker.set_location(loc);
+    out.push((
+        &*arenas
+            .content
+            .alloc(TagElem::packed(Tag::Start(marker, INTERNAL_TAG_FLAGS))),
+        chain,
+    ));
+    out.push((item, chain));
+    out.push((
+        &*arenas.content.alloc(TagElem::packed(Tag::End(
+            loc,
+            key,
+            INTERNAL_TAG_FLAGS,
+        ))),
+        chain,
+    ));
 }
 
 fn custom_realize<'a>(
@@ -188,10 +342,11 @@ fn custom_realize<'a>(
     content: &'a Content,
     styles: StyleChain<'a>,
 ) -> SourceResult<Vec<Pair<'a>>> {
-    let target_content = if matches!(
-        kind,
-        RealizationKind::Document { .. } | RealizationKind::Fragment { .. } | RealizationKind::Par
-    ) {
+    let is_document = matches!(kind, RealizationKind::Document { .. });
+    let is_fragment = matches!(kind, RealizationKind::Fragment { .. });
+    let is_par = matches!(kind, RealizationKind::Par);
+
+    let target_content = if is_document || is_fragment || is_par {
         if let Some(annotated) = annotate_content_for_realization(content, engine, locator) {
             arenas.content.alloc(annotated)
         } else {
@@ -201,109 +356,418 @@ fn custom_realize<'a>(
         content
     };
 
-    let is_document = matches!(kind, RealizationKind::Document { .. });
-    let is_par = matches!(kind, RealizationKind::Par);
-    let pairs = typst_realize::realize(kind, engine, locator, arenas, target_content, styles)?;
+    let raw_pairs = typst_realize::realize(kind, engine, locator, arenas, target_content, styles)?;
+    let pairs = sanitize_synthetic_tag_flags(raw_pairs, arenas);
+
     if is_par {
-        use typst::introspection::{Tag, TagElem, TagFlags};
-        use typst::model::StrongElem;
-        use typst::text::{FontWeight, SmallcapsElem, TextElem};
-        let needs_inline_markers = pairs.iter().any(|(item, chain)| {
-            item.is::<TextElem>()
-                && (chain.get(TextElem::weight) >= FontWeight::SEMIBOLD
-                    || chain.get(TextElem::smallcaps).is_some())
-        });
-        if needs_inline_markers {
-            let mut tagged = Vec::with_capacity(pairs.len() + 6);
-            for (item, chain) in pairs {
-                let is_bold =
-                    item.is::<TextElem>() && chain.get(TextElem::weight) >= FontWeight::SEMIBOLD;
-                let is_sc =
-                    item.is::<TextElem>() && chain.get(TextElem::smallcaps).is_some();
-                let flags = TagFlags {
-                    introspectable: false,
-                    tagged: true,
-                };
-                let bold_end = if is_bold {
-                    let mut marker = StrongElem::new(Content::empty()).pack();
-                    let key = typst_utils::hash128(&(item, &marker));
-                    let loc = locator.next_location(engine, key, item.span());
-                    marker.set_location(loc);
-                    tagged.push((
-                        &*arenas
-                            .content
-                            .alloc(TagElem::packed(Tag::Start(marker, flags))),
-                        chain,
-                    ));
-                    Some((loc, key))
-                } else {
-                    None
-                };
-                let sc_end = if is_sc {
-                    let mut marker = SmallcapsElem::new(Content::empty()).pack();
-                    let key = typst_utils::hash128(&(item, &marker));
-                    let loc = locator.next_location(engine, key, item.span());
-                    marker.set_location(loc);
-                    tagged.push((
-                        &*arenas
-                            .content
-                            .alloc(TagElem::packed(Tag::Start(marker, flags))),
-                        chain,
-                    ));
-                    Some((loc, key))
-                } else {
-                    None
-                };
-                tagged.push((item, chain));
-                if let Some((loc, key)) = sc_end {
-                    tagged.push((
-                        &*arenas
-                            .content
-                            .alloc(TagElem::packed(Tag::End(loc, key, flags))),
-                        chain,
-                    ));
-                }
-                if let Some((loc, key)) = bold_end {
-                    tagged.push((
-                        &*arenas
-                            .content
-                            .alloc(TagElem::packed(Tag::End(loc, key, flags))),
-                        chain,
-                    ));
-                }
-            }
-            return Ok(tagged);
-        }
-        return Ok(pairs);
+        return realize_par_pairs(pairs, engine, locator, arenas);
     }
-    if !is_document { return Ok(pairs); }
-    // Keep resolved page styles alongside root flow items. These zero-size tags
-    // survive layout without changing line breaking, including generated content.
-    use typst::introspection::{Tag, TagElem, TagFlags};
-    let mut tagged = Vec::new();
-    for (item, chain) in pairs {
-        if !item.is::<TagElem>() && !item.is::<typst::layout::PagebreakElem>() {
-            let mut marker = StyledElem::new(Content::empty(), chain.to_map()).pack();
-            marker.set_label(Label::new(typst_utils::PicoStr::intern("__typst2word_page_styles")).expect("nonempty internal label"));
-            let key = typst_utils::hash128(&(item, &marker));
+    if is_fragment {
+        return Ok(realize_fragment_pairs(pairs, engine, locator, arenas));
+    }
+    if is_document {
+        return Ok(realize_document_pairs(pairs, engine, locator, arenas));
+    }
+
+    Ok(pairs)
+}
+
+/// Post-process `RealizationKind::Par` pairs:
+/// - Emit `__typst2word_scope` markers when `StyleChain` changes.
+/// - Group contiguous runs of text/spaces sharing `#set text(weight: "bold")` or `smallcaps`
+///   into a single `StrongElem` / `SmallcapsElem` marker run so HarfBuzz shaping, ligatures,
+///   and kerning across spaces remain intact.
+/// - Wrap `#show`-generated `LinebreakElem`, `BoxElem`, and non-weak `HElem` in internal tags.
+fn realize_par_pairs<'a>(
+    pairs: Vec<Pair<'a>>,
+    engine: &mut Engine,
+    locator: &mut SplitLocator,
+    arenas: &'a Arenas,
+) -> SourceResult<Vec<Pair<'a>>> {
+    let mut out = Vec::with_capacity(pairs.len() + 4);
+    let mut prev_chain: Option<StyleChain<'a>> = None;
+    let mut active_bold: Option<(Location, u128, StyleChain<'a>)> = None;
+    let mut active_sc: Option<(Location, u128, StyleChain<'a>)> = None;
+
+    let close_inline_runs = |out: &mut Vec<Pair<'a>>,
+                             active_bold: &mut Option<(Location, u128, StyleChain<'a>)>,
+                             active_sc: &mut Option<(Location, u128, StyleChain<'a>)>,
+                             arenas: &'a Arenas| {
+        if let Some((loc, key, ch)) = active_sc.take() {
+            out.push((
+                &*arenas.content.alloc(TagElem::packed(Tag::End(
+                    loc,
+                    key,
+                    INTERNAL_TAG_FLAGS,
+                ))),
+                ch,
+            ));
+        }
+        if let Some((loc, key, ch)) = active_bold.take() {
+            out.push((
+                &*arenas.content.alloc(TagElem::packed(Tag::End(
+                    loc,
+                    key,
+                    INTERNAL_TAG_FLAGS,
+                ))),
+                ch,
+            ));
+        }
+    };
+
+    let mut prev_was_tag_for_item = false;
+    for (idx, (item, chain)) in pairs.into_iter().enumerate() {
+        let is_textlike =
+            item.is::<TextElem>() || item.is::<SpaceElem>() || item.is::<SmartQuoteElem>();
+        let want_bold = if item.is::<TextElem>() {
+            chain.get(TextElem::weight) >= FontWeight::SEMIBOLD
+        } else if is_textlike {
+            active_bold.is_some() && chain.get(TextElem::weight) >= FontWeight::SEMIBOLD
+        } else {
+            false
+        };
+        let want_sc = if item.is::<TextElem>() {
+            chain.get(TextElem::smallcaps).is_some()
+        } else if is_textlike {
+            active_sc.is_some() && chain.get(TextElem::smallcaps).is_some()
+        } else {
+            false
+        };
+
+        if (active_bold.is_some() != want_bold) || (active_sc.is_some() != want_sc) {
+            close_inline_runs(&mut out, &mut active_bold, &mut active_sc, arenas);
+        }
+
+        if prev_chain != Some(chain) {
+            close_inline_runs(&mut out, &mut active_bold, &mut active_sc, arenas);
+            push_scope_marker(
+                &mut out,
+                SCOPE_STYLES_LABEL,
+                chain,
+                item.span(),
+                idx,
+                engine,
+                locator,
+                arenas,
+            );
+            prev_chain = Some(chain);
+        }
+
+        if want_bold && active_bold.is_none() {
+            let mut marker = StrongElem::new(Content::empty()).pack();
+            let key = typst_utils::hash128(&("par_bold", idx, item.span()));
             let loc = locator.next_location(engine, key, item.span());
             marker.set_location(loc);
-            let flags = TagFlags { introspectable: false, tagged: true };
-            tagged.push((&*arenas.content.alloc(TagElem::packed(Tag::Start(marker, flags))), chain));
-            tagged.push((&*arenas.content.alloc(TagElem::packed(Tag::End(loc, key, flags))), chain));
+            out.push((
+                &*arenas
+                    .content
+                    .alloc(TagElem::packed(Tag::Start(marker, INTERNAL_TAG_FLAGS))),
+                chain,
+            ));
+            active_bold = Some((loc, key, chain));
         }
-        tagged.push((item, chain));
+        if want_sc && active_sc.is_none() {
+            let mut marker = SmallcapsElem::new(Content::empty()).pack();
+            let key = typst_utils::hash128(&("par_sc", idx, item.span()));
+            let loc = locator.next_location(engine, key, item.span());
+            marker.set_location(loc);
+            out.push((
+                &*arenas
+                    .content
+                    .alloc(TagElem::packed(Tag::Start(marker, INTERNAL_TAG_FLAGS))),
+                chain,
+            ));
+            active_sc = Some((loc, key, chain));
+        }
+
+        // Wrap `#show`-generated `LinebreakElem`, `BoxElem`, or non-weak `HElem` when not
+        // already preceded by their own `Tag::Start`.
+        let already_tagged = prev_was_tag_for_item;
+        prev_was_tag_for_item = item
+            .to_packed::<TagElem>()
+            .is_some_and(|t| matches!(t.tag, Tag::Start(..)));
+
+        let wrap_inline = !already_tagged
+            && !is_cetz_span(item.span())
+            && (item.is::<LinebreakElem>()
+                || (item.is::<BoxElem>() && item.location().is_none())
+                || item
+                    .to_packed::<HElem>()
+                    .is_some_and(|h| !h.weak.get(chain) && !h.amount.is_zero()));
+
+        if wrap_inline {
+            wrap_item_with_internal_tag(&mut out, item, chain, idx, engine, locator, arenas);
+        } else {
+            out.push((item, chain));
+        }
     }
-    Ok(tagged)
+
+    close_inline_runs(&mut out, &mut active_bold, &mut active_sc, arenas);
+    Ok(out)
+}
+
+/// Post-process `RealizationKind::Fragment` pairs (containers, cells, list bodies, headers/footers):
+/// - Emit `__typst2word_scope` markers when `StyleChain` changes.
+/// - Wrap untagged `BlockElem` and `ColbreakElem` in `INTERNAL_TAG_FLAGS` markers.
+fn realize_fragment_pairs<'a>(
+    pairs: Vec<Pair<'a>>,
+    engine: &mut Engine,
+    locator: &mut SplitLocator,
+    arenas: &'a Arenas,
+) -> Vec<Pair<'a>> {
+    let mut out = Vec::with_capacity(pairs.len() + 4);
+    let mut prev_chain: Option<StyleChain<'a>> = None;
+    let mut prev_was_start_tag = false;
+
+    for (idx, (item, chain)) in pairs.into_iter().enumerate() {
+        if prev_chain != Some(chain) {
+            push_scope_marker(
+                &mut out,
+                SCOPE_STYLES_LABEL,
+                chain,
+                item.span(),
+                idx,
+                engine,
+                locator,
+                arenas,
+            );
+            prev_chain = Some(chain);
+        }
+
+        let already_tagged = prev_was_start_tag;
+        prev_was_start_tag = item
+            .to_packed::<TagElem>()
+            .is_some_and(|t| matches!(t.tag, Tag::Start(..)));
+
+        let should_wrap = !already_tagged
+            && !is_cetz_span(item.span())
+            && ((item.is::<BlockElem>() && is_styled_or_structural_block(item, chain))
+                || item.is::<ColbreakElem>());
+
+        if should_wrap {
+            wrap_item_with_internal_tag(&mut out, item, chain, idx, engine, locator, arenas);
+        } else {
+            out.push((item, chain));
+        }
+    }
+
+    out
+}
+
+/// Post-process `RealizationKind::Document` pairs:
+/// - Keep `__typst2word_page_styles` markers for page-root style extraction AND
+///   `RealizedSemanticStore`.
+/// - Wrap untagged `BlockElem` and `ColbreakElem` in `INTERNAL_TAG_FLAGS` markers.
+/// - Emit terminated `PagebreakElem` internal markers ONLY for genuine user/show-rule
+///   pagebreaks (`!ptr::eq(shared_weak) && !boundary`) that actually break a page, without
+///   splitting contiguous `PagebreakElem` runs (`pages::collect::migrate_unterminated_tags`).
+fn realize_document_pairs<'a>(
+    pairs: Vec<Pair<'a>>,
+    engine: &mut Engine,
+    locator: &mut SplitLocator,
+    arenas: &'a Arenas,
+) -> Vec<Pair<'a>> {
+    let mut out = Vec::with_capacity(pairs.len() + 8);
+    let mut prev_chain: Option<StyleChain<'a>> = None;
+    let mut prev_was_start_tag = false;
+    let mut page_has_content = false;
+
+    let n = pairs.len();
+    let mut i = 0;
+    while i < n {
+        let (item, chain) = pairs[i];
+
+        if item.is::<PagebreakElem>() {
+            // Consume the entire contiguous run of `PagebreakElem`s together so
+            // `typst_layout::pages::collect::migrate_unterminated_tags` sees an unbroken run.
+            let run_start = i;
+            while i < n && pairs[i].0.is::<PagebreakElem>() {
+                i += 1;
+            }
+            let has_following_content = pairs[i..]
+                .iter()
+                .any(|(c, _)| !c.is::<TagElem>() && !c.is::<PagebreakElem>());
+
+            // Simulate `pages::collect` on this contiguous run to count exact user pagebreaks.
+            let mut explicit_breaks: Vec<(&'a Content, StyleChain<'a>, usize)> = Vec::new();
+            for (offset, &(pb_item, pb_chain)) in pairs[run_start..i].iter().enumerate() {
+                if let Some(pb) = pb_item.to_packed::<PagebreakElem>() {
+                    let is_set_page_synthetic =
+                        std::ptr::eq(pb_item, PagebreakElem::shared_weak())
+                            || pb.boundary.get(pb_chain);
+                    let strong = !pb.weak.get(pb_chain);
+
+                    if is_set_page_synthetic {
+                        if page_has_content && !pb.boundary.get(pb_chain) {
+                            page_has_content = false;
+                        }
+                    } else if strong {
+                        explicit_breaks.push((pb_item, pb_chain, run_start + offset));
+                        page_has_content = false;
+                    } else if page_has_content && has_following_content {
+                        // Weak explicit pagebreak (`#pagebreak(weak: true)` or
+                        // `#show heading: it => pagebreak(weak: true) + it`) after real content.
+                        explicit_breaks.push((pb_item, pb_chain, run_start + offset));
+                        page_has_content = false;
+                    }
+                }
+            }
+
+            // Insert terminated `PagebreakElem` markers BEFORE any trailing unterminated
+            // `Tag::Start`s in `out` so `migrate_unterminated_tags` keeps the pagebreak
+            // marker at the end of the preceding page while migrating `Tag::Start(HeadingElem)`
+            // onto the new page!
+            if !explicit_breaks.is_empty() {
+                let insert_pos = find_unterminated_tag_tail_start(&out);
+                let mut marker_pairs = Vec::with_capacity(explicit_breaks.len() * 2);
+                for (pb_item, pb_chain, salt) in explicit_breaks {
+                    let mut marker = pb_item.clone();
+                    marker.materialize(pb_chain);
+                    let key = typst_utils::hash128(&("doc_pb", salt, pb_item.span()));
+                    let loc = locator.next_location(engine, key, pb_item.span());
+                    marker.set_location(loc);
+                    marker_pairs.push((
+                        &*arenas
+                            .content
+                            .alloc(TagElem::packed(Tag::Start(marker, INTERNAL_TAG_FLAGS))),
+                        pb_chain,
+                    ));
+                    marker_pairs.push((
+                        &*arenas.content.alloc(TagElem::packed(Tag::End(
+                            loc,
+                            key,
+                            INTERNAL_TAG_FLAGS,
+                        ))),
+                        pb_chain,
+                    ));
+                }
+                out.splice(insert_pos..insert_pos, marker_pairs);
+            }
+
+            for &pb_pair in &pairs[run_start..i] {
+                out.push(pb_pair);
+            }
+            prev_chain = None;
+            prev_was_start_tag = false;
+            continue;
+        }
+
+        // Only emit page/scope markers right before non-`TagElem` items or when no
+        // `PagebreakElem` immediately follows, keeping `migrate_unterminated_tags` intact.
+        let followed_by_pagebreak = pairs[i + 1..]
+            .iter()
+            .take_while(|(c, _)| c.is::<TagElem>() || c.is::<PagebreakElem>())
+            .any(|(c, _)| c.is::<PagebreakElem>());
+
+        if prev_chain != Some(chain) && (!item.is::<TagElem>() || !followed_by_pagebreak) {
+            push_scope_marker(
+                &mut out,
+                PAGE_STYLES_LABEL,
+                chain,
+                item.span(),
+                i,
+                engine,
+                locator,
+                arenas,
+            );
+            prev_chain = Some(chain);
+        }
+
+        if !item.is::<TagElem>() {
+            page_has_content = true;
+        }
+
+        let already_tagged = prev_was_start_tag;
+        prev_was_start_tag = item
+            .to_packed::<TagElem>()
+            .is_some_and(|t| matches!(t.tag, Tag::Start(..)));
+
+        let should_wrap = !already_tagged
+            && !is_cetz_span(item.span())
+            && ((item.is::<BlockElem>() && is_styled_or_structural_block(item, chain))
+                || item.is::<ColbreakElem>());
+
+        if should_wrap {
+            wrap_item_with_internal_tag(&mut out, item, chain, i, engine, locator, arenas);
+        } else {
+            out.push((item, chain));
+        }
+
+        i += 1;
+    }
+
+    out
+}
+
+/// Find the index in `out` where trailing unterminated `TagElem`s start.
+fn find_unterminated_tag_tail_start(out: &[Pair<'_>]) -> usize {
+    let trailing_tags = out
+        .iter()
+        .rev()
+        .take_while(|(c, _)| c.is::<TagElem>())
+        .count();
+    let tail_start = out.len() - trailing_tags;
+    if trailing_tags == 0 {
+        return out.len();
+    }
+    let closed: HashSet<Location> = out[tail_start..]
+        .iter()
+        .filter_map(|(c, _)| match c.to_packed::<TagElem>()?.tag {
+            Tag::End(loc, ..) => Some(loc),
+            Tag::Start(..) => None,
+        })
+        .collect();
+    // Advance past terminated tags at the start of the tail so the pagebreak marker sits
+    // right after terminated tags on the current page and right before unterminated `Tag::Start`s.
+    let mut idx = tail_start;
+    while idx < out.len() {
+        if let Some(te) = out[idx].0.to_packed::<TagElem>()
+            && closed.contains(&te.tag.location())
+        {
+            idx += 1;
+        } else {
+            break;
+        }
+    }
+    idx
+}
+
+/// Only wrap `BlockElem`s that carry visual container styling (fill, stroke, inset, outset,
+/// radius), explicit sizing, sticky/unbreakable constraints, or explicit `BlockBody::Content`
+/// (avoiding wrapping bare internal single-layouter blocks unnecessarily).
+fn is_styled_or_structural_block(item: &Content, chain: StyleChain<'_>) -> bool {
+    let Some(blk) = item.to_packed::<BlockElem>() else {
+        return false;
+    };
+    if item.location().is_some() {
+        return false;
+    }
+    blk.fill.get_ref(chain).is_some()
+        || blk.stroke.resolve(chain).iter().any(|s| s.is_some())
+        || blk
+            .inset
+            .resolve(chain)
+            .iter()
+            .any(|s| s.is_some_and(|v| !v.is_zero()))
+        || blk
+            .radius
+            .resolve(chain)
+            .iter()
+            .any(|c| c.is_some_and(|v| !v.is_zero()))
+        || blk.sticky.get(chain)
+        || !blk.breakable.get(chain)
+        || !matches!(blk.width.get(chain), Smart::Auto)
 }
 
 /// Complete compilation result from the Typst backend, holding:
 /// - Laid-out `PagedDocument` (pages, frames, metadata, `Introspector`).
+/// - Post-convergence `RealizedSemanticStore` (`Location` -> scoped `Styles` & `semantic_parent`).
 /// - Evaluated pre-layout `Content` IR tree.
 /// - `Span -> Vec<Content>` lookup table.
 /// - Compiler warnings and diagnostics.
 pub struct CompiledTypstDocument {
     pub document: PagedDocument,
+    pub semantics: RealizedSemanticStore,
     pub evaluated_content: Content,
     pub span_index: HashMap<Span, Vec<Content>>,
     pub warnings: EcoVec<SourceDiagnostic>,
@@ -334,23 +798,21 @@ impl CompiledTypstDocument {
             Route::default().track(),
             &main_source,
         )
-        .map_err(|diags| format_diagnostics(world, &diags))?;
+        .map_err(|diags| format_diagnostics(world, &deduplicate(diags)))?;
 
         let evaluated_content = module.content();
         let span_index = build_span_index(&evaluated_content);
 
         let empty_introspector = EmptyIntrospector;
-        let mut previous: Option<PagedDocument> = None;
-        let mut iter = 0;
-        let mut subsink;
+        let mut history: Vec<PagedDocument> = Vec::with_capacity(MAX_ITERS - 1);
         let mut document: PagedDocument;
 
         loop {
-            subsink = Sink::new();
-            let introspector: &dyn Introspector = match &previous {
-                Some(doc) => doc.introspector().as_ref(),
-                None => &empty_introspector,
-            };
+            let mut subsink = Sink::new();
+            let introspector: &dyn Introspector = history
+                .last()
+                .map(|doc| doc.introspector().as_ref() as &dyn Introspector)
+                .unwrap_or(&empty_introspector);
             let constraint = comemo::Constraint::new();
             let mut engine = Engine {
                 library,
@@ -362,35 +824,110 @@ impl CompiledTypstDocument {
             };
 
             document = typst_layout::layout_document(&mut engine, &evaluated_content, styles)
-                .map_err(|diags| format_diagnostics(world, &diags))?;
-            iter += 1;
+                .map_err(|diags| format_diagnostics(world, &deduplicate(diags)))?;
 
             if constraint.validate(document.introspector().as_ref() as &dyn Introspector) {
+                sink.extend_from_sink(subsink);
                 break;
             }
 
-            if iter >= MAX_ITERS {
-                subsink.warn(warning!(
-                    Span::detached(),
-                    "layout did not converge within {MAX_ITERS} attempts"
-                ));
+            if history.len() >= MAX_ITERS - 1 {
+                let mut introspectors = [&empty_introspector as &dyn Introspector; MAX_ITERS + 1];
+                for (idx, prev_doc) in history.iter().enumerate() {
+                    introspectors[idx + 1] = prev_doc.introspector().as_ref();
+                }
+                introspectors[MAX_ITERS] = document.introspector().as_ref();
+
+                let warnings = typst::introspection::analyze(
+                    tracked_world,
+                    introspectors,
+                    subsink.introspections(),
+                );
+                sink.extend_from_sink(subsink);
+                for w in warnings {
+                    sink.warn(w);
+                }
                 break;
             }
-            previous = Some(document);
+
+            history.push(document);
         }
 
-        sink.extend_from_sink(subsink);
         let delayed = sink.delayed();
         if !delayed.is_empty() {
-            return Err(format_diagnostics(world, &delayed));
+            return Err(format_diagnostics(world, &deduplicate(delayed)));
         }
+
+        let semantics = RealizedSemanticStore::from_paged_document(&document, &library.styles);
+        let warnings = deduplicate(sink.warnings());
 
         Ok(Self {
             document,
+            semantics,
             evaluated_content,
             span_index,
-            warnings: sink.warnings(),
+            warnings,
         })
+    }
+
+    /// Realize a math `Content` expression (`EquationElem::body`) through `typst_realize::realize`
+    /// with `RealizationKind::Math` using the converged `Introspector` and local `Styles`!
+    ///
+    /// This resolves `#show` rules (including regex rules like `#show "RR": math.bb("R")`),
+    /// `context` blocks, and nested `$...$` equations inside math bodies before OMML conversion.
+    pub fn realize_math<'a>(
+        &'a self,
+        world: &'a TypstWorld,
+        content: &'a Content,
+        local_styles: Option<&'a Styles>,
+        arenas: &'a Arenas,
+    ) -> SourceResult<Vec<Pair<'a>>> {
+        let tracked_world = (world as &dyn World).track();
+        let traced = Traced::default();
+        let mut sink = Sink::new();
+        let library = world.library();
+        let introspector: &dyn Introspector = self.document.introspector().as_ref();
+
+        let mut engine = Engine {
+            library,
+            world: tracked_world,
+            introspector: Protected::new(introspector.track()),
+            traced: traced.track(),
+            sink: sink.track_mut(),
+            route: Route::default(),
+        };
+
+        let styles = StyleChain::new(local_styles.unwrap_or(&library.styles));
+        let root_loc = typst::introspection::Locator::root();
+        let mut locator = root_loc.split();
+        typst_realize::realize(
+            RealizationKind::Math,
+            &mut engine,
+            &mut locator,
+            arenas,
+            content,
+            styles,
+        )
+    }
+
+    /// Owned convenience wrapper around [`Self::realize_math`] that allocates an internal
+    /// [`Arenas`] and returns owned `(Content, Styles)` pairs.
+    pub fn realize_math_owned(
+        &self,
+        world: &TypstWorld,
+        content: &Content,
+        local_styles: Option<&Styles>,
+    ) -> Option<Vec<(Content, Styles)>> {
+        let arenas = Arenas::default();
+        let pairs = self
+            .realize_math(world, content, local_styles, &arenas)
+            .ok()?;
+        Some(
+            pairs
+                .into_iter()
+                .map(|(item, chain)| (item.clone(), chain.to_map()))
+                .collect(),
+        )
     }
 
     /// Access the `Introspector` of the compiled document.
@@ -436,6 +973,12 @@ impl CompiledTypstDocument {
         let range = world.range(span)?;
         source.text().get(range).map(|s| s.to_owned())
     }
+}
+
+fn deduplicate(mut diags: EcoVec<SourceDiagnostic>) -> EcoVec<SourceDiagnostic> {
+    let mut seen = HashSet::new();
+    diags.retain(|d| seen.insert(typst_utils::hash128(&(&d.span, &d.message))));
+    diags
 }
 
 fn build_span_index(root: &Content) -> HashMap<Span, Vec<Content>> {

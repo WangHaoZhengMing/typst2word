@@ -2,9 +2,14 @@
 //! semantic + layout query engine for `typst2word`.
 
 pub mod compile;
+pub mod semantic;
 pub mod world;
 
 pub use compile::{CUSTOM_ROUTINES, CompiledTypstDocument, is_cetz_span};
+pub use semantic::{
+    PAGE_STYLES_LABEL, RealizedNodeRecord, RealizedSemanticStore, RealizedStyleSnapshot,
+    SCOPE_STYLES_LABEL,
+};
 pub use world::{GlobalTypstResources, TypstWorld};
 
 /// Compile a `TypstWorld` into a `CompiledTypstDocument`.
