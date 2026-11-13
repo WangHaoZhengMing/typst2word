@@ -2,12 +2,14 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{BlockNode, BordersIr, ColorHex, HAlignIr, SidesPtIr, StrokeIr};
+use super::{BlockNode, BordersIr, ColorHex, HAlignIr, NodeId, SidesPtIr, StrokeIr};
 
 /// Typst shape representation (`rect`, `square`, `circle`, `ellipse`,
 /// `line`, `polygon`, `path`, `curve`, or styled `block`/`box`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ShapeIr {
+    #[serde(default, skip_serializing_if = "NodeId::is_unset")]
+    pub id: NodeId,
     pub kind: ShapeKindIr,
     pub width_pt: f64,
     pub height_pt: f64,

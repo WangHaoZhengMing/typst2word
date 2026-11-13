@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{ColorHex, StrokeIr};
+use super::{ColorHex, LocaleIr, StrokeIr};
 
 /// Check if a character is a CJK ideograph, CJK punctuation, Hiragana/Katakana, or fullwidth glyph.
 #[inline]
@@ -37,6 +37,18 @@ pub struct TextRunIr {
     pub script: ScriptKindIr,
     pub smallcaps: bool,
     pub is_code: bool,
+    /// Inter-character tracking (`#set text(tracking: ...)`) in points.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tracking_pt: Option<f64>,
+    /// Vertical baseline shift (`#set text(baseline: ...)`) in points (positive = raised).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline_shift_pt: Option<f64>,
+    /// True glyph outline stroke (`#set text(stroke: ...)`), distinct from synthetic bold.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_outline: Option<StrokeIr>,
+    /// Resolved run locale (`TextItem::lang` + `TextItem::region`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub locale: Option<LocaleIr>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]

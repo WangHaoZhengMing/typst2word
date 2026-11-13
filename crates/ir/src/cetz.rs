@@ -2,11 +2,13 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{ColorHex, CurveSegmentIr, HAlignIr, InlineNode, StrokeIr};
+use super::{ColorHex, CurveSegmentIr, HAlignIr, InlineNode, NodeId, StrokeIr};
 
 /// CeTZ vector drawing canvas (`#import "@preview/cetz:..."`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CetzCanvasIr {
+    #[serde(default, skip_serializing_if = "NodeId::is_unset")]
+    pub id: NodeId,
     pub width_pt: f64,
     pub height_pt: f64,
     pub background: Option<ColorHex>,

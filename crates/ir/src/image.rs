@@ -2,11 +2,13 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::HAlignIr;
+use super::{HAlignIr, NodeId};
 
 /// Raster or vector image node.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImageIr {
+    #[serde(default, skip_serializing_if = "NodeId::is_unset")]
+    pub id: NodeId,
     pub data: Vec<u8>,
     pub format: ImageFormatIr,
     pub width_pt: f64,

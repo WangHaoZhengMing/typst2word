@@ -5,12 +5,14 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::ColorHex;
-use crate::pdf::EquationPdfMetricsIr;
+use crate::{ColorHex, NodeId};
+use crate::reference_layout::EquationLayoutMetricsIr;
 
 /// Mathematical equation IR.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EquationIr {
+    #[serde(default, skip_serializing_if = "NodeId::is_unset")]
+    pub id: NodeId,
     pub is_block: bool,
     /// Structured semantic math AST nodes.
     pub body: Vec<MathNodeIr>,
@@ -23,9 +25,9 @@ pub struct EquationIr {
     /// Base Typst font size in points.
     #[serde(default)]
     pub font_size_pt: Option<f64>,
-    /// Physical measurements from Typst's laid-out PDF frame.
-    #[serde(default)]
-    pub pdf_metrics: EquationPdfMetricsIr,
+    /// Reference layout measurements from Typst's laid-out frame.
+    #[serde(default, alias = "pdf_metrics")]
+    pub layout_metrics: EquationLayoutMetricsIr,
 }
 
 /// Semantic math AST node.
