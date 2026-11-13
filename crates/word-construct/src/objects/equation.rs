@@ -6,7 +6,7 @@
 //! and calibrated Office Math nodes ([`WordMathNode`], [`WordMathRun`]).
 
 use ir::{
-    ColorHex, EquationIr, EquationPdfMetricsIr, MathFracStyleIr, MathNodeIr, MathScriptIr,
+    ColorHex, EquationIr, EquationLayoutMetricsIr, MathFracStyleIr, MathNodeIr, MathScriptIr,
     MathStyleIr,
 };
 
@@ -162,7 +162,7 @@ pub struct MathAstStructure {
     pub expected_em_width: f64,
 }
 
-/// Solve [`crate::WordEquationBox`] for an [`EquationIr`] from its `EquationPdfMetricsIr` and AST structure.
+/// Solve [`crate::WordEquationBox`] for an [`EquationIr`] from its `EquationLayoutMetricsIr` and AST structure.
 pub fn solve_word_equation_box(eq: &EquationIr) -> crate::WordEquationBox {
     let ast_metrics = analyze_math_slice(&eq.body, eq.is_block);
     let (
@@ -172,8 +172,8 @@ pub fn solve_word_equation_box(eq: &EquationIr) -> crate::WordEquationBox {
         typst_min_glyph_pt,
         context_font_size_pt,
         max_available_width_pt,
-    ) = match eq.pdf_metrics {
-        EquationPdfMetricsIr::Unmeasured {
+    ) = match eq.layout_metrics {
+        EquationLayoutMetricsIr::Unmeasured {
             context_font_size_pt,
             max_glyph_pt,
             min_glyph_pt,
@@ -186,7 +186,7 @@ pub fn solve_word_equation_box(eq: &EquationIr) -> crate::WordEquationBox {
             context_font_size_pt,
             max_available_width_pt,
         ),
-        EquationPdfMetricsIr::Measured {
+        EquationLayoutMetricsIr::Measured {
             context_font_size_pt,
             width_pt,
             height_pt,

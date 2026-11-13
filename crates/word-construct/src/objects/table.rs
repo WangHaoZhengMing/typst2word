@@ -59,11 +59,12 @@ pub enum RowSplitPolicy {
     CantSplit,
 }
 
-/// Solved construct for a table header/body row (`<w:trPr>` + expanded `<w:tc>` slots).
+/// Solved construct for a table header/body/footer row (`<w:trPr>` + expanded `<w:tc>` slots).
 #[derive(Debug, Clone)]
 pub struct TableRowConstruct<'a> {
     pub split_policy: RowSplitPolicy,
     pub is_header: bool,
+    pub is_footer: bool,
     pub min_height_dxa: Option<i64>,
     pub keep_rows_together: bool,
     pub cells: Vec<TableCellSlotConstruct<'a>>,
@@ -146,14 +147,15 @@ impl<'a> TableConstruct<'a> {
                 } else {
                     !next_row_is_complex_layout && num_rows <= 15 && row_idx + 1 < num_rows
                 };
-                let split_policy =
-                    if (kind == TableKindIr::StyledContainer && row.height_pt.is_none())
-                        || row_is_complex_layout
-                    {
-                        RowSplitPolicy::AllowSplit
-                    } else {
-                        RowSplitPolicy::CantSplit
-                    };
+                let split_policy = if row.is_footer {
+                    RowSplitPolicy::CantSplit
+                } else if (kind == TableKindIr::StyledContainer && row.height_pt.is_none())
+                    || row_is_complex_layout
+                {
+                    RowSplitPolicy::AllowSplit
+                } else {
+                    RowSplitPolicy::CantSplit
+                };
                 let min_height_dxa = row
                     .height_pt
                     .map(pt_to_dxa)
@@ -164,6 +166,7 @@ impl<'a> TableConstruct<'a> {
                 TableRowConstruct {
                     split_policy,
                     is_header: row.is_header,
+                    is_footer: row.is_footer,
                     min_height_dxa,
                     keep_rows_together,
                     cells,

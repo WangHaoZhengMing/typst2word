@@ -55,7 +55,7 @@ impl WordBlockObjectKind {
             BlockNode::List { .. } => Self::BulletList,
             BlockNode::Enum { .. } => Self::DecimalEnum,
             BlockNode::Terms { .. } => Self::TermsList,
-            BlockNode::Table(_) => Self::Table,
+            BlockNode::Container(_) | BlockNode::Table(_) => Self::Table,
             BlockNode::Quote { .. } => Self::Quote,
             BlockNode::CodeBlock { fill, stroke, .. } => Self::CodeBlock {
                 is_table_backed: fill.is_some() || stroke.is_some(),

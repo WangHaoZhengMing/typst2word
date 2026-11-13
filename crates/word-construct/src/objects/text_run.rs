@@ -58,13 +58,16 @@ pub enum RunFontSizeConstruct {
 }
 
 /// Solved Word construct for a `<w:r>` text run.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TextRunConstruct<'a> {
     pub font_family: Option<&'a str>,
     pub east_asia_hint: EastAsiaHintPolicy,
     pub font_size: RunFontSizeConstruct,
     pub char_spacing_dxa: Option<i32>,
+    pub position_half_pts: Option<i32>,
     pub border_sz_eighths_pt: Option<u32>,
+    pub text_outline: Option<&'a ir::StrokeIr>,
+    pub locale: Option<&'a ir::LocaleIr>,
 }
 
 impl<'a> TextRunConstruct<'a> {
@@ -124,15 +127,19 @@ impl<'a> TextRunConstruct<'a> {
             } => Some(char_spacing_dxa),
             _ => None,
         };
-        let char_spacing_dxa = match (base_spacing, extra_char_spacing_dxa) {
-            (Some(b), Some(e)) => {
-                let sum = b + e;
-                (sum != 0).then_some(sum)
-            }
-            (None, Some(e)) => (e != 0).then_some(e),
-            (Some(b), None) => Some(b),
-            (None, None) => None,
-        };
+        let tracking_dxa = run
+            .tracking_pt
+            .map(|pt| (pt * 20.0).round() as i32)
+            .filter(|&d| d != 0);
+        let spacing_sum = base_spacing.unwrap_or(0)
+            + tracking_dxa.unwrap_or(0)
+            + extra_char_spacing_dxa.unwrap_or(0);
+        let char_spacing_dxa = (spacing_sum != 0).then_some(spacing_sum);
+
+        let position_half_pts = run
+            .baseline_shift_pt
+            .map(|pt| (pt * 2.0).round() as i32)
+            .filter(|&hp| hp != 0);
 
         let border_sz_eighths_pt = run
             .border
@@ -154,7 +161,10 @@ impl<'a> TextRunConstruct<'a> {
             east_asia_hint,
             font_size,
             char_spacing_dxa,
+            position_half_pts,
             border_sz_eighths_pt,
+            text_outline: run.text_outline.as_ref(),
+            locale: run.locale.as_ref(),
         }
     }
 }

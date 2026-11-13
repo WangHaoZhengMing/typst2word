@@ -65,6 +65,7 @@ pub struct ParagraphConstruct {
     pub right_tab_stop_dxa: Option<i64>,
     pub keep_with_next: bool,
     pub keep_lines: bool,
+    pub rtl: bool,
     pub mark_rpr_sz_half_pt: Option<u32>,
     pub needs_zwsp_for_inline_eq: bool,
 }
@@ -98,6 +99,7 @@ impl ParagraphConstruct {
             right_tab_stop_dxa,
             keep_with_next: keep_with_next_override || style.sticky,
             keep_lines: !style.breakable,
+            rtl: style.dir == Some(ir::TextDirIr::Rtl),
             mark_rpr_sz_half_pt: paragraph_mark_rpr_sz_half_pt(content),
             needs_zwsp_for_inline_eq: is_only_inline_equation(content),
         }
@@ -126,12 +128,9 @@ impl ParagraphConstruct {
                 && next_sz <= 14.5
                 && (next_sz - cur_sz).abs() >= 0.5
                 && !matches!(
-                    style.pdf_metrics,
-                    ir::ParagraphPdfMetricsIr::Measured {
-                        par_spacing_pt,
-                        par_leading_pt,
-                        ..
-                    } if (par_spacing_pt - par_leading_pt).abs() < 0.1
+                    (style.resolved_par_spacing_pt, style.resolved_par_leading_pt),
+                    (Some(par_spacing_pt), Some(par_leading_pt))
+                        if (par_spacing_pt - par_leading_pt).abs() < 0.1
                 )
             {
                 let max_sz = cur_sz.max(next_sz);

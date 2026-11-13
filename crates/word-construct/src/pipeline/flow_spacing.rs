@@ -1,60 +1,75 @@
 //! Pass 3 (`WordPipelinePassKind::InterBlockFlowAndSpacing`):
-//! Resolves `ParagraphPdfMetricsIr` and raw `FlowMeasureIr` (`BlockPdfSpanIr` + `NextBlockMeasureIr`)
-//! into concrete `ParagraphStyleIr::space_after_pt` using [`crate::WordParagraphConstruct`].
+//! Resolves semantic `ParagraphStyleIr` fields and read-only `NodeReferenceLayout`
+//! (`BlockLayoutSpanIr` + `NextBlockLayoutMeasureIr`) into concrete `ParagraphStyleIr::space_after_pt`
+//! using [`crate::WordParagraphConstruct`].
 
 use ir::{
-    BlockNode, BlockPdfSpanIr, DocumentIr, NextBlockKindIr, NextBlockMeasureIr,
-    ParagraphPdfMetricsIr, ParagraphStyleIr, visit_document_block_lists_mut,
+    BlockLayoutSpanIr, BlockNode, DocumentIr, NextBlockKindIr, NextBlockLayoutMeasureIr,
+    NodeReferenceLayout, ParagraphStyleIr, visit_document_block_lists_mut,
 };
 
 use crate::{InterBlockGapAction, NextBlockSpacingContext, WordParagraphConstruct};
 
 /// Run Pass 3 (`InterBlockFlowAndSpacing`) across all paragraphs in `doc`.
 pub fn run_flow_spacing_pass(doc: &mut DocumentIr) {
+    let ref_layout = doc.reference_layout.clone();
     visit_document_block_lists_mut(doc, &mut |blocks| {
         for block in blocks.iter_mut() {
-            if let BlockNode::Paragraph { style, .. } = block {
-                resolve_paragraph_style_spacing(style);
+            if let BlockNode::Paragraph { id, style, .. } = block {
+                let node_layout = (!id.is_unset())
+                    .then(|| ref_layout.get(id))
+                    .flatten();
+                resolve_paragraph_style_spacing(style, node_layout);
             }
         }
     });
 }
 
-/// Resolve a single paragraph's `space_after_pt` from its `pdf_metrics` and raw `flow_measure`.
-pub fn resolve_paragraph_style_spacing(style: &mut ParagraphStyleIr) {
+/// Resolve a single paragraph's `space_after_pt` from its semantic `StyleChain` properties
+/// and optional read-only [`NodeReferenceLayout`].
+pub fn resolve_paragraph_style_spacing(
+    style: &mut ParagraphStyleIr,
+    node_layout: Option<&NodeReferenceLayout>,
+) {
+    let flow = node_layout.and_then(|l| l.flow.as_ref());
+
     // 1. Resolve initial paragraph space_after from Typst `par.spacing` & `par.leading`.
-    if let ParagraphPdfMetricsIr::Measured {
-        ends_with_explicit_linebreak,
-        base_font_pt,
-        default_font_pt,
-        par_spacing_pt,
-        par_leading_pt,
-        in_multi_block_group_tail,
-    } = style.pdf_metrics
-    {
+    if let (
+        Some(base_font_pt),
+        Some(default_font_pt),
+        Some(par_spacing_pt),
+        Some(par_leading_pt),
+    ) = (
+        style.resolved_font_size_pt,
+        style.resolved_default_font_size_pt,
+        style.resolved_par_spacing_pt,
+        style.resolved_par_leading_pt,
+    ) {
         let mut sa = WordParagraphConstruct::solve_initial_space_after_pt(
-            ends_with_explicit_linebreak,
+            style.ends_with_explicit_linebreak,
             base_font_pt,
             default_font_pt,
             par_spacing_pt,
             par_leading_pt,
         );
+        let in_multi_block_group_tail = flow.is_some_and(|f| f.in_multi_block_group_tail);
         if in_multi_block_group_tail && (1.5..6.0).contains(&sa) {
             sa = 6.05;
         }
         style.space_after_pt = sa;
     }
 
-    // 2. Resolve direct block-to-block gap from raw `flow_measure.self_span` and `flow_measure.next`.
-    if let Some(next) = style.flow_measure.next {
-        if let ParagraphPdfMetricsIr::Measured {
-            par_spacing_pt,
-            par_leading_pt,
-            ..
-        } = style.pdf_metrics
+    let Some(flow) = flow else {
+        return;
+    };
+
+    // 2. Resolve direct block-to-block gap from `flow.self_span` and `flow.next`.
+    if let Some(next) = flow.next {
+        if let (Some(par_spacing_pt), Some(par_leading_pt)) =
+            (style.resolved_par_spacing_pt, style.resolved_par_leading_pt)
             && (par_spacing_pt - par_leading_pt).abs() < 0.1
             && let (Some((pa, bottom_a)), Some((pb, top_b))) = (
-                style.flow_measure.self_span.end_page_and_bottom_y(),
+                flow.self_span.end_page_and_bottom_y(),
                 next.span.start_page_and_top_y(),
             )
             && pa == pb
@@ -65,24 +80,19 @@ pub fn resolve_paragraph_style_spacing(style: &mut ParagraphStyleIr) {
                 style.space_after_pt = (gap_pt - par_leading_pt).max(0.0);
             }
         }
-        apply_direct_paragraph_transition(
-            &mut style.space_after_pt,
-            style.flow_measure.self_span,
-            next,
-        );
+        apply_direct_paragraph_transition(&mut style.space_after_pt, flow.self_span, next);
     }
 
     // 3. Resolve any additional trailing transitions (e.g. list item sibling gaps or outer block gaps).
-    let transitions = std::mem::take(&mut style.flow_measure.trailing_transitions);
-    for (span_a, measure) in transitions {
+    for &(span_a, measure) in &flow.trailing_transitions {
         apply_trailing_transition(&mut style.space_after_pt, span_a, measure);
     }
 }
 
 fn apply_direct_paragraph_transition(
     space_after_pt: &mut f64,
-    span_a: BlockPdfSpanIr,
-    next: NextBlockMeasureIr,
+    span_a: BlockLayoutSpanIr,
+    next: NextBlockLayoutMeasureIr,
 ) {
     let (Some((page_a, bottom_a)), Some((page_b, top_b))) = (
         span_a.end_page_and_bottom_y(),
@@ -90,20 +100,6 @@ fn apply_direct_paragraph_transition(
     ) else {
         return;
     };
-
-    if page_b == page_a + 1
-        && bottom_a > 100.0
-        && bottom_a < 560.0
-        && top_b < 110.0
-        && matches!(
-            next.kind,
-            NextBlockKindIr::Paragraph | NextBlockKindIr::HeadingFollowedByParagraph
-        )
-    {
-        let extra_pt = (755.0 - bottom_a).max(0.0);
-        *space_after_pt += extra_pt;
-        return;
-    }
 
     if page_a != page_b || top_b < bottom_a - 2.0 {
         return;
@@ -143,8 +139,8 @@ fn apply_direct_paragraph_transition(
 
 fn apply_trailing_transition(
     space_after_pt: &mut f64,
-    span_a: BlockPdfSpanIr,
-    measure: NextBlockMeasureIr,
+    span_a: BlockLayoutSpanIr,
+    measure: NextBlockLayoutMeasureIr,
 ) {
     let (Some((pa, bottom_a)), Some((pb, top_b))) = (
         span_a.end_page_and_bottom_y(),
