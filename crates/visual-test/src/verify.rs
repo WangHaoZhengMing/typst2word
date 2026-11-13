@@ -11,6 +11,7 @@ pub fn block_kind_name(b: &BlockNode) -> &'static str {
         BlockNode::List { .. } => "List",
         BlockNode::Enum { .. } => "Enum",
         BlockNode::Terms { .. } => "Terms",
+        BlockNode::Container(_) => "Container",
         BlockNode::Table(_) => "Table",
         BlockNode::Quote { .. } => "Quote",
         BlockNode::CodeBlock { .. } => "CodeBlock",

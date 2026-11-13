@@ -2,11 +2,11 @@ use std::env;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use typst2word::convert_typst_file_to_docx;
+use typst2word::convert_typst_file_to_docx_with_inputs;
 
 fn print_usage() {
     eprintln!(
-        "Usage: typst2word <input.typ> [output.docx] [--dump-ir <ir.json>]\n\
+        "Usage: typst2word <input.typ> [output.docx] [--dump-ir <ir.json>] [--input key=value]\n\
          \n\
          Converts a Typst document (.typ) into Microsoft Word (.docx) while\n\
          preserving both visual layout and semantic structure (headings, lists,\n\
@@ -25,6 +25,7 @@ fn main() -> ExitCode {
     let mut input_path: Option<PathBuf> = None;
     let mut output_path: Option<PathBuf> = None;
     let mut dump_ir_path: Option<PathBuf> = None;
+    let mut sys_inputs: Vec<(String, String)> = Vec::new();
 
     let mut i = 0;
     while i < args.len() {
@@ -35,6 +36,20 @@ fn main() -> ExitCode {
                     i += 2;
                 } else {
                     eprintln!("Error: --dump-ir requires a file path");
+                    return ExitCode::FAILURE;
+                }
+            }
+            "--input" => {
+                if i + 1 < args.len() {
+                    let kv = &args[i + 1];
+                    let Some((k, v)) = kv.split_once('=') else {
+                        eprintln!("Error: --input requires key=value (got '{kv}')");
+                        return ExitCode::FAILURE;
+                    };
+                    sys_inputs.push((k.to_string(), v.to_string()));
+                    i += 2;
+                } else {
+                    eprintln!("Error: --input requires key=value");
                     return ExitCode::FAILURE;
                 }
             }
@@ -65,7 +80,7 @@ fn main() -> ExitCode {
 
     let output = output_path.unwrap_or_else(|| input.with_extension("docx"));
 
-    match convert_typst_file_to_docx(&input, &output) {
+    match convert_typst_file_to_docx_with_inputs(&input, &output, sys_inputs) {
         Ok(ir) => {
             if let Some(ir_path) = dump_ir_path {
                 match serde_json::to_string_pretty(&ir) {

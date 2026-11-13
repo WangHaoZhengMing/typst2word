@@ -31,14 +31,31 @@ use word_construct::build_word_document;
 
 /// Compile a Typst `.typ` file and extract its pure `DocumentIr` (never mutated by Word passes).
 pub fn compile_file_to_ir(input_path: &Path) -> Result<DocumentIr, String> {
-    let world = TypstWorld::from_file(input_path)?;
+    compile_file_to_ir_with_inputs(input_path, std::iter::empty::<(&str, &str)>())
+}
+
+/// Compile a Typst `.typ` file with `sys.inputs` key-value pairs and extract its pure `DocumentIr`.
+pub fn compile_file_to_ir_with_inputs<K: AsRef<str>, V: AsRef<str>>(
+    input_path: &Path,
+    inputs: impl IntoIterator<Item = (K, V)>,
+) -> Result<DocumentIr, String> {
+    let world = TypstWorld::from_file(input_path)?.with_string_inputs(inputs);
     let compiled = compile_world(&world)?;
     Ok(extract_document_ir(&compiled, &world))
 }
 
 /// Compile an in-memory Typst source string and extract its pure `DocumentIr` (never mutated by Word passes).
 pub fn compile_str_to_ir(source: &str, root_dir: Option<&Path>) -> Result<DocumentIr, String> {
-    let world = TypstWorld::from_str(source, root_dir.map(|p| p.to_path_buf()));
+    compile_str_to_ir_with_inputs(source, root_dir, std::iter::empty::<(&str, &str)>())
+}
+
+/// Compile an in-memory Typst source string with `sys.inputs` key-value pairs and extract its pure `DocumentIr`.
+pub fn compile_str_to_ir_with_inputs<K: AsRef<str>, V: AsRef<str>>(
+    source: &str,
+    root_dir: Option<&Path>,
+    inputs: impl IntoIterator<Item = (K, V)>,
+) -> Result<DocumentIr, String> {
+    let world = TypstWorld::from_str(source, root_dir.map(|p| p.to_path_buf())).with_string_inputs(inputs);
     let compiled = compile_world(&world)?;
     Ok(extract_document_ir(&compiled, &world))
 }
@@ -48,7 +65,20 @@ pub fn convert_typst_file_to_docx(
     input_path: &Path,
     output_path: &Path,
 ) -> Result<DocumentIr, String> {
-    let ir = compile_file_to_ir(input_path)?;
+    convert_typst_file_to_docx_with_inputs(
+        input_path,
+        output_path,
+        std::iter::empty::<(&str, &str)>(),
+    )
+}
+
+/// Convert a Typst `.typ` file with `sys.inputs` directly to a `.docx` file on disk.
+pub fn convert_typst_file_to_docx_with_inputs<K: AsRef<str>, V: AsRef<str>>(
+    input_path: &Path,
+    output_path: &Path,
+    inputs: impl IntoIterator<Item = (K, V)>,
+) -> Result<DocumentIr, String> {
+    let ir = compile_file_to_ir_with_inputs(input_path, inputs)?;
     let word_doc = build_word_document(&ir);
     write_docx_to_path(&word_doc, output_path)?;
     Ok(ir)
