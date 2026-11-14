@@ -425,7 +425,15 @@ impl<'a> ExtractorContext<'a> {
             return;
         }
 
-        // 9. Recurse into children for any other container/tag.
+        // 9. Materialized inline `#box(...)` (`BoxElem`).
+        if let Some(box_elem) = elem.to_packed::<typst::layout::BoxElem>() {
+            self.extract_inline_box_element(
+                box_elem, loc, pos, children, out, state, last_y, last_x_end,
+            );
+            return;
+        }
+
+        // 10. Recurse into children for any other container/tag.
         self.extract_inlines_from_nodes(children, out, state, last_y, last_x_end);
     }
 

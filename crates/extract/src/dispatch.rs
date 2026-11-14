@@ -632,6 +632,7 @@ impl<'a> ExtractorContext<'a> {
             body: Vec::new(),
             align: HAlignIr::Left,
             placed_offset_pt: None,
+            baseline_shift_pt: None,
         }));
 
         for raw_ch in children {
@@ -722,6 +723,7 @@ impl<'a> ExtractorContext<'a> {
                         body: sub_blocks,
                         align: HAlignIr::Left,
                         placed_offset_pt: Some((cpos.x.to_pt(), cpos.y.to_pt())),
+                        baseline_shift_pt: None,
                     }));
                 }
                 _ => {}

@@ -197,6 +197,7 @@ impl<'a> ExtractorContext<'a> {
                     body,
                     align: inherited_align,
                     placed_offset_pt: None,
+                    baseline_shift_pt: None,
                 });
             }
         }
@@ -371,6 +372,7 @@ impl<'a> ExtractorContext<'a> {
             body: body_blocks,
             align: inherited_align,
             placed_offset_pt: None,
+            baseline_shift_pt: None,
         })
     }
 }

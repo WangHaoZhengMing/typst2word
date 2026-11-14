@@ -356,7 +356,7 @@ impl<'a> ExtractorContext<'a> {
     pub(crate) fn is_stray_inline_node(node: &TreeNode) -> bool {
         match node {
             TreeNode::Text { .. } | TreeNode::Link { .. } => true,
-            TreeNode::Element { elem, .. } => {
+            TreeNode::Element { elem, children, .. } => {
                 elem.is::<typst::introspection::CounterDisplayElem>() || elem.is::<StrongElem>()
                     || elem.is::<EmphElem>()
                     || elem.is::<UnderlineElem>()
@@ -384,6 +384,8 @@ impl<'a> ExtractorContext<'a> {
                             .unwrap()
                             .block
                             .get(StyleChain::default()))
+                    || (elem.is::<typst::layout::BoxElem>()
+                        && !Self::contains_block_elements(children))
                     || elem.is::<typst::text::LinebreakElem>()
                     || elem.is::<typst::layout::HElem>()
             }
@@ -417,9 +419,16 @@ impl<'a> ExtractorContext<'a> {
         let mut hanging_indent_pt = 0.0;
         let mut left_indent_pt = 0.0;
         let mut right_indent_pt = 0.0;
-        let mut line_spacing_pt = None;
 
-        let (chain_justify, chain_linebreaks, chain_font_pt, chain_leading, chain_locale, chain_dir) = {
+        let (
+            chain_justify,
+            chain_linebreaks,
+            chain_font_pt,
+            chain_leading,
+            chain_spacing,
+            chain_locale,
+            chain_dir,
+        ) = {
             let chain = self.scoped_style_chain(None);
             let justify = chain.get(ParElem::justify);
             let linebreaks = match chain.get(ParElem::linebreaks) {
@@ -434,6 +443,7 @@ impl<'a> ExtractorContext<'a> {
             let font_pt =
                 Self::resolve_length_pt(chain.get(typst::text::TextElem::size).0, 11.0);
             let leading = chain.get(ParElem::leading);
+            let spacing = chain.get(ParElem::spacing);
             let lang = chain.get(typst::text::TextElem::lang);
             let region = chain.get(typst::text::TextElem::region);
             let locale = (lang.as_str() != "en" || region.is_some()).then(|| {
@@ -441,7 +451,7 @@ impl<'a> ExtractorContext<'a> {
             });
             let dir = (chain.resolve(typst::text::TextElem::dir) == typst::layout::Dir::RTL)
                 .then_some(ir::TextDirIr::Rtl);
-            (justify, linebreaks, font_pt, leading, locale, dir)
+            (justify, linebreaks, font_pt, leading, spacing, locale, dir)
         };
 
         if line_spans.len() >= 2 {
@@ -495,7 +505,6 @@ impl<'a> ExtractorContext<'a> {
                     }
                 }
             }
-            line_spacing_pt = Some(Self::resolve_length_pt(chain_leading, chain_font_pt));
         }
 
         let mut inlines = Vec::new();
@@ -512,31 +521,62 @@ impl<'a> ExtractorContext<'a> {
             &mut last_y,
             &mut last_x_end,
         );
-        let id = if !inlines.is_empty() {
-            self.alloc_node_with_fragments(
+        let base_font_pt = inlines
+            .iter()
+            .find_map(|inl| match inl {
+                ir::InlineNode::Text(r) => r.font_size_pt,
+                ir::InlineNode::EquationInline(eq) => eq.font_size_pt,
+                _ => None,
+            })
+            .unwrap_or(chain_font_pt)
+            .max(6.0);
+        let par_em_pt = if base_font_pt >= 15.0 {
+            chain_font_pt
+        } else {
+            base_font_pt
+        };
+        // Always populate `line_spacing_pt` and resolved paragraph metrics — even for
+        // single-line stray paragraphs (e.g. inside `#box`, list items, or table cells) —
+        // so `word-construct` computes a calibrated `w:line` instead of falling back to
+        // Word's oversized uncalibrated CJK single-line height (`1.82x` on `PingFang SC`).
+        let line_leading_pt = Self::resolve_length_pt(chain_leading, par_em_pt);
+        let default_leading_pt = Self::resolve_length_pt(chain_leading, chain_font_pt);
+        let default_spacing_pt = Self::resolve_length_pt(chain_spacing, chain_font_pt);
+        let (id, para_lines) = if !inlines.is_empty() {
+            let id = self.alloc_node_with_fragments(
                 Span::detached(),
                 None,
                 Some(SemanticRoleIr::Paragraph),
                 stray,
-            )
+            );
+            let para_lines = Self::collect_paragraph_line_metrics(stray, base_font_pt);
+            self.record_inline_shape_line_contexts(stray, &inlines, base_font_pt);
+            (id, para_lines)
         } else {
-            ir::NodeId::UNSET
+            (ir::NodeId::UNSET, None)
         };
         stray.clear();
         if !inlines.is_empty() {
+            if let Some(pl) = para_lines {
+                self.reference_layout.entry(id).or_default().paragraph_lines = Some(pl);
+            }
             self.report.paragraphs_count += 1;
             let mut style = ParagraphStyleIr::default()
                 .with_align(eff_align)
-                .with_spacing(0.0, 2.0);
+                .with_spacing(0.0, (default_spacing_pt - default_leading_pt).max(0.0));
             style.first_line_indent_pt = first_line_indent_pt;
             style.hanging_indent_pt = hanging_indent_pt;
             style.left_indent_pt = left_indent_pt;
             style.right_indent_pt = right_indent_pt;
-            style.line_spacing_pt = line_spacing_pt;
+            style.line_spacing_pt = Some(line_leading_pt);
             style.justify = eff_align == HAlignIr::Justify;
             style.linebreaks = chain_linebreaks;
             style.ends_with_explicit_linebreak =
                 matches!(inlines.last(), Some(ir::InlineNode::LineBreak));
+            style.resolved_font_size_pt = Some(base_font_pt);
+            style.resolved_default_font_size_pt = Some(chain_font_pt);
+            style.resolved_par_spacing_pt = Some(default_spacing_pt);
+            style.resolved_par_leading_pt = Some(default_leading_pt);
             style.locale = chain_locale;
             style.dir = chain_dir;
             blocks.push(BlockNode::Paragraph {

@@ -128,6 +128,7 @@ impl<'a> ExtractorContext<'a> {
             body,
             align,
             placed_offset_pt: None,
+            baseline_shift_pt: None,
         })
     }
 }

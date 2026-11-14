@@ -29,8 +29,9 @@ use typst::{World, WorldExt};
 use compiler::compile::CompiledTypstDocument;
 use compiler::world::TypstWorld;
 use ir::{
-    BlockLayoutSpanIr, BlockNode, ConversionReport, DocumentIr, HAlignIr, LayoutFragmentIr, NodeId,
-    NodeOrigin, NodeReferenceLayout, PageSetupIr, SemanticRoleIr, normalize_document_ir,
+    BlockLayoutSpanIr, BlockNode, ConversionReport, DocumentIr, FontFaceMetricsIr, HAlignIr,
+    LayoutFragmentIr, NodeId, NodeOrigin, NodeReferenceLayout, PageSetupIr, SemanticRoleIr,
+    normalize_document_ir,
 };
 
 /// Extract a complete, structurally normalized `DocumentIr` from a `CompiledTypstDocument` and `TypstWorld`.
@@ -454,17 +455,128 @@ impl<'a> ExtractorContext<'a> {
             (PageSetupIr::default(), Vec::new())
         };
         let anchors = self.extract_page_line_anchors();
+        let font_metrics = self.collect_document_font_metrics();
 
         let mut doc = DocumentIr::default();
         doc.sections = sections;
         doc.metadata = metadata;
         doc.page_setup = page_setup;
         doc.blocks = blocks;
+        doc.font_metrics = font_metrics;
         doc.origins = std::mem::take(&mut self.origins);
         doc.reference_layout = std::mem::take(&mut self.reference_layout);
         doc.report = self.report.clone();
         doc.anchors = anchors;
         doc
+    }
+
+    /// Scan all laid-out `FrameItem::Text` items across the compiled document and extract exact
+    /// OpenType/TrueType binary metrics (`head`, `hhea`, `OS/2`, `GSUB`, `post`) for every realized
+    /// font family. When multiple faces of a family appear (e.g. Bold + Regular), prefers the
+    /// Regular upright face so paragraph line-box metrics reflect body text.
+    fn collect_document_font_metrics(&self) -> BTreeMap<String, FontFaceMetricsIr> {
+        let mut chosen_fonts: BTreeMap<String, (bool, typst::text::Font)> = BTreeMap::new();
+        for page in self.compiled.document.pages() {
+            Self::scan_frame_fonts(&page.frame, &mut chosen_fonts);
+        }
+
+        let global_res = compiler::world::GlobalTypstResources::get();
+        let mut out = BTreeMap::new();
+        for (family, (_, font)) in chosen_fonts {
+            if let Some(metrics) =
+                Self::parse_font_face_metrics(&font, global_res.is_system_font_family(&family))
+            {
+                out.insert(family, metrics);
+            }
+        }
+        out
+    }
+
+    fn scan_frame_fonts(
+        frame: &typst::layout::Frame,
+        chosen: &mut BTreeMap<String, (bool, typst::text::Font)>,
+    ) {
+        for (_, item) in frame.items() {
+            match item {
+                typst::layout::FrameItem::Text(text) => {
+                    let info = text.font.info();
+                    let family = info.family.clone();
+                    let is_regular_upright = info.variant.weight == typst::text::FontWeight::REGULAR
+                        && info.variant.style == typst::text::FontStyle::Normal;
+                    match chosen.get(&family) {
+                        None => {
+                            chosen.insert(family, (is_regular_upright, text.font.font().clone()));
+                        }
+                        Some((already_regular, _)) if !*already_regular && is_regular_upright => {
+                            chosen.insert(family, (true, text.font.font().clone()));
+                        }
+                        _ => {}
+                    }
+                }
+                typst::layout::FrameItem::Group(grp) => {
+                    Self::scan_frame_fonts(&grp.frame, chosen);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Parse OpenType/TrueType binary tables (`head`, `hhea`, `OS/2`, `GSUB`, `post`) from `font`.
+    fn parse_font_face_metrics(
+        font: &typst::text::Font,
+        is_system_installed: bool,
+    ) -> Option<FontFaceMetricsIr> {
+        let face = ttf_parser::Face::parse(font.data().as_slice(), font.index()).ok()?;
+        let upem = face.units_per_em().max(1);
+        let hhea_ascender = face.ascender();
+        let hhea_descender = face.descender();
+        let hhea_line_gap = face.line_gap();
+        let s_cap_height = face.capital_height();
+        let s_typo_ascender = face.tables().os2.map(|t| t.typographic_ascender());
+        let s_typo_descender = face.tables().os2.map(|t| t.typographic_descender());
+
+        // Read unsigned `usWinAscent`, `usWinDescent`, and `ulCodePageRange1` directly from raw
+        // `OS/2` bytes (`ttf-parser` 0.25's `windows_descender()` negates `usWinDescent` as `i16`
+        // and does not expose `ulCodePageRange1` bits `17..=20` for CJK codepages).
+        let mut us_win_ascent = None;
+        let mut us_win_descent = None;
+        let mut has_cjk_codepage = false;
+        if let Some(os2) = face.raw_face().table(ttf_parser::Tag::from_bytes(b"OS/2")) {
+            if os2.len() >= 78 {
+                us_win_ascent = Some(u16::from_be_bytes([os2[74], os2[75]]));
+                us_win_descent = Some(u16::from_be_bytes([os2[76], os2[77]]));
+            }
+            if os2.len() >= 86 {
+                let version = u16::from_be_bytes([os2[0], os2[1]]);
+                if version >= 1 {
+                    let cp1 = u32::from_be_bytes([os2[78], os2[79], os2[80], os2[81]]);
+                    // Bits 17..=20: JIS/Japan (CP932), Chinese Simplified (CP936),
+                    // Korean Wansung (CP949), Chinese Traditional (CP950).
+                    has_cjk_codepage = (cp1 & 0x001E_0000) != 0;
+                }
+            }
+        }
+
+        let has_gsub_hani = face
+            .tables()
+            .gsub
+            .is_some_and(|g| g.scripts.find(ttf_parser::Tag::from_bytes(b"hani")).is_some());
+
+        Some(FontFaceMetricsIr {
+            upem,
+            hhea_ascender,
+            hhea_descender,
+            hhea_line_gap,
+            s_cap_height,
+            s_typo_ascender,
+            s_typo_descender,
+            us_win_ascent,
+            us_win_descent,
+            has_cjk_codepage,
+            has_gsub_hani,
+            is_monospaced: face.is_monospaced(),
+            is_system_installed,
+        })
     }
 }
 

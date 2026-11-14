@@ -8,8 +8,9 @@ use typst::model::{Linebreaks, ParElem};
 use crate::ExtractorContext;
 use crate::frame_tree::TreeNode;
 use ir::{
-    BlockNode, HAlignIr, InlineNode, LinebreaksIr, LocaleIr, ParagraphStyleIr, SemanticRoleIr,
-    TextDirIr,
+    AdjacentTextLineIr, BlockNode, HAlignIr, InlineBoxLineContextIr, InlineNode, LinebreaksIr,
+    LocaleIr, NodeId, ParagraphLineMetricsIr, ParagraphStyleIr, SemanticRoleIr, TextDirIr,
+    is_cjk_char,
 };
 
 impl<'a> ExtractorContext<'a> {
@@ -221,6 +222,10 @@ impl<'a> ExtractorContext<'a> {
             Some(SemanticRoleIr::Paragraph),
             children,
         );
+        if let Some(para_lines) = Self::collect_paragraph_line_metrics(children, base_font_pt) {
+            self.reference_layout.entry(id).or_default().paragraph_lines = Some(para_lines);
+        }
+        self.record_inline_shape_line_contexts(children, &content, base_font_pt);
         self.report.paragraphs_count += 1;
         blocks.push(BlockNode::Paragraph {
             id,
@@ -267,13 +272,40 @@ impl<'a> ExtractorContext<'a> {
                         lines.push((y, x));
                     }
                 }
-                TreeNode::Group { pos, children, .. } => {
-                    Self::collect_line_left_edges(children, offset + *pos, lines);
+                TreeNode::Group {
+                    group,
+                    pos,
+                    children,
+                } => {
+                    // For a bordered/shaded inline `#box(...)` group (which carries its own
+                    // background `Shape`), record the box's outer frame left edge rather than
+                    // descending into its `inset`-padded inner text; otherwise an inline `#box`
+                    // with `inset: 12pt` on line 2 would falsely look like `hanging_indent = 12pt`.
+                    if Self::group_has_direct_bg_shape(children)
+                        && group.frame.size().x.to_pt() > 0.0
+                    {
+                        let x = (offset.x + pos.x).to_pt();
+                        let top_y = (offset.y + pos.y).to_pt();
+                        let h_pt = group.frame.size().y.to_pt();
+                        let bot_y = top_y + h_pt;
+                        let approx_base_y = top_y + h_pt * 0.8;
+                        if let Some(existing) = lines
+                            .iter_mut()
+                            .find(|(ly, _)| *ly >= top_y - 1.5 && *ly <= bot_y + 1.5)
+                        {
+                            existing.1 = existing.1.min(x);
+                        } else {
+                            lines.push((approx_base_y, x));
+                        }
+                    } else {
+                        Self::collect_line_left_edges(children, offset + *pos, lines);
+                    }
                 }
                 TreeNode::Element { elem, children, .. } => {
                     if elem.is::<typst::math::EquationElem>()
                         || elem.is::<typst::text::SubElem>()
                         || elem.is::<typst::text::SuperElem>()
+                        || Self::is_native_shape_elem(elem)
                     {
                         continue;
                     }
@@ -307,13 +339,38 @@ impl<'a> ExtractorContext<'a> {
                         lines.push((y, x, x_end));
                     }
                 }
-                TreeNode::Group { pos, children, .. } => {
-                    Self::collect_line_x_spans(children, offset + *pos, lines);
+                TreeNode::Group {
+                    group,
+                    pos,
+                    children,
+                } => {
+                    if Self::group_has_direct_bg_shape(children)
+                        && group.frame.size().x.to_pt() > 0.0
+                    {
+                        let x = (offset.x + pos.x).to_pt();
+                        let x_end = x + group.frame.size().x.to_pt();
+                        let top_y = (offset.y + pos.y).to_pt();
+                        let h_pt = group.frame.size().y.to_pt();
+                        let bot_y = top_y + h_pt;
+                        let approx_base_y = top_y + h_pt * 0.8;
+                        if let Some(existing) = lines
+                            .iter_mut()
+                            .find(|(ly, _, _)| *ly >= top_y - 1.5 && *ly <= bot_y + 1.5)
+                        {
+                            existing.1 = existing.1.min(x);
+                            existing.2 = existing.2.max(x_end);
+                        } else {
+                            lines.push((approx_base_y, x, x_end));
+                        }
+                    } else {
+                        Self::collect_line_x_spans(children, offset + *pos, lines);
+                    }
                 }
                 TreeNode::Element { elem, children, .. } => {
                     if elem.is::<typst::math::EquationElem>()
                         || elem.is::<typst::text::SubElem>()
                         || elem.is::<typst::text::SuperElem>()
+                        || Self::is_native_shape_elem(elem)
                     {
                         continue;
                     }
@@ -450,5 +507,438 @@ impl<'a> ExtractorContext<'a> {
         let mut line_starts: Vec<(f64, f64)> = Vec::new();
         Self::collect_line_left_edges(nodes, Point::zero(), &mut line_starts);
         line_starts.len() >= 2
+    }
+
+    pub(crate) fn group_has_direct_bg_shape(children: &[TreeNode]) -> bool {
+        children.iter().any(|c| match c {
+            TreeNode::Shape { .. } => true,
+            TreeNode::Element {
+                elem,
+                children: achildren,
+                ..
+            } if elem.is::<typst::pdf::ArtifactElem>() => {
+                achildren.iter().any(|ac| matches!(ac, TreeNode::Shape { .. }))
+            }
+            _ => false,
+        })
+    }
+
+    /// Measure laid-out normal-text baseline Y coordinates and compute the uniform baseline step
+    /// ($\Delta y = y_{k+1} - y_k$) for a paragraph in Typst's reference layout.
+    ///
+    /// Excludes sub/superscripts, equations, footnotes, and multi-line/tall inline `#box` interiors
+    /// so tall inline objects never contaminate the paragraph's text line-spacing measurement.
+    pub(crate) fn collect_paragraph_line_metrics(
+        nodes: &[TreeNode],
+        base_font_pt: f64,
+    ) -> Option<ParagraphLineMetricsIr> {
+        let mut raw_lines: Vec<(usize, f64, f64)> = Vec::new();
+        let mut has_tall_inline_object = false;
+        Self::walk_paragraph_baselines(
+            nodes,
+            Point::zero(),
+            base_font_pt,
+            &mut raw_lines,
+            &mut has_tall_inline_object,
+        );
+        if raw_lines.is_empty() {
+            return None;
+        }
+
+        raw_lines.sort_by(|a, b| {
+            a.0.cmp(&b.0)
+                .then_with(|| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal))
+                .then_with(|| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+        });
+
+        // Deduplicate baselines on the same page and column (`|dx| < 200pt`) within 3.0pt tolerance.
+        let mut lines: Vec<(usize, f64, f64)> = Vec::with_capacity(raw_lines.len());
+        for (p, x, y) in raw_lines {
+            if let Some(last) = lines.last_mut()
+                && last.0 == p
+                && (x - last.1).abs() < 200.0
+                && (y - last.2).abs() < 3.0
+            {
+                continue;
+            }
+            lines.push((p, x, y));
+        }
+
+        let line_count = lines.len();
+        let first_baseline_y_pt = lines.first()?.2;
+        let last_baseline_y_pt = lines.last()?.2;
+
+        // Collect same-page, same-column consecutive baseline steps.
+        // When `has_tall_inline_object` is true, cap candidate steps at `2.2 * S` so a line hosting
+        // a tall `#box` / image / display fraction is excluded from the normal text baseline step.
+        let min_step = base_font_pt * 0.80;
+        let max_step = if has_tall_inline_object {
+            base_font_pt * 2.20
+        } else {
+            base_font_pt * 5.00
+        };
+        let mut steps: Vec<f64> = Vec::new();
+        for pair in lines.windows(2) {
+            let (p0, x0, y0) = pair[0];
+            let (p1, x1, y1) = pair[1];
+            if p0 == p1 && (x1 - x0).abs() < 200.0 {
+                let dy = y1 - y0;
+                if dy >= min_step && dy <= max_step {
+                    steps.push(dy);
+                }
+            }
+        }
+        steps.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let uniform_baseline_step_pt = if steps.is_empty() {
+            None
+        } else if has_tall_inline_object {
+            // Prefer lower-quartile normal step when tall inline objects are present.
+            Some(steps[(steps.len() - 1) / 4])
+        } else {
+            Some(steps[steps.len() / 2])
+        };
+
+        Some(ParagraphLineMetricsIr {
+            line_count,
+            first_baseline_y_pt,
+            last_baseline_y_pt,
+            uniform_baseline_step_pt,
+            has_tall_inline_object,
+        })
+    }
+
+    fn walk_paragraph_baselines(
+        nodes: &[TreeNode],
+        offset: Point,
+        base_font_pt: f64,
+        lines: &mut Vec<(usize, f64, f64)>,
+        has_tall_inline_object: &mut bool,
+    ) {
+        for node in nodes {
+            match node {
+                TreeNode::Text {
+                    text,
+                    pos,
+                    baseline_shift_pt,
+                    ..
+                } => {
+                    if text.text.trim().is_empty() {
+                        continue;
+                    }
+                    let abs_x = (offset.x + pos.x).to_pt();
+                    let raw_y = (offset.y + pos.y).to_pt() + baseline_shift_pt.unwrap_or(0.0);
+                    let (page_idx, local_y, x_pt) =
+                        crate::frame_tree::decode_page_and_local_y(raw_y, abs_x);
+                    lines.push((page_idx, x_pt, local_y));
+                }
+                TreeNode::Shape { shape, .. } => {
+                    if shape.geometry.bbox(None).size().y.to_pt().abs() > base_font_pt * 1.35 {
+                        *has_tall_inline_object = true;
+                    }
+                }
+                TreeNode::Image { size, .. } => {
+                    if size.y.to_pt().abs() > base_font_pt * 1.35 {
+                        *has_tall_inline_object = true;
+                    }
+                }
+                TreeNode::Group {
+                    group,
+                    pos,
+                    children,
+                } => {
+                    let gh = group.frame.size().y.to_pt().abs();
+                    if gh > base_font_pt * 1.35
+                        && (Self::group_has_direct_bg_shape(children)
+                            || Self::is_cetz_group_nodes(children))
+                    {
+                        *has_tall_inline_object = true;
+                        continue;
+                    }
+                    Self::walk_paragraph_baselines(
+                        children,
+                        offset + *pos,
+                        base_font_pt,
+                        lines,
+                        has_tall_inline_object,
+                    );
+                }
+                TreeNode::Element { elem, children, .. } => {
+                    if Self::is_page_furniture_elem(elem)
+                        || elem.is::<typst::layout::HideElem>()
+                        || elem.is::<typst::text::SubElem>()
+                        || elem.is::<typst::text::SuperElem>()
+                        || elem.is::<typst::model::FootnoteElem>()
+                    {
+                        continue;
+                    }
+                    if elem.is::<typst::math::EquationElem>() {
+                        let (_, _, _, h) = Self::estimate_nodes_bbox(children);
+                        if h > base_font_pt * 1.35 {
+                            *has_tall_inline_object = true;
+                        }
+                        continue;
+                    }
+                    Self::walk_paragraph_baselines(
+                        children,
+                        offset,
+                        base_font_pt,
+                        lines,
+                        has_tall_inline_object,
+                    );
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Record exact surrounding paragraph-line clearances (`InlineBoxLineContextIr`) for every
+    /// `InlineNode::ShapeInline` inside a paragraph so `word-construct` can compute exact
+    /// `<wp:effectExtent>` clearances without hardcoded constants.
+    pub(crate) fn record_inline_shape_line_contexts(
+        &mut self,
+        nodes: &[TreeNode],
+        inlines: &[InlineNode],
+        base_font_pt: f64,
+    ) {
+        let mut shape_ids = Vec::new();
+        Self::collect_inline_shape_ids(inlines, &mut shape_ids);
+        if shape_ids.is_empty() {
+            return;
+        }
+
+        let mut raw_text_lines = Vec::new();
+        let mut box_frames = Vec::new();
+        self.walk_inline_box_line_env(
+            nodes,
+            Point::zero(),
+            base_font_pt,
+            &mut raw_text_lines,
+            &mut box_frames,
+        );
+
+        raw_text_lines.sort_by(|a, b| {
+            a.0.cmp(&b.0)
+                .then_with(|| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal))
+                .then_with(|| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+        });
+        let mut text_lines: Vec<(usize, f64, f64, Option<String>, f64, bool)> = Vec::new();
+        for item in raw_text_lines {
+            if let Some(last) = text_lines.last_mut()
+                && last.0 == item.0
+                && (item.1 - last.1).abs() < 200.0
+                && (item.2 - last.2).abs() < 3.0
+            {
+                last.5 |= item.5;
+                continue;
+            }
+            text_lines.push(item);
+        }
+
+        let mut used_frames = vec![false; box_frames.len()];
+        for shape_id in shape_ids {
+            let target_loc = self.origins.get(&shape_id).and_then(|o| o.typst_location);
+            let matched_idx = target_loc
+                .and_then(|loc| {
+                    box_frames
+                        .iter()
+                        .enumerate()
+                        .find(|(i, f)| !used_frames[*i] && f.0 == Some(loc))
+                        .map(|(i, _)| i)
+                })
+                .or_else(|| {
+                    box_frames
+                        .iter()
+                        .enumerate()
+                        .find(|(i, _)| !used_frames[*i])
+                        .map(|(i, _)| i)
+                });
+            let Some(frame_idx) = matched_idx else {
+                continue;
+            };
+            used_frames[frame_idx] = true;
+            let (_, page_idx, box_x, box_top_y, box_bot_y) = box_frames[frame_idx];
+
+            let shares_line_with_text = text_lines.iter().any(|&(p, lx, ly, ..)| {
+                p == page_idx
+                    && (lx - box_x).abs() < 250.0
+                    && ly > box_top_y + 0.5
+                    && ly <= box_bot_y + 1.5
+            });
+
+            let prev_line = text_lines
+                .iter()
+                .filter(|&&(p, lx, ly, ..)| {
+                    p == page_idx && (lx - box_x).abs() < 250.0 && ly <= box_top_y + 0.5
+                })
+                .max_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal))
+                .map(|(_, _, ly, fam, sz, is_cjk)| AdjacentTextLineIr {
+                    gap_pt: (box_top_y - *ly).max(0.0),
+                    font_family: fam.clone(),
+                    font_size_pt: *sz,
+                    is_cjk: *is_cjk,
+                });
+
+            let next_line = text_lines
+                .iter()
+                .filter(|&&(p, lx, ly, ..)| {
+                    p == page_idx && (lx - box_x).abs() < 250.0 && ly > box_bot_y + 1.5
+                })
+                .min_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal))
+                .map(|(_, _, ly, fam, sz, is_cjk)| AdjacentTextLineIr {
+                    gap_pt: (*ly - box_bot_y).max(0.0),
+                    font_family: fam.clone(),
+                    font_size_pt: *sz,
+                    is_cjk: *is_cjk,
+                });
+
+            self.reference_layout
+                .entry(shape_id)
+                .or_default()
+                .inline_box_context = Some(InlineBoxLineContextIr {
+                shares_line_with_text,
+                prev_line,
+                next_line,
+            });
+        }
+    }
+
+    fn collect_inline_shape_ids(inlines: &[InlineNode], out: &mut Vec<NodeId>) {
+        for inl in inlines {
+            match inl {
+                InlineNode::ShapeInline(shape) if shape.id.is_set() => out.push(shape.id),
+                InlineNode::Link { content, .. }
+                | InlineNode::Ref { content, .. }
+                | InlineNode::Citation { content, .. }
+                | InlineNode::Field { content, .. } => {
+                    Self::collect_inline_shape_ids(content, out);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn walk_inline_box_line_env(
+        &self,
+        nodes: &[TreeNode],
+        offset: Point,
+        base_font_pt: f64,
+        text_lines: &mut Vec<(usize, f64, f64, Option<String>, f64, bool)>,
+        box_frames: &mut Vec<(Option<u128>, usize, f64, f64, f64)>,
+    ) {
+        for node in nodes {
+            match node {
+                TreeNode::Text {
+                    text,
+                    pos,
+                    baseline_shift_pt,
+                    ..
+                } => {
+                    if text.text.trim().is_empty() {
+                        continue;
+                    }
+                    let abs_x = (offset.x + pos.x).to_pt();
+                    let raw_y = (offset.y + pos.y).to_pt() + baseline_shift_pt.unwrap_or(0.0);
+                    let (page_idx, local_y, x_pt) =
+                        crate::frame_tree::decode_page_and_local_y(raw_y, abs_x);
+                    let fam = Some(text.font.info().family.clone());
+                    let sz = text.size.to_pt();
+                    let has_cjk = text.text.chars().any(is_cjk_char);
+                    text_lines.push((page_idx, x_pt, local_y, fam, sz, has_cjk));
+                }
+                TreeNode::Element {
+                    elem,
+                    loc,
+                    pos,
+                    children,
+                } => {
+                    if Self::is_page_furniture_elem(elem)
+                        || elem.is::<typst::layout::HideElem>()
+                        || elem.is::<typst::text::SubElem>()
+                        || elem.is::<typst::text::SuperElem>()
+                        || elem.is::<typst::model::FootnoteElem>()
+                        || elem.is::<typst::math::EquationElem>()
+                    {
+                        continue;
+                    }
+                    if let Some(box_elem) = elem.to_packed::<typst::layout::BoxElem>() {
+                        let chain = self.scoped_style_chain(Some(*loc));
+                        let has_fill_or_stroke = box_elem.fill.get_ref(chain).is_some()
+                            || box_elem
+                                .stroke
+                                .resolve(chain)
+                                .iter()
+                                .any(|s| s.as_ref().is_some_and(|o| o.is_some()));
+                        if has_fill_or_stroke
+                            && let Some((gpos, gw, gh)) = children.iter().find_map(|c| match c {
+                                TreeNode::Group { group, pos: gp, .. } => {
+                                    Some((*gp, group.frame.size().x.to_pt(), group.frame.size().y.to_pt()))
+                                }
+                                _ => None,
+                            })
+                        {
+                            // Record spatial box bounds and do not descend into its inner text.
+                            if gh > base_font_pt * 1.35 || gw > 24.0 {
+                                let abs_x = (offset.x + gpos.x).to_pt();
+                                let raw_y = (offset.y + gpos.y).to_pt();
+                                let (p, top_y, x_pt) =
+                                    crate::frame_tree::decode_page_and_local_y(raw_y, abs_x);
+                                box_frames.push((Some(loc.hash()), p, x_pt, top_y, top_y + gh));
+                                continue;
+                            }
+                        }
+                    }
+                    if Self::is_native_shape_elem(elem) {
+                        let (spos, sh) = children
+                            .iter()
+                            .find_map(|c| match c {
+                                TreeNode::Group { group, pos: gp, .. } => {
+                                    Some((*gp, group.frame.size().y.to_pt()))
+                                }
+                                _ => None,
+                            })
+                            .unwrap_or_else(|| {
+                                let (_, _, _, h) = Self::estimate_nodes_bbox(children);
+                                (*pos, h)
+                            });
+                        let abs_x = (offset.x + spos.x).to_pt();
+                        let raw_y = (offset.y + spos.y).to_pt();
+                        let (p, top_y, x_pt) =
+                            crate::frame_tree::decode_page_and_local_y(raw_y, abs_x);
+                        box_frames.push((Some(loc.hash()), p, x_pt, top_y, top_y + sh));
+                        continue;
+                    }
+                    self.walk_inline_box_line_env(
+                        children,
+                        offset,
+                        base_font_pt,
+                        text_lines,
+                        box_frames,
+                    );
+                }
+                TreeNode::Group {
+                    group,
+                    pos,
+                    children,
+                } => {
+                    let gh = group.frame.size().y.to_pt().abs();
+                    if gh > base_font_pt * 1.35 && Self::group_has_direct_bg_shape(children) {
+                        let abs_x = (offset.x + pos.x).to_pt();
+                        let raw_y = (offset.y + pos.y).to_pt();
+                        let (p, top_y, x_pt) =
+                            crate::frame_tree::decode_page_and_local_y(raw_y, abs_x);
+                        box_frames.push((None, p, x_pt, top_y, top_y + gh));
+                        continue;
+                    }
+                    self.walk_inline_box_line_env(
+                        children,
+                        offset + *pos,
+                        base_font_pt,
+                        text_lines,
+                        box_frames,
+                    );
+                }
+                _ => {}
+            }
+        }
     }
 }
