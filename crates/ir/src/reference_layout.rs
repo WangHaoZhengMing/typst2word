@@ -284,6 +284,54 @@ pub struct FlowReferenceIr {
     pub trailing_transitions: Vec<(BlockLayoutSpanIr, NextBlockLayoutMeasureIr)>,
 }
 
+/// Read-only baseline-to-baseline line geometry measured from Typst's laid-out paragraph frames.
+///
+/// Captures Typst's exact baseline step ($\Delta y = H_{\text{cap}} + L_{\text{leading}}$ under
+/// default `top-edge: "cap-height", bottom-edge: "baseline"`) so `word-construct` can calibrate
+/// Word's `<w:spacing w:line="..." w:lineRule="auto"/>` without guessing font cap-heights.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+pub struct ParagraphLineMetricsIr {
+    /// Total number of normal text lines laid out across all fragments of this paragraph.
+    pub line_count: usize,
+    /// Decoded page-local Y coordinate (`pt`) of the first line's baseline.
+    pub first_baseline_y_pt: f64,
+    /// Decoded page-local Y coordinate (`pt`) of the last line's baseline.
+    pub last_baseline_y_pt: f64,
+    /// Median baseline-to-baseline step (`pt`) across adjacent normal text lines on the same page/column
+    /// (`None` for single-line paragraphs or when every line step is distorted by a tall inline object).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uniform_baseline_step_pt: Option<f64>,
+    /// Whether any line of this paragraph contains an inline shape/image/box taller than normal text.
+    #[serde(default)]
+    pub has_tall_inline_object: bool,
+}
+
+/// Measured distance from an inline box's top/bottom edge to an adjacent text baseline in the same paragraph.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct AdjacentTextLineIr {
+    /// Vertical distance (`pt`) between the inline box edge and the adjacent text line's baseline.
+    pub gap_pt: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_family: Option<String>,
+    pub font_size_pt: f64,
+    #[serde(default)]
+    pub is_cjk: bool,
+}
+
+/// Read-only surrounding paragraph-line context for an inline box/shape (`InlineNode::ShapeInline`).
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct InlineBoxLineContextIr {
+    /// True when text in the parent paragraph shares the same line horizontally with this inline box.
+    #[serde(default)]
+    pub shares_line_with_text: bool,
+    /// Nearest preceding text line in the same paragraph (`None` when at the start of the paragraph).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prev_line: Option<AdjacentTextLineIr>,
+    /// Nearest following text line in the same paragraph (`None` when at the end of the paragraph).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_line: Option<AdjacentTextLineIr>,
+}
+
 /// Complete reference layout entry for a semantic [`crate::NodeId`].
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct NodeReferenceLayout {
@@ -296,4 +344,10 @@ pub struct NodeReferenceLayout {
     /// Optional sibling block vertical flow measurements.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flow: Option<FlowReferenceIr>,
+    /// Optional intra-paragraph baseline-to-baseline step measurements.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paragraph_lines: Option<ParagraphLineMetricsIr>,
+    /// Optional surrounding line clearances for an inline `#box` / `ShapeInline`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inline_box_context: Option<InlineBoxLineContextIr>,
 }

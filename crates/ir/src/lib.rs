@@ -51,8 +51,9 @@ pub use origin::{NodeId, NodeOrigin, SemanticRoleIr};
 pub use outline::OutlineEntryIr;
 pub use pdf::{BlockPdfSpanIr, EquationPdfMetricsIr, FlowMeasureIr, NextBlockMeasureIr};
 pub use reference_layout::{
-    BlockLayoutSpanIr, EquationLayoutMetricsIr, FlowReferenceIr, LayoutFragmentIr, NextBlockKindIr,
-    NextBlockLayoutMeasureIr, NodeReferenceLayout,
+    AdjacentTextLineIr, BlockLayoutSpanIr, EquationLayoutMetricsIr, FlowReferenceIr,
+    InlineBoxLineContextIr, LayoutFragmentIr, NextBlockKindIr, NextBlockLayoutMeasureIr,
+    NodeReferenceLayout, ParagraphLineMetricsIr,
 };
 pub use shape::{CurveSegmentIr, ShapeIr, ShapeKindIr};
 pub use style::{
@@ -60,7 +61,7 @@ pub use style::{
     SidesPtIr, StrokeIr, VAlignIr,
 };
 pub use table::{TableCellIr, TableIr, TableKindIr, TableRowIr};
-pub use text::{ScriptKindIr, TextRunIr, is_cjk_char};
+pub use text::{FontFaceMetricsIr, ScriptKindIr, TextRunIr, is_cjk_char};
 pub use units::Pt;
 pub use unsupported::UnsupportedIr;
 
@@ -119,6 +120,9 @@ pub struct DocumentIr {
     pub page_setup: PageSetupIr,
     pub blocks: Vec<BlockNode>,
     pub report: ConversionReport,
+    /// Intrinsic OpenType binary table metrics for every font family realized in the document.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub font_metrics: BTreeMap<String, FontFaceMetricsIr>,
     /// Unified node provenance and semantic roles indexed by `NodeId`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub origins: BTreeMap<NodeId, NodeOrigin>,

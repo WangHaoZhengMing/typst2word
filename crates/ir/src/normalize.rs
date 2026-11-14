@@ -119,6 +119,9 @@ fn merge_reference_layouts(
             .trailing_transitions
             .extend(rem_flow.trailing_transitions);
     }
+    if dst.paragraph_lines.is_none() {
+        dst.paragraph_lines = removed.paragraph_lines;
+    }
 }
 
 fn same_nonzero_typst_location(

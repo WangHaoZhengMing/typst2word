@@ -58,3 +58,82 @@ pub enum ScriptKindIr {
     Sub,
     Super,
 }
+
+/// Intrinsic OpenType/TrueType binary table metrics extracted from a resolved `typst::text::Font`.
+///
+/// Stores pure font-binary design units (`head.unitsPerEm`, `hhea`, `OS/2`, `GSUB`, `post`) and
+/// host OS installation status without any Microsoft Word `dxa` / `w:line` / `1.3x` heuristics.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FontFaceMetricsIr {
+    /// `head.unitsPerEm` (design units per em, typically `1000` or `2048`).
+    pub upem: u16,
+    /// `hhea.ascender` in design units.
+    pub hhea_ascender: i16,
+    /// `hhea.descender` in design units (negative distance below baseline, e.g. `-340`).
+    pub hhea_descender: i16,
+    /// `hhea.lineGap` in design units.
+    pub hhea_line_gap: i16,
+    /// `OS/2.sCapHeight` in design units, when present (`OS/2` version >= 2).
+    /// Typst's default `text.top-edge: "cap-height"` anchors line top edges to this exact metric.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub s_cap_height: Option<i16>,
+    /// `OS/2.sTypoAscender` in design units, when `OS/2` table is present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub s_typo_ascender: Option<i16>,
+    /// `OS/2.sTypoDescender` in design units, when `OS/2` table is present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub s_typo_descender: Option<i16>,
+    /// `OS/2.usWinAscent` in design units, when `OS/2` table is present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub us_win_ascent: Option<u16>,
+    /// `OS/2.usWinDescent` in design units (unsigned distance below baseline), when `OS/2` is present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub us_win_descent: Option<u16>,
+    /// Whether `OS/2.ulCodePageRange1` sets any East Asian codepage bit (`17..=20`: `CP932`/`CP936`/`CP949`/`CP950`).
+    #[serde(default)]
+    pub has_cjk_codepage: bool,
+    /// Whether OpenType `GSUB` exposes a `'hani'` script table (`false` for AAT-only macOS CJK fonts).
+    #[serde(default)]
+    pub has_gsub_hani: bool,
+    /// Whether `post.isFixedPitch != 0` (monospaced typeface).
+    #[serde(default)]
+    pub is_monospaced: bool,
+    /// Whether this font family is installed in the host OS font catalog (`true`), meaning
+    /// both Typst and Microsoft Word resolve the exact same font binary, vs loaded solely from
+    /// Typst's embedded fallback bundle (`false`, substituted by Word via `<w:altName>`).
+    #[serde(default)]
+    pub is_system_installed: bool,
+}
+
+impl FontFaceMetricsIr {
+    /// Intrinsic `OS/2.sCapHeight / unitsPerEm` ratio, if `sCapHeight > 0`.
+    #[inline]
+    pub fn cap_height_ratio(&self) -> Option<f64> {
+        self.s_cap_height
+            .filter(|&cap| cap > 0)
+            .map(|cap| cap as f64 / self.upem.max(1) as f64)
+    }
+
+    /// Intrinsic `(hhea.ascender - hhea.descender) / unitsPerEm` span ratio.
+    #[inline]
+    pub fn hhea_span_ratio(&self) -> f64 {
+        (self.hhea_ascender as i32 - self.hhea_descender as i32).max(1) as f64
+            / self.upem.max(1) as f64
+    }
+
+    /// Intrinsic `(hhea.ascender - hhea.descender + max(hhea.lineGap, 0)) / unitsPerEm` ratio.
+    #[inline]
+    pub fn hhea_full_ratio(&self) -> f64 {
+        (self.hhea_ascender as i32 - self.hhea_descender as i32 + self.hhea_line_gap.max(0) as i32)
+            .max(1) as f64
+            / self.upem.max(1) as f64
+    }
+
+    /// Intrinsic `(OS/2.usWinAscent + OS/2.usWinDescent) / unitsPerEm` ratio, if `OS/2` is present.
+    #[inline]
+    pub fn win_span_ratio(&self) -> Option<f64> {
+        let asc = self.us_win_ascent? as u32;
+        let desc = self.us_win_descent? as u32;
+        Some((asc + desc) as f64 / self.upem.max(1) as f64)
+    }
+}

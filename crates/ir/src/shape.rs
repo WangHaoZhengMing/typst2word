@@ -27,6 +27,9 @@ pub struct ShapeIr {
     pub align: HAlignIr,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub placed_offset_pt: Option<(f64, f64)>,
+    /// Semantic vertical baseline shift (`#box(baseline: ...)` in `pt`; positive shifts the box downward).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline_shift_pt: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
