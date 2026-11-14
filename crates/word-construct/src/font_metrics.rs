@@ -3,24 +3,29 @@
 //! ## How Word Computes Single-Line Height (`w:line="240" w:lineRule="auto"`)
 //! When `<w:spacing w:line="W" w:lineRule="auto"/>` is used, Microsoft Word does NOT define
 //! `1.0x` single-line spacing (`W = 240`) as `1.0 * font_size_pt`. Instead, Word classifies
-//! each font into one of three OpenType/GDI metric paradigms ([`FontParadigm`]):
+//! each font into one of four OpenType/GDI metric paradigms ([`FontParadigm`]):
 //!
-//! 1. **[`FontParadigm::StandardWin`]**: Reads `OS/2` `(usWinAscent + usWinDescent) / unitsPerEm`:
-//!    $$H_{\text{single}}^{\text{Word}}(S) = M_{\text{win}} \cdot S$$
-//!    - Western proportional fonts (`Times New Roman`, `Libertinus Serif`): $M_{\text{win}} \approx 1.150$, $M_{\text{ink}} \approx 0.720$.
-//!    - Modern CJK UI fonts (`PingFang SC`, `Heiti SC`): $M_{\text{win}} = 1.380$, $M_{\text{ink}} \approx 0.950\text{–}0.960$.
-//! 2. **[`FontParadigm::LegacyCjkSerif`]**: Traditional CJK serif fonts declaring `CP936` (`SimSun`),
-//!    where Word multiplies the `hhea` ratio ($1.000$) by $\gamma_{\text{CJK}} = 1.3 \implies M_{\text{win}} = 1.300$.
-//! 3. **[`FontParadigm::AppleCjkQuirk`]**: macOS CJK serif fonts (`Songti SC`, `STSong`, `Kaiti SC`),
-//!    whose `hhea` ratio is already $1.400$ and is compounded by $\gamma_{\text{CJK}} = 1.3 \implies M_{\text{win}} = 1.820$,
+//! 1. **[`FontParadigm::StandardWin`]**: Western proportional fonts without CJK codepages
+//!    (`Times New Roman`, `Libertinus Serif`, `Arial`, `Calibri`):
+//!    $$H_{\text{single}}^{\text{Word}}(S) = M_{\text{win}} \cdot S \approx 1.150 \cdot S$$
+//! 2. **[`FontParadigm::CjkUiSans`]**: Modern CJK UI sans-serif fonts declaring `CP936`/`CP950`
+//!    (`PingFang SC` with `hhea = 1.400`, `Heiti SC` with `hhea = 1.000`, `SimHei` / `Microsoft YaHei`
+//!    with `hhea = 1.059`), where Word multiplies the `hhea` span by $\gamma_{\text{CJK}} = 1.3$:
+//!    - `PingFang SC`: $1.400 \times 1.3 = 1.820$ ($20.02\text{pt}$ at $11\text{pt}$), $sCapHeight = 0.860$.
+//!    - `Heiti SC`: $1.000 \times 1.3 = 1.300$, $sCapHeight = 0.718$.
+//! 3. **[`FontParadigm::LegacyCjkSerif`]**: Traditional Windows CJK serif fonts declaring `CP936`
+//!    (`SimSun`), where Word multiplies `hhea = 1.000` by $\gamma_{\text{CJK}} = 1.3 \implies M_{\text{win}} = 1.300$.
+//! 4. **[`FontParadigm::AppleCjkQuirk`]**: macOS CJK serif fonts (`Songti SC`, `STSong`, `Kaiti SC`),
+//!    whose `hhea = 1.400` is compounded by $\gamma_{\text{CJK}} = 1.3 \implies M_{\text{win}} = 1.820$,
 //!    while AAT-only tables simultaneously trigger `plsrun->script_id = 5` (`Latin` / `'DFLT'`) in `MicrosoftPTLS7`.
 
+use ir::{FontFaceMetricsIr, ParagraphLineMetricsIr};
 use serde::{Deserialize, Serialize};
 
 use crate::units::{Pt, WLine};
 
 /// Default Word CJK single-line magnification factor (`1.3`) for fonts declaring CJK codepages
-/// (`CP932` / `CP936` / `CP949` / `CP950`, e.g. `SimSun` / `宋体` where `12pt` single spacing = `15.6pt`).
+/// (`CP932` / `CP936` / `CP949` / `CP950`, e.g. `SimSun` `1.00 * 1.3 = 1.30` and `PingFang SC` `1.40 * 1.3 = 1.82`).
 pub const WORD_CJK_FACTOR: f64 = 1.3;
 
 // ============================================================================
@@ -41,12 +46,21 @@ pub enum ShapingWorkaround {
 /// Word's internal line-height and shaping paradigm for a font family.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum FontParadigm {
-    /// Standard Western proportional and modern CJK UI fonts (e.g. `Times New Roman`, `PingFang SC`).
-    /// Directly uses `OS/2` `(usWinAscent + usWinDescent) / unitsPerEm`.
+    /// Standard Western proportional fonts without CJK codepage bits (e.g. `Times New Roman`, `Arial`).
+    /// Directly uses `hhea` / `OS/2` single-line ratio without `1.3x` CJK expansion.
     StandardWin {
         m_win: f64,
         m_ink: f64,
         is_cjk: bool,
+        workaround: ShapingWorkaround,
+    },
+
+    /// Modern CJK UI sans-serif fonts declaring `CP932`/`CP936`/`CP949`/`CP950`
+    /// (e.g. `PingFang SC` `hhea = 1.400`, `Heiti SC` `hhea = 1.000`, `Microsoft YaHei` `hhea = 1.059`).
+    /// Because `OS/2.ulCodePageRange1` sets CJK codepage bits, Word multiplies `hhea_ratio` by `1.3`.
+    CjkUiSans {
+        hhea_ratio: f64,
+        m_ink: f64,
         workaround: ShapingWorkaround,
     },
 
@@ -83,17 +97,18 @@ impl FontParadigm {
     pub const fn m_win(self) -> f64 {
         match self {
             Self::StandardWin { m_win, .. } | Self::Monospace { m_win, .. } => m_win,
-            Self::LegacyCjkSerif { hhea_ratio, .. } | Self::AppleCjkQuirk { hhea_ratio, .. } => {
-                hhea_ratio * Self::CJK_SCALE_FACTOR
-            }
+            Self::CjkUiSans { hhea_ratio, .. }
+            | Self::LegacyCjkSerif { hhea_ratio, .. }
+            | Self::AppleCjkQuirk { hhea_ratio, .. } => hhea_ratio * Self::CJK_SCALE_FACTOR,
         }
     }
 
-    /// Effective glyph ink height ratio $M_{\text{ink}}^{\text{eff}}$.
+    /// Typst default `top-edge: "cap-height"` ratio $M_{\text{cap}} = \text{sCapHeight} / \text{upem}$.
     #[inline]
     pub const fn m_ink(self) -> f64 {
         match self {
             Self::StandardWin { m_ink, .. }
+            | Self::CjkUiSans { m_ink, .. }
             | Self::LegacyCjkSerif { m_ink, .. }
             | Self::AppleCjkQuirk { m_ink, .. }
             | Self::Monospace { m_ink, .. } => m_ink,
@@ -105,7 +120,9 @@ impl FontParadigm {
     pub const fn is_cjk(self) -> bool {
         match self {
             Self::StandardWin { is_cjk, .. } => is_cjk,
-            Self::LegacyCjkSerif { .. } | Self::AppleCjkQuirk { .. } => true,
+            Self::CjkUiSans { .. } | Self::LegacyCjkSerif { .. } | Self::AppleCjkQuirk { .. } => {
+                true
+            }
             Self::Monospace { .. } => false,
         }
     }
@@ -114,16 +131,19 @@ impl FontParadigm {
     #[inline]
     pub const fn shaping_workaround(self) -> ShapingWorkaround {
         match self {
-            Self::StandardWin { workaround, .. } | Self::AppleCjkQuirk { workaround, .. } => {
-                workaround
-            }
+            Self::StandardWin { workaround, .. }
+            | Self::CjkUiSans { workaround, .. }
+            | Self::AppleCjkQuirk { workaround, .. } => workaround,
             Self::LegacyCjkSerif { .. } | Self::Monospace { .. } => ShapingWorkaround::None,
         }
     }
 
     /// Inverse mapping formula: convert Typst's `par(leading: L)` into Word's `w:line` ([`WLine`]).
     ///
-    /// $$W = \text{round}\left( 240 \cdot \frac{M_{\text{ink}}^{\text{eff}} + L / S}{M_{\text{win}}} \right)$$
+    /// In Typst (`top-edge: "cap-height"`, `bottom-edge: "baseline"`), consecutive baselines step by
+    /// $\Delta Y = S \cdot M_{\text{cap}} + L$. In Word (`w:lineRule="auto"`), baselines step by
+    /// $\Delta Y_{\text{Word}} = S \cdot M_{\text{win}} \cdot (W / 240)$. Solving $\Delta Y_{\text{Word}} = \Delta Y$:
+    /// $$W = \text{round}\left( 240 \cdot \frac{M_{\text{cap}} + L / S}{M_{\text{win}}} \right)$$
     #[inline]
     pub fn resolve_word_line(self, font_size: Pt, typst_leading: Pt) -> WLine {
         let leading_ratio = typst_leading.0 / font_size.0.max(1.0);
@@ -202,36 +222,48 @@ macro_rules! define_known_fonts {
 
 define_known_fonts! {
     exact: {
-        "times new roman" | "libertinus serif" | "arial" | "calibri" | "cambria" | "cambria math"
-            => StandardWin { m_win: 1.150, m_ink: 0.720, is_cjk: false, workaround: ShapingWorkaround::None },
-        "pingfang sc" | "pingfang tc" | "pingfang hk" | "simhei" | "microsoft yahei" | "黑体"
-            => StandardWin { m_win: 1.380, m_ink: 0.950, is_cjk: true, workaround: ShapingWorkaround::None },
+        "times new roman" | "libertinus serif" | "new computer modern" | "cambria" | "cambria math"
+            => StandardWin { m_win: 1.150, m_ink: 0.6621, is_cjk: false, workaround: ShapingWorkaround::None },
+        "arial" | "calibri" | "helvetica" | "helvetica neue"
+            => StandardWin { m_win: 1.150, m_ink: 0.7163, is_cjk: false, workaround: ShapingWorkaround::None },
+        "georgia"
+            => StandardWin { m_win: 1.1362, m_ink: 0.6929, is_cjk: false, workaround: ShapingWorkaround::None },
+        "pingfang sc" | "pingfang tc" | "pingfang hk"
+            => CjkUiSans { hhea_ratio: 1.400, m_ink: 0.860, workaround: ShapingWorkaround::None },
         "heiti sc" | "heiti tc" | "stheiti"
-            => StandardWin { m_win: 1.380, m_ink: 0.950, is_cjk: true, workaround: ShapingWorkaround::ForceCjkScriptBinding },
+            => CjkUiSans { hhea_ratio: 1.000, m_ink: 0.718, workaround: ShapingWorkaround::ForceCjkScriptBinding },
+        "simhei" | "microsoft yahei" | "黑体" | "dengxian" | "等线"
+            => CjkUiSans { hhea_ratio: 1.059, m_ink: 0.800, workaround: ShapingWorkaround::None },
         "simsun" | "nsimsun" | "mingliu" | "pmingliu" | "ms mincho" | "batang"
             => LegacyCjkSerif { hhea_ratio: 1.000, m_ink: 0.850 },
         "songti sc" | "songti tc" | "songti" | "stsong" | "kaiti sc" | "kaiti tc" | "stkaiti" | "stfangsong"
             | "baoli sc" | "libian sc" | "wawati sc" | "weibei sc" | "xingkai sc" | "yuanti sc"
-            => AppleCjkQuirk { hhea_ratio: 1.400, m_ink: 0.720, workaround: ShapingWorkaround::ForceCjkScriptBinding },
+            => AppleCjkQuirk { hhea_ratio: 1.400, m_ink: 0.695, workaround: ShapingWorkaround::ForceCjkScriptBinding },
         "宋体" | "楷体" | "仿宋" | "kaiti" | "fangsong"
-            => AppleCjkQuirk { hhea_ratio: 1.400, m_ink: 0.720, workaround: ShapingWorkaround::None },
-        "sf mono" | "menlo" | "consolas" | "courier new" | "courier"
-            => Monospace { m_win: 1.180, m_ink: 0.750 },
+            => AppleCjkQuirk { hhea_ratio: 1.400, m_ink: 0.695, workaround: ShapingWorkaround::None },
+        "courier new" | "courier" | "dejavu sans mono"
+            => Monospace { m_win: 1.1328, m_ink: 0.5713 },
+        "sf mono" | "menlo" | "consolas"
+            => Monospace { m_win: 1.180, m_ink: 0.720 },
     },
     contains: {
         "songti" | "stsong" | "kaiti sc" | "kaiti tc" | "stkaiti" | "stfangsong"
             | "baoli sc" | "libian sc" | "wawati sc" | "weibei sc" | "xingkai sc" | "yuanti sc"
-            => AppleCjkQuirk { hhea_ratio: 1.400, m_ink: 0.720, workaround: ShapingWorkaround::ForceCjkScriptBinding },
+            => AppleCjkQuirk { hhea_ratio: 1.400, m_ink: 0.695, workaround: ShapingWorkaround::ForceCjkScriptBinding },
         "宋体" | "楷体" | "仿宋" | "kaiti" | "fangsong"
-            => AppleCjkQuirk { hhea_ratio: 1.400, m_ink: 0.720, workaround: ShapingWorkaround::None },
+            => AppleCjkQuirk { hhea_ratio: 1.400, m_ink: 0.695, workaround: ShapingWorkaround::None },
+        "pingfang"
+            => CjkUiSans { hhea_ratio: 1.400, m_ink: 0.860, workaround: ShapingWorkaround::None },
         "heiti sc" | "heiti tc" | "stheiti"
-            => StandardWin { m_win: 1.380, m_ink: 0.950, is_cjk: true, workaround: ShapingWorkaround::ForceCjkScriptBinding },
-        "pingfang" | "heiti" | "黑体" | "simhei" | "yahei" | "gothic"
-            => StandardWin { m_win: 1.380, m_ink: 0.950, is_cjk: true, workaround: ShapingWorkaround::None },
+            => CjkUiSans { hhea_ratio: 1.000, m_ink: 0.718, workaround: ShapingWorkaround::ForceCjkScriptBinding },
+        "heiti" | "黑体" | "simhei" | "yahei" | "gothic"
+            => CjkUiSans { hhea_ratio: 1.059, m_ink: 0.800, workaround: ShapingWorkaround::None },
         "simsun" | "nsimsun" | "mingliu" | "mincho" | "batang"
             => LegacyCjkSerif { hhea_ratio: 1.000, m_ink: 0.850 },
-        "mono" | "menlo" | "consolas" | "courier"
-            => Monospace { m_win: 1.180, m_ink: 0.750 },
+        "courier" | "dejavu sans mono"
+            => Monospace { m_win: 1.1328, m_ink: 0.5713 },
+        "mono" | "menlo" | "consolas"
+            => Monospace { m_win: 1.180, m_ink: 0.720 },
     }
 }
 
@@ -248,22 +280,31 @@ impl<'a> From<&RawFontMetrics<'a>> for FontParadigm {
             ) {
                 (true, false, _, _, _) => Self::Monospace {
                     m_win: raw.win_ratio(),
-                    m_ink: 0.750,
+                    m_ink: 0.720,
                 },
                 (false, true, true, false, hhea) if hhea >= 1.30 => Self::AppleCjkQuirk {
                     hhea_ratio: hhea,
-                    m_ink: 0.720,
+                    m_ink: 0.695,
                     workaround: ShapingWorkaround::ForceCjkScriptBinding,
                 },
                 (false, true, true, _, hhea) => Self::LegacyCjkSerif {
                     hhea_ratio: hhea,
                     m_ink: 0.850,
                 },
+                (false, true, false, has_hani, hhea) => Self::CjkUiSans {
+                    hhea_ratio: hhea,
+                    m_ink: 0.860,
+                    workaround: if has_hani {
+                        ShapingWorkaround::None
+                    } else {
+                        ShapingWorkaround::ForceCjkScriptBinding
+                    },
+                },
                 (_, has_cjk, _, _, _) => Self::StandardWin {
                     m_win: raw.win_ratio(),
                     m_ink: match has_cjk {
-                        true => 0.950,
-                        false => 0.720,
+                        true => 0.860,
+                        false => 0.6621,
                     },
                     is_cjk: has_cjk,
                     workaround: ShapingWorkaround::None,
@@ -314,17 +355,14 @@ impl WordLineBoxSpec {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WordFontClass {
     /// Modern CJK UI fonts (`PingFang SC`, `Heiti SC`, `SimHei`, `Microsoft YaHei`).
-    /// `OS/2` `(usWinAscent + usWinDescent) / UPEM = 1.380`, glyph ink height ratio `0.960`.
     Cjk,
     /// Traditional serif CJK fonts (`Songti SC`, `STSong`, `Kaiti SC`, `FangSong`) whose
     /// `hhea` ratio is `1.400` and which declare legacy CJK codepages (`CP936`), causing Word
     /// to scale their single-line (`w:line="240"`) box to `1.400 * 1.3 = 1.820 * S`.
     CjkSongti,
     /// Proportional Western serif/sans-serif fonts (`Libertinus Serif`, `Times New Roman`, `Arial`, `Calibri`).
-    /// `OS/2` `(usWinAscent + usWinDescent) / UPEM = 1.150`, glyph ink height ratio `0.720`.
     Latin,
     /// Monospace code fonts (`SF Mono`, `Menlo`, `Consolas`, `Courier New`).
-    /// `OS/2` `(usWinAscent + usWinDescent) / UPEM = 1.180`, glyph ink height ratio `0.750`.
     Monospace,
 }
 
@@ -336,7 +374,8 @@ impl WordFontClass {
             (Some(FontParadigm::AppleCjkQuirk { .. }), _) => Self::CjkSongti,
             (
                 Some(
-                    FontParadigm::LegacyCjkSerif { .. }
+                    FontParadigm::CjkUiSans { .. }
+                    | FontParadigm::LegacyCjkSerif { .. }
                     | FontParadigm::StandardWin { is_cjk: true, .. },
                 ),
                 _,
@@ -347,26 +386,28 @@ impl WordFontClass {
         }
     }
 
-    /// `(usWinAscent + usWinDescent) / unitsPerEm` ratio used by Word for `w:line="240"`.
+    /// Fallback single-line box ratio (`w:line="240"`) when no binary `FontFaceMetricsIr` or specific
+    /// `FontParadigm` overrides it.
     #[inline]
     pub const fn win_box_ratio(self, has_cjk_chars: bool) -> f64 {
         match (self, has_cjk_chars) {
             (Self::CjkSongti, true) => 1.820,
             (Self::CjkSongti, false) => 1.400,
-            (Self::Cjk, true) => 1.380,
+            (Self::Cjk, true) => 1.820,
             (Self::Cjk | Self::Latin, false) | (Self::Latin, true) => 1.150,
             (Self::Monospace, _) => 1.180,
         }
     }
 
-    /// Visible glyph ink height ratio ($H_{\text{ink}} / S$).
+    /// Visible glyph cap/ink height ratio ($H_{\text{ink}} / S$).
     #[inline]
     pub const fn ink_height_ratio(self, has_cjk_chars: bool) -> f64 {
         match (self, has_cjk_chars) {
-            (Self::CjkSongti | Self::Cjk, true) => 0.960,
+            (Self::CjkSongti, true) => 0.695,
+            (Self::Cjk, true) => 0.860,
             (Self::CjkSongti | Self::Cjk, false) => 0.760,
-            (Self::Latin, _) => 0.720,
-            (Self::Monospace, _) => 0.750,
+            (Self::Latin, _) => 0.6621,
+            (Self::Monospace, _) => 0.720,
         }
     }
 }
@@ -413,7 +454,122 @@ pub struct WordLineBox {
 }
 
 impl WordLineBox {
-    /// Construct a `WordLineBox` that matches a target Typst `leading_pt` (`par.leading`).
+    /// Resolve `(cap_height_ratio, word_single_line_ratio)` for a font family, combining
+    /// OpenType binary metrics (`FontFaceMetricsIr`) with Word's CJK `1.3x` expansion rule and
+    /// fallback `fontTable.xml` substitution (`is_system_installed == false`).
+    fn resolve_cap_and_word_ratios(
+        font_family: Option<&str>,
+        font_face: Option<&FontFaceMetricsIr>,
+        has_cjk_chars: bool,
+    ) -> (f64, f64) {
+        let resolved_alias = font_family.map(crate::pipeline::font_recognize::resolve_font_alias_for_metrics);
+        let paradigm = resolved_alias.and_then(lookup_known_font);
+        let class = WordFontClass::classify(resolved_alias, has_cjk_chars);
+
+        // 1. Typst's `top-edge: "cap-height"` ratio: prefer exact binary `OS/2.sCapHeight / upem`
+        //    from the actual font Typst shaped (`FontFaceMetricsIr`), falling back to calibrated table.
+        let cap_ratio = font_face
+            .and_then(FontFaceMetricsIr::cap_height_ratio)
+            .or_else(|| paradigm.map(FontParadigm::m_ink))
+            .unwrap_or_else(|| class.ink_height_ratio(has_cjk_chars));
+
+        // 2. Word's `w:line="240"` single-line box ratio (`M_word`):
+        //    - When `font_face` is installed on the host OS (`is_system_installed == true`), Word
+        //      opens that exact font binary: CJK-codepage fonts receive `hhea_span * 1.3`, while
+        //      Western/monospace fonts use `(hhea.ascender - hhea.descender + hhea.lineGap) / upem`.
+        //    - When `font_face` is a Typst-embedded-only font (`is_system_installed == false`, e.g.
+        //      `Libertinus Serif`, `New Computer Modern`, `DejaVu Sans Mono`), Word substitutes it via
+        //      `word/fontTable.xml` `<w:altName>` (`Times New Roman` / `Courier New`), so we MUST use
+        //      the substituted font's `M_word` from `paradigm`!
+        let word_ratio = match font_face {
+            Some(face) if face.is_system_installed => {
+                if face.has_cjk_codepage {
+                    face.hhea_span_ratio() * WORD_CJK_FACTOR
+                } else if has_cjk_chars && paradigm.is_none_or(|p| !p.is_cjk()) {
+                    // Mixed paragraph starting on a Western run followed by CJK glyphs:
+                    // Word's East Asian fallback (`PingFang SC`) expands the line box if not CJK-aware.
+                    face.hhea_full_ratio()
+                } else {
+                    face.hhea_full_ratio()
+                }
+            }
+            _ => match paradigm {
+                Some(p) => {
+                    if p.is_cjk() && !has_cjk_chars {
+                        // Pure ASCII inside a CJK font still uses the font's CJK `m_win` in Word
+                        // whenever the font itself is bound to `<w:rFonts w:ascii="..."/>`.
+                        p.m_win()
+                    } else {
+                        p.m_win()
+                    }
+                }
+                None => class.win_box_ratio(has_cjk_chars),
+            },
+        };
+
+        (cap_ratio, word_ratio.max(0.8))
+    }
+
+    /// Construct a calibrated `WordLineBox` using both extracted OpenType binary font metrics
+    /// ([`FontFaceMetricsIr`]) and optional ground-truth Typst paragraph baseline measurements
+    /// ([`ParagraphLineMetricsIr`]).
+    pub fn from_paragraph_metrics(
+        font_family: Option<&str>,
+        font_face: Option<&FontFaceMetricsIr>,
+        para_lines: Option<&ParagraphLineMetricsIr>,
+        has_cjk_chars: bool,
+        has_inline_eq: bool,
+        only_inline_eq: bool,
+        font_size_pt: f64,
+        leading_pt: Option<f64>,
+    ) -> Self {
+        let s = font_size_pt.max(6.0);
+        let (cap_ratio, word_ratio) =
+            Self::resolve_cap_and_word_ratios(font_family, font_face, has_cjk_chars);
+        let inline_profile = ParagraphInlineProfile::from_flags(has_inline_eq, only_inline_eq);
+
+        let w_line_240 = match inline_profile {
+            ParagraphInlineProfile::OnlyInlineEquation => 276,
+            ParagraphInlineProfile::TextWithInlineEquation
+                if has_cjk_chars && s >= 14.0 && leading_pt.is_some_and(|ls| ls > 3.5) =>
+            {
+                240
+            }
+            _ => {
+                // Priority 1: Exact uniform baseline-to-baseline step measured from Typst's frame
+                // (`uniform_baseline_step_pt`, e.g. `16.61pt` for 11pt `PingFang SC` + `0.65em`).
+                if let Some(step_pt) = para_lines.and_then(|p| p.uniform_baseline_step_pt) {
+                    ((240.0 * step_pt / (s * word_ratio)).round() as i64).clamp(120, 720)
+                } else if let Some(ls_pt) = leading_pt
+                    && ls_pt <= 3.5
+                {
+                    // Compact synthetic table-cell / layout-grid leading (`0.0pt` or `2.0pt` set by
+                    // `solve_table_cell_paragraph_style`), scaled for `1.82x` CJK fonts (`PingFang SC`, `Songti SC`).
+                    let ratio = (ls_pt / s).clamp(0.0, 1.0);
+                    let base = 212.0 + ratio * 24.0;
+                    let scaled = if word_ratio > 1.50 {
+                        base * (1.380 / word_ratio)
+                    } else {
+                        base
+                    };
+                    (scaled.round() as i64).clamp(120, 720)
+                } else {
+                    // Priority 2: Exact OpenType + Typst `top-edge: "cap-height"` model:
+                    // `target_step_pt = S * cap_ratio + leading_pt` (default `0.65em` when `None`).
+                    // Never clamp below `240` — CJK fonts with `word_ratio = 1.820` (`PingFang SC`,
+                    // `Songti SC`) require `w:line = 199` / `177` (`< 240`) to match Typst's `16.61pt`!
+                    let ls_pt = leading_pt.unwrap_or(0.65 * s);
+                    let target_step_pt = s * cap_ratio + ls_pt;
+                    ((240.0 * target_step_pt / (s * word_ratio)).round() as i64).clamp(120, 720)
+                }
+            }
+        };
+
+        Self::with_explicit_ratios(s, cap_ratio, word_ratio, w_line_240)
+    }
+
+    /// Construct a `WordLineBox` that matches a target Typst `leading_pt` (`par.leading`)
+    /// when binary `FontFaceMetricsIr` / `ParagraphLineMetricsIr` are not provided.
     pub fn from_typst_metrics(
         font_family: Option<&str>,
         has_cjk_chars: bool,
@@ -422,66 +578,16 @@ impl WordLineBox {
         font_size_pt: f64,
         leading_pt: Option<f64>,
     ) -> Self {
-        let s = font_size_pt.max(6.0);
-        let class = WordFontClass::classify(font_family, has_cjk_chars);
-        let is_cjk_font_or_text =
-            matches!(class, WordFontClass::Cjk | WordFontClass::CjkSongti) || has_cjk_chars;
-        let inline_profile = ParagraphInlineProfile::from_flags(has_inline_eq, only_inline_eq);
-        let leading = leading_pt.map(|ls| (ls, (ls / s).clamp(0.1, 2.0)));
-
-        let w_line_240 = match (inline_profile, class, is_cjk_font_or_text, leading) {
-            (ParagraphInlineProfile::OnlyInlineEquation, _, _, _) => 276,
-            (ParagraphInlineProfile::TextWithInlineEquation, _, true, Some((ls_pt, _)))
-                if ls_pt > 3.5 && s >= 14.0 =>
-            {
-                240
-            }
-            (_, WordFontClass::CjkSongti, true, Some((ls_pt, ratio))) if ls_pt > 3.5 => {
-                let metric_div = class.win_box_ratio(true);
-                ((240.0 * (0.692 + ratio) / metric_div).round() as i64).clamp(174, 720)
-            }
-            (_, _, true, Some((ls_pt, ratio))) if ls_pt > 3.5 => {
-                let fam_lower = font_family.unwrap_or("").trim().to_ascii_lowercase();
-                if fam_lower.contains("heiti") {
-                    ((240.0 * (0.715 + ratio) / 1.300).round() as i64).clamp(180, 720)
-                } else {
-                    let metric_div = class.win_box_ratio(has_cjk_chars);
-                    let ink_em = match s < 10.0 {
-                        true => 0.90,
-                        false => 0.95,
-                    };
-                    ((240.0 * (ink_em + ratio) / metric_div).round() as i64).clamp(240, 720)
-                }
-            }
-            (_, _, false, Some((ls_pt, ratio))) if ls_pt > 3.5 => {
-                let fam_lower = font_family.unwrap_or("").trim().to_ascii_lowercase();
-                let (cap_em, metric_div) = if fam_lower.contains("arial")
-                    || fam_lower.contains("helvetica")
-                    || fam_lower.contains("calibri")
-                {
-                    (0.7163, 1.150)
-                } else if fam_lower.contains("georgia") {
-                    (0.6929, 1.1362)
-                } else if fam_lower.contains("courier") {
-                    (0.5713, 1.1328)
-                } else {
-                    (0.6621, class.win_box_ratio(false))
-                };
-                ((240.0 * (cap_em + ratio) / metric_div).round() as i64).clamp(216, 720)
-            }
-            (_, WordFontClass::CjkSongti, _, Some((_, ratio))) if ratio <= 1.05 => {
-                ((212.0 + ratio * 24.0) * (1.380 / 1.820)).round() as i64
-            }
-            (_, _, _, Some((_, ratio))) if ratio <= 1.05 => (212.0 + ratio * 24.0).round() as i64,
-            (_, _, _, Some((_, ratio))) => {
-                ((236.0 * (1.0 + ratio) / 2.0).round() as i64).clamp(180, 720)
-            }
-            (_, WordFontClass::CjkSongti, _, None) => 177,
-            (_, _, true, None) => 276,
-            (_, _, false, None) => 242,
-        };
-
-        Self::with_explicit_w_line(font_family, has_cjk_chars, s, w_line_240)
+        Self::from_paragraph_metrics(
+            font_family,
+            None,
+            None,
+            has_cjk_chars,
+            has_inline_eq,
+            only_inline_eq,
+            font_size_pt,
+            leading_pt,
+        )
     }
 
     /// Construct a `WordLineBox` with an explicit `w:line` value (`w_line_240`).
@@ -492,10 +598,18 @@ impl WordLineBox {
         w_line_240: i64,
     ) -> Self {
         let s = font_size_pt.max(6.0);
-        let class = WordFontClass::classify(font_family, has_cjk_chars);
-        let win_ratio = class.win_box_ratio(has_cjk_chars);
-        let ink_ratio = class.ink_height_ratio(has_cjk_chars);
+        let (ink_ratio, win_ratio) =
+            Self::resolve_cap_and_word_ratios(font_family, None, has_cjk_chars);
+        Self::with_explicit_ratios(s, ink_ratio, win_ratio, w_line_240)
+    }
 
+    #[inline]
+    fn with_explicit_ratios(
+        s: f64,
+        ink_ratio: f64,
+        win_ratio: f64,
+        w_line_240: i64,
+    ) -> Self {
         let line_box_height_pt = win_ratio * s * (w_line_240 as f64 / 240.0);
         let ink_height_pt = ink_ratio * s;
         let internal_leading_pt = (line_box_height_pt - ink_height_pt).max(0.0);

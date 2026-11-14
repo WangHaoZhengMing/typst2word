@@ -4,12 +4,17 @@
 //! resolves Word inter-block and list-item vertical spacing across all sections/headers/footers,
 //! and pre-computes document-level Word compatibility flags (`has_cjk`, `has_cetz_canvas`).
 
+use std::collections::BTreeMap;
+
 use ir::{
-    BlockNode, ContainerIr, DocumentIr, DocumentSectionIr, InlineNode, MetadataIr, PageSetupIr,
-    TableCellIr, TableIr, TableKindIr, TableRowIr, VAlignIr, merge_split_styled_containers,
-    visit_block_list_mut, visit_page_setup_blocks_mut,
+    BlockNode, ContainerIr, ContainerStyleIr, DocumentIr, DocumentSectionIr, FontFaceMetricsIr,
+    InlineNode, MetadataIr, NodeId, PageSetupIr, ShapeIr, TableCellIr, TableIr, TableKindIr,
+    TableRowIr, VAlignIr, merge_split_styled_containers, visit_block_list_mut,
+    visit_page_setup_blocks_mut,
 };
 
+use crate::objects::paragraph::compute_line_spacing_dxa_with_metrics;
+use crate::objects::shape::{SolvedShapeGeometry, solve_shape_geometry};
 use crate::objects::text_run::run_has_cjk;
 use crate::pipeline::flow_spacing::resolve_paragraph_style_spacing;
 
@@ -20,6 +25,15 @@ pub struct WordDocument {
     pub metadata: MetadataIr,
     pub page_setup: PageSetupIr,
     pub blocks: Vec<BlockNode>,
+    /// Extracted OpenType binary font metrics (`upem`, `hhea`, `OS/2`, CJK codepage, system status)
+    /// carried from `DocumentIr` for `docx-writer` line-box queries.
+    pub font_metrics: BTreeMap<String, FontFaceMetricsIr>,
+    /// Pre-solved `(original_line_spacing_pt, w_line_240)` per paragraph `NodeId`, incorporating
+    /// both `font_metrics` and read-only `NodeReferenceLayout::paragraph_lines` while keeping
+    /// `DocumentIr` 100% immutable and Word-independent.
+    pub solved_line_dxa: BTreeMap<NodeId, (Option<f64>, i64)>,
+    /// Pre-solved DrawingML `<wps:bodyPr>`, `<wp:effectExtent>`, and `<w:position>` geometry per shape `NodeId`.
+    pub solved_shapes: BTreeMap<NodeId, SolvedShapeGeometry>,
     /// Whether the document contains any East Asian (CJK) characters or CJK typeface runs
     /// (requires `<w:useFELayout/>` and `zh-CN` theme font language in `word/settings.xml`).
     pub has_cjk: bool,
@@ -32,6 +46,33 @@ impl WordDocument {
     /// Construct a [`WordDocument`] from an immutable [`DocumentIr`].
     pub fn from_ir(ir: &DocumentIr) -> Self {
         build_word_document(ir)
+    }
+
+    /// Look up the pre-solved `w:line` (`1/240` line units) for paragraph `id`, or recompute
+    /// with `self.font_metrics` if `id` is unset or a container/table solver overrode `line_spacing_pt`.
+    pub fn resolve_paragraph_line_dxa(
+        &self,
+        id: NodeId,
+        content: &[InlineNode],
+        line_spacing_pt: Option<f64>,
+    ) -> i64 {
+        if !id.is_unset()
+            && let Some(&(orig_ls, solved_dxa)) = self.solved_line_dxa.get(&id)
+            && orig_ls == line_spacing_pt
+        {
+            return solved_dxa;
+        }
+        compute_line_spacing_dxa_with_metrics(content, line_spacing_pt, &self.font_metrics, None)
+    }
+
+    /// Look up pre-solved DrawingML shape geometry for `shape.id`, or compute on demand for synthetic shapes.
+    pub fn resolve_shape_geometry(&self, shape: &ShapeIr, is_inline: bool) -> SolvedShapeGeometry {
+        if shape.id.is_set()
+            && let Some(&solved) = self.solved_shapes.get(&shape.id)
+        {
+            return solved;
+        }
+        solve_shape_geometry(shape, is_inline, 240, None, &self.font_metrics)
     }
 }
 
@@ -52,15 +93,51 @@ pub fn build_word_document(ir: &DocumentIr) -> WordDocument {
     let mut page_setup = ir.page_setup.clone();
     let mut blocks = ir.blocks.clone();
     let mut sections = ir.sections.clone();
+    let mut solved_line_dxa: BTreeMap<NodeId, (Option<f64>, i64)> = BTreeMap::new();
+    let mut solved_shapes: BTreeMap<NodeId, SolvedShapeGeometry> = BTreeMap::new();
 
-    let solve_section_lists = |ps: &mut PageSetupIr, sec_blocks: &mut Vec<BlockNode>| {
+    let mut solve_section_lists = |ps: &mut PageSetupIr, sec_blocks: &mut Vec<BlockNode>| {
         let fallback_w = (ps.width_pt - ps.margin_left_pt - ps.margin_right_pt).max(72.0);
         let mut resolve_blocks = |blk_list: &mut Vec<BlockNode>| {
+            promote_standalone_partial_border_inline_boxes(blk_list, ir);
             lower_containers_in_blocks(blk_list, fallback_w);
             merge_split_styled_containers(blk_list);
             for block in blk_list.iter_mut() {
-                if let BlockNode::Paragraph { id, style, .. } = block {
-                    resolve_paragraph_style_spacing(style, ir.layout(*id));
+                match block {
+                    BlockNode::Paragraph {
+                        id, content, style, ..
+                    } => {
+                        let node_layout = ir.layout(*id);
+                        resolve_paragraph_style_spacing(style, node_layout);
+                        let para_lines = node_layout.and_then(|l| l.paragraph_lines.as_ref());
+                        let w_line = compute_line_spacing_dxa_with_metrics(
+                            content,
+                            style.line_spacing_pt,
+                            &ir.font_metrics,
+                            para_lines,
+                        );
+                        if !id.is_unset() {
+                            solved_line_dxa.insert(*id, (style.line_spacing_pt, w_line));
+                        }
+                        solve_inline_shapes_recursive(content, w_line, ir, &mut solved_shapes);
+                    }
+                    BlockNode::Heading { content, .. } | BlockNode::Title { content, .. } => {
+                        let w_line = compute_line_spacing_dxa_with_metrics(
+                            content,
+                            None,
+                            &ir.font_metrics,
+                            None,
+                        );
+                        solve_inline_shapes_recursive(content, w_line, ir, &mut solved_shapes);
+                    }
+                    BlockNode::ShapeBlock(shape) => {
+                        if shape.id.is_set() {
+                            let geom =
+                                solve_shape_geometry(shape, false, 240, None, &ir.font_metrics);
+                            solved_shapes.insert(shape.id, geom);
+                        }
+                    }
+                    _ => {}
                 }
             }
         };
@@ -91,9 +168,154 @@ pub fn build_word_document(ir: &DocumentIr) -> WordDocument {
         metadata: ir.metadata.clone(),
         page_setup,
         blocks,
+        font_metrics: ir.font_metrics.clone(),
+        solved_line_dxa,
+        solved_shapes,
         has_cjk,
         has_cetz_canvas,
     }
+}
+
+fn solve_inline_shapes_recursive(
+    inlines: &[InlineNode],
+    parent_w_line: i64,
+    ir: &DocumentIr,
+    out: &mut BTreeMap<NodeId, SolvedShapeGeometry>,
+) {
+    for inl in inlines {
+        match inl {
+            InlineNode::ShapeInline(shape) => {
+                if shape.id.is_set() {
+                    let ctx = ir
+                        .layout(shape.id)
+                        .and_then(|l| l.inline_box_context.as_ref());
+                    let geom = solve_shape_geometry(
+                        shape,
+                        true,
+                        parent_w_line,
+                        ctx,
+                        &ir.font_metrics,
+                    );
+                    out.insert(shape.id, geom);
+                }
+            }
+            InlineNode::Link { content, .. }
+            | InlineNode::Ref { content, .. }
+            | InlineNode::Citation { content, .. }
+            | InlineNode::Field { content, .. } => {
+                solve_inline_shapes_recursive(content, parent_w_line, ir, out);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Promote standalone rectangular partial-border `InlineNode::ShapeInline` boxes
+/// (e.g. `#box(width: 100%, stroke: (left: 2pt + blue), fill: ...)[...]`) into flow
+/// `BlockNode::Container`s (`breakable: false`) because DrawingML `<a:ln>` cannot stroke
+/// individual sides of a rectangle whereas Word 1x1 `<w:tbl>` (`<w:tcBorders>`) can.
+fn promote_standalone_partial_border_inline_boxes(blocks: &mut Vec<BlockNode>, ir: &DocumentIr) {
+    let mut i = 0;
+    while i < blocks.len() {
+        let split_idx = match &blocks[i] {
+            BlockNode::Paragraph { content, .. } => content.iter().position(|inl| {
+                if let InlineNode::ShapeInline(sh) = inl {
+                    let has_partial_border = sh.stroke.is_none() && sh.borders.has_any();
+                    let standalone = ir
+                        .layout(sh.id)
+                        .and_then(|l| l.inline_box_context.as_ref())
+                        .is_none_or(|c| !c.shares_line_with_text);
+                    sh.corner_radius_pt.is_none() && has_partial_border && standalone && !sh.body.is_empty()
+                } else {
+                    false
+                }
+            }),
+            _ => None,
+        };
+
+        let Some(pos) = split_idx else {
+            i += 1;
+            continue;
+        };
+
+        let BlockNode::Paragraph {
+            id: orig_id,
+            mut content,
+            style,
+            bookmark,
+        } = blocks.remove(i)
+        else {
+            unreachable!()
+        };
+
+        let after_inlines = trim_edge_breaks(content.split_off(pos + 1));
+        let Some(InlineNode::ShapeInline(sh)) = content.pop() else {
+            unreachable!()
+        };
+        let before_inlines = trim_edge_breaks(content);
+
+        let mut replacement = Vec::with_capacity(3);
+        let mut used_orig_id = false;
+        if !before_inlines.is_empty() {
+            let mut b_style = style.clone();
+            b_style.space_after_pt = style.resolved_par_leading_pt.unwrap_or(5.0).min(8.0);
+            replacement.push(BlockNode::Paragraph {
+                id: orig_id,
+                content: before_inlines,
+                style: b_style,
+                bookmark: bookmark.clone(),
+            });
+            used_orig_id = true;
+        }
+
+        replacement.push(BlockNode::Container(ContainerIr {
+            id: sh.id,
+            width_pt: Some(sh.width_pt),
+            height_pt: None,
+            align: style.align,
+            left_indent_pt: style.left_indent_pt,
+            style: ContainerStyleIr {
+                fill: sh.fill,
+                borders: sh.borders,
+                inset: sh.inset,
+                corner_radius_pt: None,
+            },
+            breakable: false,
+            sticky: false,
+            body: sh.body,
+        }));
+
+        if !after_inlines.is_empty() {
+            let mut a_style = style.clone();
+            a_style.first_line_indent_pt = 0.0;
+            replacement.push(BlockNode::Paragraph {
+                id: if used_orig_id { NodeId::UNSET } else { orig_id },
+                content: after_inlines,
+                style: a_style,
+                bookmark: if used_orig_id { None } else { bookmark },
+            });
+        }
+
+        let added = replacement.len();
+        blocks.splice(i..i, replacement);
+        i += added.min(1);
+    }
+}
+
+fn trim_edge_breaks(mut inlines: Vec<InlineNode>) -> Vec<InlineNode> {
+    let is_blank = |inl: &InlineNode| match inl {
+        InlineNode::LineBreak => true,
+        InlineNode::Text(r) => r.text.trim().is_empty() && r.underline.is_none() && r.highlight.is_none(),
+        InlineNode::HorizontalSpace { .. } => true,
+        _ => false,
+    };
+    while inlines.first().is_some_and(is_blank) {
+        inlines.remove(0);
+    }
+    while inlines.last().is_some_and(is_blank) {
+        inlines.pop();
+    }
+    inlines
 }
 
 fn inlines_have_cjk(inlines: &[InlineNode]) -> bool {

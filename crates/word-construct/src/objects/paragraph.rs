@@ -3,7 +3,11 @@
 //! Solves `<w:spacing>`, `<w:ind>`, `<w:jc>`, `<w:tabs>`, paragraph-mark `<w:rPr>`,
 //! `OS/2` line-box height (`w:line`), and inter-paragraph font-size transition spacing.
 
-use ir::{BlockNode, HAlignIr, InlineNode, ParagraphStyleIr};
+use std::collections::BTreeMap;
+
+use ir::{
+    BlockNode, FontFaceMetricsIr, HAlignIr, InlineNode, ParagraphLineMetricsIr, ParagraphStyleIr,
+};
 use crate::units::pt_to_dxa;
 
 /// Exhaustive horizontal indentation construct for `<w:ind>`.
@@ -78,6 +82,25 @@ impl ParagraphConstruct {
         content_width_dxa: i64,
         keep_with_next_override: bool,
     ) -> Self {
+        let line_dxa = compute_line_spacing_dxa(content, style.line_spacing_pt);
+        Self::solve_with_line_dxa(
+            content,
+            style,
+            content_width_dxa,
+            keep_with_next_override,
+            line_dxa,
+        )
+    }
+
+    /// Solve a [`ParagraphConstruct`] using a pre-calibrated `line_dxa` (`w:line` in 240ths)
+    /// resolved from [`crate::WordDocument::resolve_paragraph_line_dxa`].
+    pub fn solve_with_line_dxa(
+        content: &[InlineNode],
+        style: &ParagraphStyleIr,
+        content_width_dxa: i64,
+        keep_with_next_override: bool,
+        line_dxa: i64,
+    ) -> Self {
         let has_right_tab = has_flush_right_horizontal_space(content, content_width_dxa);
         let align = if has_right_tab && style.align == HAlignIr::Justify {
             HAlignIr::Left
@@ -87,7 +110,6 @@ impl ParagraphConstruct {
         let right_tab_stop_dxa = has_right_tab.then_some(content_width_dxa);
         let before_dxa = pt_to_dxa(style.space_before_pt).max(0);
         let after_dxa = pt_to_dxa(style.space_after_pt).max(0);
-        let line_dxa = compute_line_spacing_dxa(content, style.line_spacing_pt);
         let indentation = ParagraphIndentationConstruct::solve(style);
 
         Self {
@@ -232,6 +254,17 @@ pub fn paragraph_mark_rpr_sz_half_pt(content: &[InlineNode]) -> Option<u32> {
 
 /// Solve Word `w:line` (`1/240` line units) for `content` via [`crate::WordLineBox`].
 pub fn compute_line_spacing_dxa(content: &[InlineNode], line_spacing_pt: Option<f64>) -> i64 {
+    compute_line_spacing_dxa_with_metrics(content, line_spacing_pt, &BTreeMap::new(), None)
+}
+
+/// Solve Word `w:line` (`1/240` line units) for `content` using document-level OpenType binary
+/// font metrics (`font_metrics`) and optional ground-truth Typst baseline step (`para_lines`).
+pub fn compute_line_spacing_dxa_with_metrics(
+    content: &[InlineNode],
+    line_spacing_pt: Option<f64>,
+    font_metrics: &BTreeMap<String, FontFaceMetricsIr>,
+    para_lines: Option<&ParagraphLineMetricsIr>,
+) -> i64 {
     let base_font_pt = content
         .iter()
         .find_map(|inl| match inl {
@@ -242,10 +275,10 @@ pub fn compute_line_spacing_dxa(content: &[InlineNode], line_spacing_pt: Option<
         .unwrap_or(11.0)
         .max(6.0);
     let cjk_font = content.iter().find_map(|inl| match inl {
-        InlineNode::Text(r) => r
-            .font_family
-            .as_deref()
-            .filter(|f| crate::WordFontMetricsProvider::is_cjk_codepage_font(Some(f))),
+        InlineNode::Text(r) => r.font_family.as_deref().filter(|f| {
+            font_metrics.get(*f).is_some_and(|m| m.has_cjk_codepage)
+                || crate::WordFontMetricsProvider::is_cjk_codepage_font(Some(f))
+        }),
         _ => None,
     });
     let first_font = cjk_font.or_else(|| {
@@ -266,8 +299,18 @@ pub fn compute_line_spacing_dxa(content: &[InlineNode], line_spacing_pt: Option<
     } else {
         first_font
     };
-    crate::WordLineBox::from_typst_metrics(
+    let font_face = eff_font.and_then(|f| {
+        font_metrics.get(f).or_else(|| {
+            let fl = f.trim().to_ascii_lowercase();
+            font_metrics
+                .iter()
+                .find_map(|(k, v)| k.trim().eq_ignore_ascii_case(&fl).then_some(v))
+        })
+    });
+    crate::WordLineBox::from_paragraph_metrics(
         eff_font,
+        font_face,
+        para_lines,
         has_cjk_chars,
         has_inline_eq,
         only_inline_eq,

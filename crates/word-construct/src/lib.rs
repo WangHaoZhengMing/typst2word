@@ -83,6 +83,9 @@ mod tests {
 
     #[test]
     fn test_cjk_line_box_metrics() {
+        // `PingFang SC` has `hhea = 1.400`, CJK `1.3x` -> `M_word = 1.820` (`20.02pt` at 11pt),
+        // and `sCapHeight = 0.860` (`9.46pt` at 11pt). With `leading = 7.15pt`, Typst steps by
+        // `9.46 + 7.15 = 16.61pt`, which maps to `w:line = round(240 * 16.61 / 20.02) = 199`.
         let lb = WordLineBox::from_typst_metrics(
             Some("PingFang SC"),
             true,
@@ -91,9 +94,9 @@ mod tests {
             11.0,
             Some(7.15),
         );
-        assert_eq!(lb.w_line_240, 278);
-        assert!(lb.line_box_height_pt > 16.5 && lb.line_box_height_pt < 18.0);
-        assert!((lb.ink_height_pt - 10.56).abs() < 0.1);
+        assert_eq!(lb.w_line_240, 199);
+        assert!((lb.line_box_height_pt - 16.60).abs() < 0.15);
+        assert!((lb.ink_height_pt - 9.46).abs() < 0.1);
     }
 
     #[test]
@@ -244,13 +247,79 @@ mod tests {
 
         let pingfang = lookup_known_font("PingFang SC").expect("PingFang SC");
         let spec_pf = WordLineBoxSpec::compute("PingFang SC", pingfang, font_size, typst_leading);
-        assert_eq!(spec_pf.w_line, WLine(278));
+        assert_eq!(spec_pf.w_line, WLine(199));
         assert_eq!(spec_pf.workaround, ShapingWorkaround::None);
 
         let songti = lookup_known_font("Songti SC").expect("Songti SC");
         let spec_st = WordLineBoxSpec::compute("Songti SC", songti, font_size, typst_leading);
-        assert_eq!(spec_st.w_line, WLine(181));
+        assert_eq!(spec_st.w_line, WLine(177));
         assert_eq!(spec_st.workaround, ShapingWorkaround::ForceCjkScriptBinding);
+
+        // Verify binary `FontFaceMetricsIr` + `ParagraphLineMetricsIr` calibration:
+        // 1) System-installed CJK font (`PingFang SC`) uses binary `hhea_span * 1.3` (`1.820`)
+        //    and measured `uniform_baseline_step_pt` (`16.61pt`) -> `w:line = 199`.
+        let pf_face = ir::FontFaceMetricsIr {
+            upem: 1000,
+            hhea_ascender: 1060,
+            hhea_descender: -340,
+            hhea_line_gap: 0,
+            s_cap_height: Some(860),
+            s_typo_ascender: Some(860),
+            s_typo_descender: Some(-140),
+            us_win_ascent: Some(1060),
+            us_win_descent: Some(340),
+            has_cjk_codepage: true,
+            has_gsub_hani: true,
+            is_monospaced: false,
+            is_system_installed: true,
+        };
+        let pf_lines = ir::ParagraphLineMetricsIr {
+            line_count: 4,
+            first_baseline_y_pt: 78.79,
+            last_baseline_y_pt: 128.62,
+            uniform_baseline_step_pt: Some(16.61),
+            has_tall_inline_object: false,
+        };
+        let lb_cal = WordLineBox::from_paragraph_metrics(
+            Some("PingFang SC"),
+            Some(&pf_face),
+            Some(&pf_lines),
+            true,
+            false,
+            false,
+            11.0,
+            Some(7.15),
+        );
+        assert_eq!(lb_cal.w_line_240, 199);
+
+        // 2) Embedded-only font (`Libertinus Serif`, `is_system_installed == false`) falls back
+        //    to Word's `fontTable.xml` substitute (`Times New Roman`, `M_word = 1.150`) -> `274`.
+        let lib_face = ir::FontFaceMetricsIr {
+            upem: 1000,
+            hhea_ascender: 891,
+            hhea_descender: -216,
+            hhea_line_gap: 0,
+            s_cap_height: Some(662),
+            s_typo_ascender: Some(689),
+            s_typo_descender: Some(-216),
+            us_win_ascent: Some(975),
+            us_win_descent: Some(254),
+            has_cjk_codepage: false,
+            has_gsub_hani: false,
+            is_monospaced: false,
+            is_system_installed: false,
+        };
+        let lb_emb = WordLineBox::from_paragraph_metrics(
+            Some("Libertinus Serif"),
+            Some(&lib_face),
+            None,
+            false,
+            false,
+            false,
+            12.0,
+            Some(7.80),
+        );
+        assert_eq!(lb_emb.w_line_240, 274);
 
         let raw_custom = RawFontMetrics {
             family_name: "CustomAppleSong",

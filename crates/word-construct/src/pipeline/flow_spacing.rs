@@ -53,7 +53,10 @@ pub fn resolve_paragraph_style_spacing(
             par_leading_pt,
         );
         let in_multi_block_group_tail = flow.is_some_and(|f| f.in_multi_block_group_tail);
-        if in_multi_block_group_tail && (1.5..6.0).contains(&sa) {
+        // Only restore `6.05pt` (`0.55em`) on a multi-block group's tail paragraph when Typst's
+        // internal group scope collapsed `par.spacing` down to `par.leading` (`|spacing - leading| < 0.15`),
+        // NOT when the user explicitly configured a tight `par(spacing: 0.6em, leading: 0.65em)`.
+        if in_multi_block_group_tail && sa < 6.0 && (par_spacing_pt - par_leading_pt).abs() < 0.15 {
             sa = 6.05;
         }
         style.space_after_pt = sa;

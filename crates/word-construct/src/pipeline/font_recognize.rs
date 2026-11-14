@@ -69,7 +69,9 @@ pub fn classify_font_family(font_family: Option<&str>, is_code: bool) -> FontFam
             FontParadigm::AppleCjkQuirk { .. } | FontParadigm::LegacyCjkSerif { .. } => {
                 FontFamilyClassIr::CjkSerif
             }
-            FontParadigm::StandardWin { is_cjk: true, .. } => FontFamilyClassIr::CjkUiSans,
+            FontParadigm::CjkUiSans { .. } | FontParadigm::StandardWin { is_cjk: true, .. } => {
+                FontFamilyClassIr::CjkUiSans
+            }
             FontParadigm::Monospace { .. } => FontFamilyClassIr::Monospace,
             FontParadigm::StandardWin { is_cjk: false, .. } => {
                 if is_code {

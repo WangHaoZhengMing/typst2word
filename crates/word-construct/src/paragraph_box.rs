@@ -104,7 +104,11 @@ impl WordParagraphConstruct {
             ParagraphScaleProfile::ExplicitLinebreakTerminated => 0.0,
             ParagraphScaleProfile::DisplayTitle => spacing_pt + 2.0,
             ParagraphScaleProfile::SubHeading => (spacing_pt - 3.0).max(2.0),
-            ParagraphScaleProfile::BodyText => (spacing_pt - leading_pt).max(1.5),
+            // In Typst, consecutive paragraph baselines step by `cap_height + par.spacing`, whereas
+            // consecutive lines within a paragraph step by `cap_height + par.leading`. Once `w:line`
+            // is calibrated to `cap_height + par.leading`, the exact extra inter-paragraph gap `w:after`
+            // is `(par.spacing - par.leading).max(0.0)` (allowing `0.0pt` when `par.spacing <= par.leading`).
+            ParagraphScaleProfile::BodyText => (spacing_pt - leading_pt).max(0.0),
         }
     }
 

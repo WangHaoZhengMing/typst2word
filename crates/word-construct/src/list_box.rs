@@ -80,7 +80,9 @@ impl WordListItemLayout {
         let first_after_dxa = match (input.following_block, input.num_blocks > 1, input.tight) {
             (FollowingBlockKind::GridTable, _, _) => first_line_gap_dxa,
             (FollowingBlockKind::TightList, true, _) | (_, true, true) => 0,
-            (FollowingBlockKind::Paragraph, true, false) => input.item_gap_dxa.max(132),
+            // Respect the list/enum's actual `item_gap_dxa` (derived from `par.spacing - par.leading`)
+            // without forcing an artificial `132 dxa` (`6.6pt`) floor on tighter custom `par(spacing: ...)`.
+            (FollowingBlockKind::Paragraph, true, false) => input.item_gap_dxa,
             (_, true, false) => 10,
             (_, false, _) => {
                 // Single-block item: this first paragraph is ALSO the last block of the item!
