@@ -542,7 +542,12 @@ fn realize_fragment_pairs<'a>(
         let should_wrap = !already_tagged
             && !is_cetz_span(item.span())
             && ((item.is::<BlockElem>() && is_styled_or_structural_block(item, chain))
-                || item.is::<ColbreakElem>());
+                || item.is::<ColbreakElem>()
+                || item.is::<LinebreakElem>()
+                || (item.is::<BoxElem>() && item.location().is_none())
+                || item
+                    .to_packed::<HElem>()
+                    .is_some_and(|h| !h.weak.get(chain) && !h.amount.is_zero()));
 
         if should_wrap {
             wrap_item_with_internal_tag(&mut out, item, chain, idx, engine, locator, arenas);
@@ -685,7 +690,12 @@ fn realize_document_pairs<'a>(
         let should_wrap = !already_tagged
             && !is_cetz_span(item.span())
             && ((item.is::<BlockElem>() && is_styled_or_structural_block(item, chain))
-                || item.is::<ColbreakElem>());
+                || item.is::<ColbreakElem>()
+                || item.is::<LinebreakElem>()
+                || (item.is::<BoxElem>() && item.location().is_none())
+                || item
+                    .to_packed::<HElem>()
+                    .is_some_and(|h| !h.weak.get(chain) && !h.amount.is_zero()));
 
         if should_wrap {
             wrap_item_with_internal_tag(&mut out, item, chain, i, engine, locator, arenas);

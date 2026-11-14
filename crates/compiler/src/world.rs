@@ -1,7 +1,7 @@
 //! Self-contained Typst 0.15 `World` implementation with system + embedded fonts,
 //! virtual file overlays, and `@preview` package resolution (including CeTZ).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
@@ -28,6 +28,10 @@ pub struct GlobalTypstResources {
     pub library: LazyHash<Library>,
     /// System fonts followed by Typst's embedded fonts (same order as 0.14's `FontSearcher`).
     pub fonts: FontStore,
+    /// Lowercase normalized family names installed in the host OS font catalog
+    /// (excluding Typst's embedded fallback fonts, which Microsoft Word cannot read directly
+    /// and substitutes via `word/fontTable.xml` `<w:altName>`).
+    pub system_font_families: HashSet<String>,
     /// Local data/cache package directories plus Typst Universe downloads.
     pub packages: SystemPackages,
 }
@@ -40,7 +44,15 @@ impl GlobalTypstResources {
                 .with_features(features)
                 .build();
             let mut fonts = FontStore::new();
-            fonts.extend(fonts::system());
+            let mut system_font_families = HashSet::new();
+            // Record host OS font family names BEFORE appending Typst's embedded fallback bundle
+            // (`Libertinus Serif`, `DejaVu Sans Mono`, `New Computer Modern Math`), so downstream
+            // metric calibration knows whether Word will load the exact same binary or substitute
+            // `<w:altName>` from `word/fontTable.xml`.
+            for (source, info) in fonts::system() {
+                system_font_families.insert(info.family.trim().to_ascii_lowercase());
+                fonts.push((source, info));
+            }
             fonts.extend(fonts::embedded());
             let packages = SystemPackages::new(SystemDownloader::new(concat!(
                 "typst2word/",
@@ -49,10 +61,18 @@ impl GlobalTypstResources {
             GlobalTypstResources {
                 library: LazyHash::new(library),
                 fonts,
+                system_font_families,
                 packages,
             }
         });
         &INSTANCE
+    }
+
+    /// Return `true` if `family` is installed in the host OS font catalog.
+    #[inline]
+    pub fn is_system_font_family(&self, family: &str) -> bool {
+        self.system_font_families
+            .contains(&family.trim().to_ascii_lowercase())
     }
 }
 
