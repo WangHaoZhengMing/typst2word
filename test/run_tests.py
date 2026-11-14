@@ -32,7 +32,16 @@ TEST_DIR = Path(__file__).resolve().parent
 INSPECTOR_BIN = TEST_DIR / "tools" / "pdf_inspector"
 INSPECTOR_SRC = TEST_DIR / "tools" / "pdf_inspector.swift"
 TYPST2WORD_BIN = ROOT_DIR / "target" / "debug" / "typst2word"
-STAGE_DIR = Path("/private/tmp/typst2word_test_stage")
+
+
+def resolve_word_stage_dir() -> Path:
+    container_data = Path.home() / "Library/Containers/com.microsoft.Word/Data"
+    if container_data.is_dir():
+        return container_data / "tmp" / f"typst2word_test_stage_{os.getpid()}"
+    return Path(f"/private/tmp/typst2word_test_stage_{os.getpid()}")
+
+
+STAGE_DIR = resolve_word_stage_dir()
 
 
 def ensure_binaries():
@@ -41,7 +50,7 @@ def ensure_binaries():
     ):
         print("[build] Compiling test/tools/pdf_inspector.swift ...")
         subprocess.run(
-            ["swiftc", str(INSPECTOR_SRC), "-o", str(INSPECTOR_BIN)],
+            ["swiftc", "-O", str(INSPECTOR_SRC), "-o", str(INSPECTOR_BIN)],
             check=True,
         )
 
@@ -71,36 +80,96 @@ def discover_tests(filter_substr=None):
 def batch_export_word_pdfs(staged_pairs):
     """
     staged_pairs: list of (staged_docx_path, staged_pdf_path, dest_pdf_path)
-    Uses a single AppleScript call to Microsoft Word to convert all .docx files to .pdf.
+    Uses a single silent AppleScript call to Microsoft Word inside Word's sandbox container
+    without stealing window focus or showing modal alerts.
     """
     if not staged_pairs:
         return
 
+    was_running = (
+        subprocess.run(
+            ["pgrep", "-x", "Microsoft Word"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        ).returncode
+        == 0
+    )
+    if not was_running:
+        subprocess.run(
+            ["open", "-g", "-j", "-a", "Microsoft Word"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=True,
+        )
+        subprocess.run(
+            [
+                "osascript",
+                "-e",
+                'tell application "System Events" to if exists process "Microsoft Word" then set visible of process "Microsoft Word" to false',
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
     script_lines = [
+        "with timeout of 60 seconds",
         'tell application "Microsoft Word"',
-        "  activate",
+        "  try",
+        "    set startup dialog to false",
+        "  end try",
+        "  set prevAlerts to display alerts",
+        "  set display alerts to alerts none",
+        "  try",
     ]
     for docx_p, pdf_p, _ in staged_pairs:
         if pdf_p.exists():
             pdf_p.unlink()
         script_lines.extend(
             [
-                f'  open POSIX file "{docx_p}"',
-                f'  save as active document file name "{pdf_p}" file format format PDF',
-                "  close active document saving no",
+                f'    open POSIX file "{docx_p}" with read only without add to recent files',
+                "    set targetDoc to active document",
+                f'    save as targetDoc file name "{pdf_p}" file format format PDF without add to recent files',
+                "    close targetDoc saving no",
             ]
         )
-    script_lines.append("end tell")
+    script_lines.extend(
+        [
+            "  on error errMsg number errNum",
+            "    try",
+            "      set display alerts to prevAlerts",
+            "    end try",
+            "    error errMsg number errNum",
+            "  end try",
+            "  try",
+            "    set display alerts to prevAlerts",
+            "  end try",
+            "end tell",
+            "end timeout",
+        ]
+    )
     script = "\n".join(script_lines)
 
-    print(f"[word] Exporting {len(staged_pairs)} .docx files to PDF via Microsoft Word ...")
-    subprocess.run(["osascript", "-e", script], check=True)
+    print(f"[word] Silently exporting {len(staged_pairs)} .docx files to PDF via Microsoft Word ...")
+    try:
+        subprocess.run(["osascript", "-e", script], check=True, timeout=70)
+    finally:
+        if not was_running:
+            subprocess.run(
+                [
+                    "osascript",
+                    "-e",
+                    'tell application "System Events" to if exists process "Microsoft Word" then set visible of process "Microsoft Word" to false',
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
 
     for _, pdf_p, dest_pdf_p in staged_pairs:
         if pdf_p.exists():
             shutil.copy2(pdf_p, dest_pdf_p)
         else:
             print(f"[warn] Word did not produce expected PDF: {pdf_p}", file=sys.stderr)
+    shutil.rmtree(STAGE_DIR, ignore_errors=True)
 
 
 def main():

@@ -33,33 +33,79 @@ def find_repo_root() -> Path:
 
 
 def export_docx_to_pdf_via_word(docx_path: Path, pdf_out_path: Path) -> None:
+    container_data = Path.home() / "Library/Containers/com.microsoft.Word/Data"
     word_sandbox_dir = (
-        Path.home()
-        / "Library/Containers/com.microsoft.Word/Data/Documents"
+        container_data / "tmp" if container_data.is_dir() else Path("/private/tmp")
     )
     word_sandbox_dir.mkdir(parents=True, exist_ok=True)
-    temp_docx = word_sandbox_dir / "typst2word_visual_temp.docx"
-    temp_pdf = word_sandbox_dir / "typst2word_visual_temp.pdf"
+    pid = os.getpid()
+    temp_docx = word_sandbox_dir / f"typst2word_visual_temp_{pid}.docx"
+    temp_pdf = word_sandbox_dir / f"typst2word_visual_temp_{pid}.pdf"
 
     if temp_pdf.exists():
         temp_pdf.unlink()
     shutil.copy2(docx_path, temp_docx)
 
+    was_running = (
+        subprocess.run(
+            ["pgrep", "-x", "Microsoft Word"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        ).returncode
+        == 0
+    )
+    if not was_running:
+        subprocess.run(
+            ["open", "-g", "-j", "-a", "Microsoft Word"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=True,
+        )
+
     applescript = f'''
-    set inFile to POSIX file "{temp_docx}"
-    set outFile to "{temp_pdf}"
+    with timeout of 30 seconds
     tell application "Microsoft Word"
-        open inFile
-        delay 1.2
-        save as active document file name outFile file format format PDF
-        close active document saving no
+        try
+            set startup dialog to false
+        end try
+        set prevAlerts to display alerts
+        set display alerts to alerts none
+        try
+            open POSIX file "{temp_docx}" with read only without add to recent files
+            set targetDoc to active document
+            save as targetDoc file name "{temp_pdf}" file format format PDF without add to recent files
+            close targetDoc saving no
+        on error errMsg number errNum
+            try
+                set display alerts to prevAlerts
+            end try
+            error errMsg number errNum
+        end try
+        try
+            set display alerts to prevAlerts
+        end try
     end tell
+    end timeout
     '''
-    subprocess.run(["osascript", "-e", applescript], check=True)
-    if not temp_pdf.exists():
-        raise RuntimeError(f"Microsoft Word did not produce PDF at {temp_pdf}")
-    pdf_out_path.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(temp_pdf, pdf_out_path)
+    try:
+        subprocess.run(["osascript", "-e", applescript], check=True, timeout=35)
+        if not temp_pdf.exists():
+            raise RuntimeError(f"Microsoft Word did not produce PDF at {temp_pdf}")
+        pdf_out_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(temp_pdf, pdf_out_path)
+    finally:
+        temp_docx.unlink(missing_ok=True)
+        temp_pdf.unlink(missing_ok=True)
+        if not was_running:
+            subprocess.run(
+                [
+                    "osascript",
+                    "-e",
+                    'tell application "System Events" to if exists process "Microsoft Word" then set visible of process "Microsoft Word" to false',
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
 
 
 def render_pdf_pages_to_images(

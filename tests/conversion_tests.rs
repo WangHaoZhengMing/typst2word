@@ -528,3 +528,106 @@ Status #box(fill: rgb("#E0F2FE"), inset: (x: 4pt, y: 1pt))[ACTIVE] verified.
     assert!(matches!(ir.blocks.get(1), Some(BlockNode::Paragraph { .. })));
     assert!(doc_xml.contains("E0F2FE"));
 }
+
+#[test]
+fn test_pingfang_calibrated_line_spacing_and_spatial_inline_box_in_enum() {
+    let typst_src = r##"
+#set text(font: "PingFang SC", size: 11pt, lang: "zh")
++ 第一条多行列表测试内容，用于验证苹方字体行距校准与基线步进提取是否准确匹配双引擎排版宽度与高度。
+
++ 洛克在《教育话语》中强调要与孩子讲道理，把孩子当成理性的人对待。\
+  #box(inset: 12pt, stroke: 1pt + gray, radius: 6pt, [
+    中文翻译对洛克原文的“pride”理解有误，将之译为“自负”，失去了原文中对儿童主体性的尊重
+  ])\
+  中国社会流行的“长大了就懂了”这种说法，则完全拒绝了与孩子讲道理。
+"##;
+
+    let (docx_bytes, ir) = convert_typst_str_to_docx_bytes(typst_src, None)
+        .expect("enum with spatial inline #box converts cleanly");
+    let doc_xml = assert_valid_docx_xml(&docx_bytes);
+
+    // 1. `DocumentIr` remains pure and records binary OpenType metrics when `PingFang SC` is available.
+    if let Some(pf) = ir.font_metrics.get("PingFang SC") {
+        assert!(pf.has_cjk_codepage);
+        assert!(pf.hhea_span_ratio() > 1.35);
+    }
+
+    // 2. Spatial `#box(inset: 12pt, stroke: 1pt + gray, radius: 6pt)[...]` inside enum item 2
+    //    becomes `InlineNode::ShapeInline` (`roundRect` DrawingML textbox) without poisoning
+    //    the parent paragraph's `hanging_indent_pt` or emitting `<w:bdr>` character borders.
+    let Some(BlockNode::Enum { items, .. }) = ir.blocks.first() else {
+        panic!("expected BlockNode::Enum, got {:?}", ir.blocks.first());
+    };
+    assert_eq!(items.len(), 2);
+    let Some(BlockNode::Paragraph { content, style, .. }) = items[1].blocks.first() else {
+        panic!("expected Paragraph in enum item 2");
+    };
+    assert!(
+        style.hanging_indent_pt < 0.5,
+        "padded inline #box must not trigger false hanging_indent_pt, got {}",
+        style.hanging_indent_pt
+    );
+    assert!(content.iter().any(|inl| matches!(
+        inl,
+        typst2word::ir::InlineNode::ShapeInline(s)
+            if s.corner_radius_pt.is_some_and(|r| (5.5..=6.5).contains(&r))
+                && (s.inset.left - 12.0).abs() < 1.0
+    )));
+    assert!(doc_xml.contains(r#"<a:prstGeom prst="roundRect">"#));
+    assert!(!doc_xml.contains("<w:bdr "));
+    assert!(doc_xml.contains(r#"w:line="199" w:lineRule="auto""#));
+}
+
+#[test]
+fn test_box_elem_exact_semantics_baseline_and_partial_border_lowering() {
+    let typst_src = r##"
+#set text(font: "PingFang SC", size: 11pt, lang: "zh")
+Step #box(baseline: 30%, circle(radius: 8pt, fill: rgb("#DBEAFE"), stroke: 0.8pt + rgb("#1D4ED8"))[1]) begins.
+
++ 结尾盒子上方有段内行距但下方无同段行。\
+  #box(inset: 12pt, stroke: 1pt + gray, radius: 6pt)[柏拉图奴隶男孩的回忆论示例]
+
+#box(width: 100%, fill: rgb("#F8FAFC"), stroke: (left: 2.5pt + rgb("#2563EB")), inset: 10pt)[
+  单侧左边框直角行内盒子应由 word-construct 自动升级为原生单格表格边框
+]
+"##;
+
+    let (docx_bytes, ir) = convert_typst_str_to_docx_bytes(typst_src, None)
+        .expect("BoxElem exact semantics and lowering convert cleanly");
+    let doc_xml = assert_valid_docx_xml(&docx_bytes);
+
+    // 1. `#box(baseline: 30%, circle(...))` propagates `baseline_shift_pt` -> `<w:position w:val="..."/>`.
+    assert!(
+        doc_xml.contains("<w:position w:val=\"-"),
+        "expected negative half-point w:position for downward #box(baseline: 30%)"
+    );
+
+    // 2. Enum trailing `#box(inset: 12pt, radius: 6pt)` extracts exact `12.0pt` inset and `6.0pt` radius
+    //    directly from `BoxElem`, and records `prev_line: Some, next_line: None` in `ReferenceLayout`.
+    let Some(BlockNode::Enum { items, .. }) = ir.blocks.get(1) else {
+        panic!("expected BlockNode::Enum at index 1, got {:?}", ir.blocks.get(1));
+    };
+    let Some(BlockNode::Paragraph { content, .. }) = items[0].blocks.first() else {
+        panic!("expected Paragraph in enum item");
+    };
+    let shape = content
+        .iter()
+        .find_map(|inl| match inl {
+            typst2word::ir::InlineNode::ShapeInline(s) => Some(s),
+            _ => None,
+        })
+        .expect("expected ShapeInline for rounded #box");
+    assert!((shape.inset.left - 12.0).abs() < 0.05);
+    assert!((shape.inset.top - 12.0).abs() < 0.05);
+    assert_eq!(shape.corner_radius_pt, Some(6.0));
+    let ctx = ir
+        .layout(shape.id)
+        .and_then(|l| l.inline_box_context.as_ref())
+        .expect("expected InlineBoxLineContextIr on ShapeInline");
+    assert!(ctx.prev_line.is_some());
+    assert!(ctx.next_line.is_none());
+
+    // 3. Partial-border standalone `#box(stroke: (left: 2.5pt + #2563EB))` lowers to `<w:tcBorders>` with `2563EB`.
+    assert!(doc_xml.contains("2563EB"));
+    assert!(doc_xml.contains("<w:tcBorders>"));
+}
