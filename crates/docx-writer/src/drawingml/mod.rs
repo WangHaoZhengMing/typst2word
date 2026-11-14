@@ -12,7 +12,7 @@ mod shape;
 mod textbox;
 
 pub(crate) use cetz::cetz_canvas_to_drawingml_run;
-pub(crate) use shape::shape_to_drawingml_run;
+pub(crate) use shape::{shape_to_drawingml_run, shape_to_inline_drawingml_run};
 
 use std::sync::atomic::{AtomicU32, Ordering};
 

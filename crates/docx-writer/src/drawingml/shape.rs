@@ -5,11 +5,29 @@ use crate::drawingml::line::build_ln_xml;
 use crate::drawingml::next_drawing_id;
 use crate::drawingml::textbox::render_textbox_blocks;
 use crate::writer::DocxWriter;
-use word_construct::model::{BlockNode, CurveSegmentIr, ShapeIr, ShapeKindIr};
+use word_construct::model::{BlockNode, CurveSegmentIr, ShapeIr, ShapeKindIr, SidesPtIr};
 use word_construct::units::pt_to_emu;
 
-/// Build a `<w:r><w:drawing>...</w:drawing></w:r>` XML fragment for a `ShapeIr`.
+/// Build a `<w:r><w:drawing>...</w:drawing></w:r>` XML fragment for a `BlockNode::ShapeBlock`.
 pub(crate) fn shape_to_drawingml_run(writer: &mut DocxWriter<'_>, shape: &ShapeIr) -> String {
+    shape_to_drawingml_run_inner(writer, shape, false)
+}
+
+/// Build an inline `<w:r>...<wp:inline>...</wp:inline>...</w:r>` for an `InlineNode::ShapeInline`,
+/// consuming pre-solved `<wp:effectExtent>`, `<wps:bodyPr>`, and `<w:position>` geometry from `WordDocument`.
+pub(crate) fn shape_to_inline_drawingml_run(
+    writer: &mut DocxWriter<'_>,
+    shape: &ShapeIr,
+) -> String {
+    shape_to_drawingml_run_inner(writer, shape, true)
+}
+
+fn shape_to_drawingml_run_inner(
+    writer: &mut DocxWriter<'_>,
+    shape: &ShapeIr,
+    is_inline: bool,
+) -> String {
+    let solved = writer.doc.resolve_shape_geometry(shape, is_inline);
     let draw_id = next_drawing_id();
     let (w_pt, h_pt) = effective_shape_dimensions(shape);
     let cx = pt_to_emu(w_pt * shape.scale_x.abs().max(0.05)).max(12700);
@@ -22,8 +40,22 @@ pub(crate) fn shape_to_drawingml_run(writer: &mut DocxWriter<'_>, shape: &ShapeI
         .or(shape.borders.top.as_ref())
         .map(|s| pt_to_emu(s.thickness_pt).max(6350))
         .unwrap_or(0);
+    let top_pad_emu = stroke_pad_emu + pt_to_emu(solved.inline_extra_top_pt).max(0);
+    let bot_pad_emu = stroke_pad_emu + pt_to_emu(solved.inline_extra_bottom_pt).max(0);
+    let rpr_xml = solved
+        .run_position_half_pt
+        .map_or_else(String::new, |hp| {
+            format!(r#"<w:rPr><w:position w:val="{hp}"/></w:rPr>"#)
+        });
 
-    let wsp_xml = build_wsp_xml(Some(writer), shape, None, cx, cy);
+    let wsp_xml = build_wsp_xml(
+        Some(writer),
+        shape,
+        None,
+        cx,
+        cy,
+        Some(solved.body_inset_pt),
+    );
 
     if let Some((dx_pt, dy_pt)) = shape.placed_offset_pt {
         let dx_emu = pt_to_emu(dx_pt);
@@ -67,7 +99,7 @@ pub(crate) fn shape_to_drawingml_run(writer: &mut DocxWriter<'_>, shape: &ShapeI
 
     format!(
         concat!(
-            r#"<w:r>"#,
+            r#"<w:r>{rpr}"#,
             r#"<w:drawing>"#,
             r#"<wp:inline distT="0" distB="0" distL="0" distR="0" "#,
             r#"xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" "#,
@@ -76,7 +108,7 @@ pub(crate) fn shape_to_drawingml_run(writer: &mut DocxWriter<'_>, shape: &ShapeI
             r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" "#,
             r#"xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math">"#,
             r#"<wp:extent cx="{cx}" cy="{cy}"/>"#,
-            r#"<wp:effectExtent l="{pad}" t="{pad}" r="{pad}" b="{pad}"/>"#,
+            r#"<wp:effectExtent l="{pad}" t="{tpad}" r="{pad}" b="{bpad}"/>"#,
             r#"<wp:docPr id="{id}" name="TypstShape_{id}"/>"#,
             r#"<wp:cNvGraphicFramePr/>"#,
             r#"<a:graphic>"#,
@@ -88,9 +120,12 @@ pub(crate) fn shape_to_drawingml_run(writer: &mut DocxWriter<'_>, shape: &ShapeI
             r#"</w:drawing>"#,
             r#"</w:r>"#
         ),
+        rpr = rpr_xml,
         cx = cx,
         cy = cy,
         pad = stroke_pad_emu,
+        tpad = top_pad_emu,
+        bpad = bot_pad_emu,
         id = draw_id,
         wsp = wsp_xml
     )
@@ -121,6 +156,7 @@ pub(crate) fn build_wsp_xml(
     group_offset_emu: Option<(i64, i64)>,
     cx: i64,
     cy: i64,
+    solved_body_inset_pt: Option<SidesPtIr>,
 ) -> String {
     let sp_id = next_drawing_id();
     let (off_x, off_y) = group_offset_emu.unwrap_or((0, 0));
@@ -231,50 +267,11 @@ pub(crate) fn build_wsp_xml(
             .body
             .iter()
             .any(|b| matches!(b, BlockNode::Table(_)));
-        let (l_ins, t_ins, r_ins, b_ins) = match &shape.kind {
-            ShapeKindIr::Ellipse => {
-                if shape.width_pt < 80.0 {
-                    (0, 0, 0, 0)
-                } else {
-                    let h_pad = (shape.inset.left - 2.0).max(0.0);
-                    let v_pad = (shape.inset.top - 2.0).max(0.0);
-                    (
-                        pt_to_emu(h_pad),
-                        pt_to_emu(v_pad),
-                        pt_to_emu((shape.inset.right - 2.0).max(0.0)),
-                        pt_to_emu((shape.inset.bottom - 2.0).max(0.0)),
-                    )
-                }
-            }
-            ShapeKindIr::Rect => {
-                let radius_pt = shape.corner_radius_pt.unwrap_or(0.0);
-                let horiz_comp = if has_nested_table {
-                    (0.15 * radius_pt).min(1.5)
-                } else {
-                    0.55 * radius_pt
-                };
-                let top_comp = if shape.width_pt >= 350.0 {
-                    3.5 + 0.35 * radius_pt
-                } else if radius_pt > 0.1 {
-                    0.35 * radius_pt
-                } else {
-                    0.0
-                };
-                let bot_comp = 0.35 * radius_pt;
-                (
-                    pt_to_emu((shape.inset.left - horiz_comp).max(0.0)),
-                    pt_to_emu((shape.inset.top - top_comp).max(0.0)),
-                    pt_to_emu((shape.inset.right - horiz_comp).max(0.0)),
-                    pt_to_emu((shape.inset.bottom - bot_comp).max(0.0)),
-                )
-            }
-            _ => (
-                pt_to_emu(shape.inset.left.max(0.0)),
-                pt_to_emu(shape.inset.top.max(0.0)),
-                pt_to_emu(shape.inset.right.max(0.0)),
-                pt_to_emu(shape.inset.bottom.max(0.0)),
-            ),
-        };
+        let ins = solved_body_inset_pt.unwrap_or(shape.inset);
+        let l_ins = pt_to_emu(ins.left.max(0.0));
+        let t_ins = pt_to_emu(ins.top.max(0.0));
+        let r_ins = pt_to_emu(ins.right.max(0.0));
+        let b_ins = pt_to_emu(ins.bottom.max(0.0));
         let anchor = if matches!(shape.kind, ShapeKindIr::Rect) {
             "t"
         } else {

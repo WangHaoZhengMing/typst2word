@@ -82,6 +82,7 @@ impl<'a> DocxWriter<'a> {
                 body: Vec::new(),
                 align: word_construct::model::HAlignIr::Left,
                 placed_offset_pt: None,
+                baseline_shift_pt: None,
             };
             out.push_str(&shape_to_drawingml_run(self, &spacer));
         }

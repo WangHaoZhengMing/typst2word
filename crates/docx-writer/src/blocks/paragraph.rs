@@ -7,33 +7,39 @@ use word_construct::paragraph::{
 };
 use crate::inlines::text::render_text_run_xml_with_spacing;
 use crate::writer::DocxWriter;
-use word_construct::model::{InlineNode, ParagraphStyleIr};
+use word_construct::model::{InlineNode, NodeId, ParagraphStyleIr};
 
 impl<'a> DocxWriter<'a> {
     /// `BlockNode::Paragraph` -> `<w:p>` with spacing / indentation.
     pub(crate) fn render_paragraph(
         &mut self,
+        id: NodeId,
         content: &[InlineNode],
         style: &ParagraphStyleIr,
         bookmark: Option<&str>,
         out: &mut String,
     ) {
-        self.render_paragraph_with_keep_next(content, style, bookmark, false, out);
+        self.render_paragraph_with_keep_next(id, content, style, bookmark, false, out);
     }
 
     pub(crate) fn render_paragraph_with_keep_next(
         &mut self,
+        id: NodeId,
         content: &[InlineNode],
         style: &ParagraphStyleIr,
         bookmark: Option<&str>,
         keep_with_next: bool,
         out: &mut String,
     ) {
-        let construct = ParagraphConstruct::solve(
+        let line_dxa = self
+            .doc
+            .resolve_paragraph_line_dxa(id, content, style.line_spacing_pt);
+        let construct = ParagraphConstruct::solve_with_line_dxa(
             content,
             style,
             self.content_width_dxa(),
             keep_with_next,
+            line_dxa,
         );
         out.push_str("<w:p><w:pPr>");
         if construct.keep_with_next {

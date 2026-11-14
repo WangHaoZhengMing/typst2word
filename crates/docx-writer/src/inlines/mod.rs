@@ -12,7 +12,9 @@ mod unsupported;
 use std::fmt::Write as _;
 
 use crate::writer::DocxWriter;
-use crate::drawingml::{cetz_canvas_to_drawingml_run, shape_to_drawingml_run};
+use crate::drawingml::{
+    cetz_canvas_to_drawingml_run, shape_to_drawingml_run, shape_to_inline_drawingml_run,
+};
 use word_construct::model::InlineNode;
 
 impl<'a> DocxWriter<'a> {
@@ -45,7 +47,7 @@ impl<'a> DocxWriter<'a> {
                 crate::math::render_equation_omml(eq, out);
             }
             InlineNode::ShapeInline(shape) => {
-                let run_xml = shape_to_drawingml_run(self, shape);
+                let run_xml = shape_to_inline_drawingml_run(self, shape);
                 out.push_str(&run_xml);
             }
             InlineNode::CetzInline(canvas) => {
@@ -98,6 +100,7 @@ impl<'a> DocxWriter<'a> {
                         body: Vec::new(),
                         align: word_construct::model::HAlignIr::Left,
                         placed_offset_pt: None,
+                        baseline_shift_pt: None,
                     };
                     out.push_str(&shape_to_drawingml_run(self, &spacer));
                 } else {

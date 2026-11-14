@@ -38,8 +38,9 @@ pub fn cetz_canvas_to_drawingml_run(canvas: &CetzCanvasIr) -> String {
             body: Vec::new(),
             align: HAlignIr::Left,
             placed_offset_pt: None,
+            baseline_shift_pt: None,
         };
-        children_xml.push_str(&build_wsp_xml(None, &bg_shape, Some((0, 0)), cx, cy));
+        children_xml.push_str(&build_wsp_xml(None, &bg_shape, Some((0, 0)), cx, cy, None));
     }
 
     // 2. Vector path/curve drawables
@@ -71,8 +72,9 @@ pub fn cetz_canvas_to_drawingml_run(canvas: &CetzCanvasIr) -> String {
             body: Vec::new(),
             align: HAlignIr::Left,
             placed_offset_pt: None,
+            baseline_shift_pt: None,
         };
-        children_xml.push_str(&build_wsp_xml(None, &empty_shape, Some((0, 0)), cx, cy));
+        children_xml.push_str(&build_wsp_xml(None, &empty_shape, Some((0, 0)), cx, cy, None));
     }
 
     format!(

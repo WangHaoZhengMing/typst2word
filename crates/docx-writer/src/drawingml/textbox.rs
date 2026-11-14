@@ -11,26 +11,38 @@ pub(crate) fn render_textbox_blocks(writer: &mut DocxWriter<'_>, blocks: &[Block
     let len = blocks.len();
     for (idx, block) in blocks.iter().enumerate() {
         match block {
-            BlockNode::Paragraph { content, style, .. } => {
+            BlockNode::Paragraph {
+                id, content, style, ..
+            } => {
                 let after_dxa = if idx + 1 < len && style.space_after_pt > 0.5 {
                     pt_to_dxa(style.space_after_pt)
                 } else {
                     0
                 };
-                out.push_str(&render_inline_nodes_as_txbx_para_with_after(
+                let line_dxa = writer.doc.resolve_paragraph_line_dxa(
+                    *id,
+                    content,
+                    style.line_spacing_pt,
+                );
+                out.push_str(&render_inline_nodes_as_txbx_para_with_line_dxa(
                     content,
                     style.align,
-                    style.line_spacing_pt,
+                    line_dxa,
                     after_dxa,
                 ));
             }
             BlockNode::Heading { content, align, .. }
             | BlockNode::Title { content, align, .. } => {
                 let after_dxa = if idx + 1 < len { 120 } else { 0 };
-                out.push_str(&render_inline_nodes_as_txbx_para_with_after(
+                let line_dxa = writer.doc.resolve_paragraph_line_dxa(
+                    word_construct::model::NodeId::UNSET,
+                    content,
+                    None,
+                );
+                out.push_str(&render_inline_nodes_as_txbx_para_with_line_dxa(
                     content,
                     *align,
-                    None,
+                    line_dxa,
                     after_dxa,
                 ));
             }
@@ -112,13 +124,22 @@ pub(crate) fn render_inline_nodes_as_txbx_para_with_after(
     line_spacing_pt: Option<f64>,
     after_dxa: i64,
 ) -> String {
+    let line_dxa = word_construct::paragraph::compute_line_spacing_dxa(inlines, line_spacing_pt);
+    render_inline_nodes_as_txbx_para_with_line_dxa(inlines, align, line_dxa, after_dxa)
+}
+
+pub(crate) fn render_inline_nodes_as_txbx_para_with_line_dxa(
+    inlines: &[InlineNode],
+    align: HAlignIr,
+    line_dxa: i64,
+    after_dxa: i64,
+) -> String {
     let jc = match align {
         HAlignIr::Left => "left",
         HAlignIr::Center => "center",
         HAlignIr::Right => "right",
         HAlignIr::Justify => "both",
     };
-    let line_dxa = word_construct::paragraph::compute_line_spacing_dxa(inlines, line_spacing_pt);
     let mut runs_xml = String::new();
     render_inline_nodes_to_wml(inlines, &mut runs_xml);
     format!(

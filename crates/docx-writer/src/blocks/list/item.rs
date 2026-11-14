@@ -3,12 +3,10 @@
 use std::fmt::Write as _;
 
 use word_construct::list::{ListItemConstruct, ListMarkerConstruct};
-use word_construct::paragraph::{
-    compute_line_spacing_dxa, is_only_inline_equation, paragraph_mark_rpr_sz_half_pt,
-};
+use word_construct::paragraph::{is_only_inline_equation, paragraph_mark_rpr_sz_half_pt};
 use word_construct::table::solve_list_item_child_table;
 use crate::writer::DocxWriter;
-use word_construct::model::{BlockNode, InlineNode, ParagraphStyleIr, TableIr, TableKindIr};
+use word_construct::model::{BlockNode, InlineNode, NodeId, ParagraphStyleIr, TableIr, TableKindIr};
 use crate::xml::escape_xml;
 
 impl<'a> DocxWriter<'a> {
@@ -42,12 +40,13 @@ impl<'a> DocxWriter<'a> {
         for (idx, b) in blocks.iter().enumerate() {
             match b {
                 BlockNode::Paragraph {
+                    id,
                     content,
                     style,
                     bookmark,
-                    ..
                 } if idx == 0 => {
                     self.render_list_item_first_paragraph(
+                        *id,
                         content,
                         style,
                         bookmark.as_deref(),
@@ -60,10 +59,10 @@ impl<'a> DocxWriter<'a> {
                     );
                 }
                 BlockNode::Paragraph {
+                    id,
                     content,
                     style,
                     bookmark,
-                    ..
                 } => {
                     let mut cont_style = style.clone();
                     if cont_style.left_indent_pt < 1.0 {
@@ -87,6 +86,7 @@ impl<'a> DocxWriter<'a> {
                             .max(ctx.item_end_after_dxa as f64 / 20.0);
                     }
                     self.render_paragraph_with_keep_next(
+                        *id,
                         content,
                         &cont_style,
                         bookmark.as_deref(),
@@ -219,6 +219,7 @@ impl<'a> DocxWriter<'a> {
     #[allow(clippy::too_many_arguments)]
     fn render_list_item_first_paragraph(
         &mut self,
+        id: NodeId,
         content: &[InlineNode],
         style: &ParagraphStyleIr,
         bookmark: Option<&str>,
@@ -229,11 +230,16 @@ impl<'a> DocxWriter<'a> {
         keep_with_next: bool,
         out: &mut String,
     ) {
-        let raw_line_dxa = compute_line_spacing_dxa(content, style.line_spacing_pt);
-        let line_dxa = match (ctx.line_dxa_override, raw_line_dxa) {
-            (Some(override_dxa), 276) => override_dxa,
-            _ => raw_line_dxa,
-        };
+        // Resolve calibrated `w:line` directly from `WordDocument` (`FontFaceMetricsIr` +
+        // `ParagraphLineMetricsIr`), falling back to `ctx.line_dxa_override` only when the
+        // paragraph carried neither pre-solved metrics nor an explicit `line_spacing_pt`.
+        let line_dxa = ctx
+            .line_dxa_override
+            .filter(|_| style.line_spacing_pt.is_none() && !self.doc.solved_line_dxa.contains_key(&id))
+            .unwrap_or_else(|| {
+                self.doc
+                    .resolve_paragraph_line_dxa(id, content, style.line_spacing_pt)
+            });
         let has_wide_space = word_construct::paragraph::has_flush_right_horizontal_space(
             content,
             self.content_width_dxa(),

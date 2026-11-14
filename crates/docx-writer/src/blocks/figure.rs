@@ -119,10 +119,10 @@ impl<'a> DocxWriter<'a> {
                     );
                 }
                 BlockNode::Paragraph {
+                    id,
                     content,
                     style,
                     bookmark,
-                    ..
                 } => {
                     let mut adj_style = style.clone();
                     if indent_left > 0 {
@@ -130,6 +130,7 @@ impl<'a> DocxWriter<'a> {
                             adj_style.left_indent_pt.max(indent_left as f64 / 20.0);
                     }
                     self.render_paragraph_with_keep_next(
+                        *id,
                         content,
                         &adj_style,
                         bookmark.as_deref(),

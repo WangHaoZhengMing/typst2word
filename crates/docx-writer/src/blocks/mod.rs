@@ -57,10 +57,10 @@ impl<'a> DocxWriter<'a> {
                 continue;
             }
             if let BlockNode::Paragraph {
+                id,
                 content,
                 style,
                 bookmark,
-                ..
             } = block
             {
                 let adj_style = ParagraphConstruct::solve_adjacent_paragraph_style(
@@ -68,7 +68,7 @@ impl<'a> DocxWriter<'a> {
                     style,
                     blocks.get(idx + 1),
                 );
-                self.render_paragraph(content, &adj_style, bookmark.as_deref(), out);
+                self.render_paragraph(*id, content, &adj_style, bookmark.as_deref(), out);
                 continue;
             }
             if let BlockNode::Figure {
@@ -212,12 +212,12 @@ impl<'a> DocxWriter<'a> {
                 );
             }
             BlockNode::Paragraph {
+                id,
                 content,
                 style,
                 bookmark,
-                ..
             } => {
-                self.render_paragraph(content, style, bookmark.as_deref(), out);
+                self.render_paragraph(*id, content, style, bookmark.as_deref(), out);
             }
             BlockNode::List {
                 items,

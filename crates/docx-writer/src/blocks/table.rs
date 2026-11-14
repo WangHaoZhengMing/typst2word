@@ -235,10 +235,10 @@ impl<'a> DocxWriter<'a> {
         let len = blocks.len();
         for (idx, block) in blocks.iter().enumerate() {
             if let BlockNode::Paragraph {
+                id,
                 content,
                 style,
                 bookmark,
-                ..
             } = block
             {
                 let prev_block = (idx > 0).then(|| &blocks[idx - 1]);
@@ -259,6 +259,7 @@ impl<'a> DocxWriter<'a> {
                     cell_style.line_spacing_pt = Some(0.0);
                 }
                 self.render_paragraph_with_keep_next(
+                    *id,
                     content,
                     &cell_style,
                     bookmark.as_deref(),

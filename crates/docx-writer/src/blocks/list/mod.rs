@@ -187,21 +187,27 @@ impl<'a> DocxWriter<'a> {
             } else {
                 110
             };
-            let (jc_xml, desc_line_spacing, desc_inlines) = match item.description.first() {
-                Some(BlockNode::Paragraph { content, style, .. }) => {
+            let (desc_id, jc_xml, desc_line_spacing, desc_inlines) = match item.description.first() {
+                Some(BlockNode::Paragraph {
+                    id, content, style, ..
+                }) => {
                     let jc = if style.align == word_construct::model::HAlignIr::Justify {
                         r#"<w:jc w:val="both"/>"#
                     } else {
                         ""
                     };
-                    (jc, style.line_spacing_pt, content.as_slice())
+                    (*id, jc, style.line_spacing_pt, content.as_slice())
                 }
-                _ => ("", None, item.term.as_slice()),
+                _ => (
+                    word_construct::model::NodeId::UNSET,
+                    "",
+                    None,
+                    item.term.as_slice(),
+                ),
             };
-            let line_dxa = word_construct::paragraph::compute_line_spacing_dxa(
-                desc_inlines,
-                desc_line_spacing,
-            );
+            let line_dxa = self
+                .doc
+                .resolve_paragraph_line_dxa(desc_id, desc_inlines, desc_line_spacing);
             let _ = write!(
                 out,
                 r#"<w:p><w:pPr>{jc_xml}<w:spacing w:before="0" w:after="{after}" w:line="{line_dxa}" w:lineRule="auto"/><w:ind w:left="440" w:hanging="440"/></w:pPr>"#
