@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use docx_writer::{DocxWriteOptions, write_docx_to_bytes_with_options};
-use ir::{BlockNode, DocumentSectionIr, InlineNode, LinkTargetIr};
+use ir::{BlockNode, DocumentSectionIr, InlineNode, LinkTargetIr, NodeId, visit_block_list_mut};
 use word_construct::WordDocument;
 use word_construct::page_calibration::PageMarginCalibration;
 
@@ -361,15 +361,98 @@ fn assemble_batch_docx_bytes(bucket: &[&CompiledCaseArtifacts]) -> Result<Vec<u8
         .and_then(|a| a.word_doc.as_ref())
         .ok_or_else(|| "cannot assemble empty batch bucket".to_string())?;
 
+    // Merge OpenType font metrics, pre-solved paragraph `w:line`, and solved shape geometry
+    // across all batched single-page cases, shifting `NodeId`s per section so independent
+    // documents never collide.
+    let mut merged_font_metrics = first_doc.font_metrics.clone();
+    let mut merged_solved_line_dxa = first_doc.solved_line_dxa.clone();
+    let mut merged_solved_shapes = first_doc.solved_shapes.clone();
+    let mut first_blocks = first_doc.blocks.clone();
+    let mut max_first_id = merged_solved_line_dxa
+        .keys()
+        .chain(merged_solved_shapes.keys())
+        .map(|k| k.0)
+        .max()
+        .unwrap_or(0);
+    visit_block_list_mut(&mut first_blocks, &mut |blocks| {
+        for block in blocks.iter() {
+            match block {
+                BlockNode::Paragraph { id, .. } => max_first_id = max_first_id.max(id.0),
+                BlockNode::ShapeBlock(sh) => max_first_id = max_first_id.max(sh.id.0),
+                _ => {}
+            }
+        }
+    });
+    let mut next_id_offset = max_first_id.saturating_add(1000);
+
     let mut sections = Vec::with_capacity(bucket.len().saturating_sub(1));
     for art in &bucket[1..] {
         let doc = art
             .word_doc
             .as_ref()
             .ok_or_else(|| format!("missing WordDocument for {}", art.spec.id))?;
+        for (family, metrics) in &doc.font_metrics {
+            merged_font_metrics
+                .entry(family.clone())
+                .or_insert_with(|| metrics.clone());
+        }
+
+        let mut sec_blocks = doc.blocks.clone();
+        let mut doc_max_id = doc
+            .solved_line_dxa
+            .keys()
+            .chain(doc.solved_shapes.keys())
+            .map(|k| k.0)
+            .max()
+            .unwrap_or(0);
+        visit_block_list_mut(&mut sec_blocks, &mut |blocks| {
+            for block in blocks.iter_mut() {
+                match block {
+                    BlockNode::Paragraph { id, content, .. } => {
+                        if id.is_set() {
+                            let old_id = *id;
+                            doc_max_id = doc_max_id.max(old_id.0);
+                            let new_id = NodeId(old_id.0.saturating_add(next_id_offset));
+                            *id = new_id;
+                            if let Some(&solved) = doc.solved_line_dxa.get(&old_id) {
+                                merged_solved_line_dxa.insert(new_id, solved);
+                            }
+                        }
+                        shift_inline_shape_ids(
+                            content,
+                            next_id_offset,
+                            &mut doc_max_id,
+                            &doc.solved_shapes,
+                            &mut merged_solved_shapes,
+                        );
+                    }
+                    BlockNode::Heading { content, .. } | BlockNode::Title { content, .. } => {
+                        shift_inline_shape_ids(
+                            content,
+                            next_id_offset,
+                            &mut doc_max_id,
+                            &doc.solved_shapes,
+                            &mut merged_solved_shapes,
+                        );
+                    }
+                    BlockNode::ShapeBlock(sh) if sh.id.is_set() => {
+                        let old_id = sh.id;
+                        doc_max_id = doc_max_id.max(old_id.0);
+                        let new_id = NodeId(old_id.0.saturating_add(next_id_offset));
+                        sh.id = new_id;
+                        if let Some(&solved) = doc.solved_shapes.get(&old_id) {
+                            merged_solved_shapes.insert(new_id, solved);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        });
+        next_id_offset = next_id_offset.saturating_add(doc_max_id).saturating_add(1000);
+
         sections.push(DocumentSectionIr {
             page_setup: doc.page_setup.clone(),
-            blocks: doc.blocks.clone(),
+            blocks: sec_blocks,
         });
     }
 
@@ -382,9 +465,12 @@ fn assemble_batch_docx_bytes(bucket: &[&CompiledCaseArtifacts]) -> Result<Vec<u8
         sections,
         metadata: Default::default(),
         page_setup: first_doc.page_setup.clone(),
-        blocks: first_doc.blocks.clone(),
+        blocks: first_blocks,
         has_cjk: first_doc.has_cjk,
         has_cetz_canvas,
+        font_metrics: merged_font_metrics,
+        solved_line_dxa: merged_solved_line_dxa,
+        solved_shapes: merged_solved_shapes,
     };
 
     write_docx_to_bytes_with_options(
@@ -394,6 +480,37 @@ fn assemble_batch_docx_bytes(bucket: &[&CompiledCaseArtifacts]) -> Result<Vec<u8
         },
     )
     .map_err(|e| format!("serialize multi-section batch docx: {e}"))
+}
+
+fn shift_inline_shape_ids(
+    inlines: &mut [InlineNode],
+    offset: u32,
+    doc_max_id: &mut u32,
+    src_shapes: &std::collections::BTreeMap<NodeId, word_construct::shape::SolvedShapeGeometry>,
+    dst_shapes: &mut std::collections::BTreeMap<NodeId, word_construct::shape::SolvedShapeGeometry>,
+) {
+    for inl in inlines {
+        match inl {
+            InlineNode::ShapeInline(sh) => {
+                if sh.id.is_set() {
+                    let old_id = sh.id;
+                    *doc_max_id = (*doc_max_id).max(old_id.0);
+                    let new_id = NodeId(old_id.0.saturating_add(offset));
+                    sh.id = new_id;
+                    if let Some(&solved) = src_shapes.get(&old_id) {
+                        dst_shapes.insert(new_id, solved);
+                    }
+                }
+            }
+            InlineNode::Link { content, .. }
+            | InlineNode::Ref { content, .. }
+            | InlineNode::Citation { content, .. }
+            | InlineNode::Field { content, .. } => {
+                shift_inline_shape_ids(content, offset, doc_max_id, src_shapes, dst_shapes);
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Determine whether a compiled case can safely join a 1-page-per-section Mega-Doc without

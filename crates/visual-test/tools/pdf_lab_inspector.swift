@@ -67,6 +67,24 @@ struct JobOutput: Codable {
     let comparison: PairComparison?
 }
 
+struct SplitManifest: Codable {
+    let jobs: [SplitJob]
+}
+
+struct SplitJob: Codable {
+    let id: String
+    let batchPdf: String
+    let outputs: [String]
+}
+
+struct SplitJobOutput: Codable {
+    let id: String
+    let ok: Bool
+    let actualPages: Int
+    let expectedPages: Int
+    let error: String?
+}
+
 struct RenderedRaster {
     let widthPx: Int
     let heightPx: Int
@@ -505,33 +523,124 @@ func runJob(_ job: InspectJob, scale: Double) -> JobOutput {
     )
 }
 
+func runSplitJob(_ job: SplitJob) -> SplitJobOutput {
+    let fm = FileManager.default
+    let expected = job.outputs.count
+    guard fm.fileExists(atPath: job.batchPdf),
+          let batchDoc = PDFDocument(url: URL(fileURLWithPath: job.batchPdf)) else {
+        return SplitJobOutput(
+            id: job.id,
+            ok: false,
+            actualPages: 0,
+            expectedPages: expected,
+            error: "Failed to load batch PDF: \(job.batchPdf)"
+        )
+    }
+
+    let actual = batchDoc.pageCount
+    guard actual == expected else {
+        return SplitJobOutput(
+            id: job.id,
+            ok: false,
+            actualPages: actual,
+            expectedPages: expected,
+            error: "Page count mismatch: expected \(expected), got \(actual)"
+        )
+    }
+
+    for idx in 0..<expected {
+        var writeErr: String? = nil
+        autoreleasepool {
+            guard let srcPage = batchDoc.page(at: idx),
+                  let pageCopy = srcPage.copy() as? PDFPage else {
+                writeErr = "Failed to copy page \(idx) from \(job.batchPdf)"
+                return
+            }
+            let outPath = job.outputs[idx]
+            let parentDir = (outPath as NSString).deletingLastPathComponent
+            if !parentDir.isEmpty {
+                try? fm.createDirectory(atPath: parentDir, withIntermediateDirectories: true)
+            }
+            let singleDoc = PDFDocument()
+            singleDoc.insert(pageCopy, at: 0)
+            if !singleDoc.write(toFile: outPath) {
+                writeErr = "Failed to write sliced PDF page \(idx) to \(outPath)"
+            }
+        }
+        if let err = writeErr {
+            return SplitJobOutput(
+                id: job.id,
+                ok: false,
+                actualPages: actual,
+                expectedPages: expected,
+                error: err
+            )
+        }
+    }
+
+    return SplitJobOutput(
+        id: job.id,
+        ok: true,
+        actualPages: actual,
+        expectedPages: expected,
+        error: nil
+    )
+}
+
 let args = CommandLine.arguments
 guard args.count >= 2 else {
-    fputs("Usage: pdf_lab_inspector <manifest.json>\n", stderr)
+    fputs("Usage: pdf_lab_inspector [inspect|split] <manifest.json>\n", stderr)
     exit(2)
 }
 
-let manifestUrl = URL(fileURLWithPath: args[1])
-guard let manifestData = try? Data(contentsOf: manifestUrl),
-      let manifest = try? JSONDecoder().decode(Manifest.self, from: manifestData) else {
-    fputs("Failed to decode manifest JSON\n", stderr)
+let mode: String
+let manifestPath: String
+if args.count >= 3 && (args[1] == "split" || args[1] == "inspect") {
+    mode = args[1]
+    manifestPath = args[2]
+} else {
+    mode = "inspect"
+    manifestPath = args[1]
+}
+
+let manifestUrl = URL(fileURLWithPath: manifestPath)
+guard let manifestData = try? Data(contentsOf: manifestUrl) else {
+    fputs("Failed to read manifest file: \(manifestPath)\n", stderr)
     exit(2)
 }
 
-let count = manifest.jobs.count
-var outputs = Array<JobOutput?>(repeating: nil, count: count)
-let lock = NSLock()
+if mode == "split" {
+    guard let splitManifest = try? JSONDecoder().decode(SplitManifest.self, from: manifestData) else {
+        fputs("Failed to decode SplitManifest JSON\n", stderr)
+        exit(2)
+    }
+    let results = splitManifest.jobs.map { runSplitJob($0) }
+    let encoder = JSONEncoder()
+    if let data = try? encoder.encode(results),
+       let str = String(data: data, encoding: .utf8) {
+        print(str)
+    }
+} else {
+    guard let manifest = try? JSONDecoder().decode(Manifest.self, from: manifestData) else {
+        fputs("Failed to decode InspectManifest JSON\n", stderr)
+        exit(2)
+    }
 
-DispatchQueue.concurrentPerform(iterations: count) { idx in
-    let out = runJob(manifest.jobs[idx], scale: manifest.scale)
-    lock.lock()
-    outputs[idx] = out
-    lock.unlock()
-}
+    let count = manifest.jobs.count
+    var outputs = Array<JobOutput?>(repeating: nil, count: count)
+    let lock = NSLock()
 
-let finalOutputs = outputs.compactMap { $0 }
-let encoder = JSONEncoder()
-if let data = try? encoder.encode(finalOutputs),
-   let str = String(data: data, encoding: .utf8) {
-    print(str)
+    DispatchQueue.concurrentPerform(iterations: count) { idx in
+        let out = runJob(manifest.jobs[idx], scale: manifest.scale)
+        lock.lock()
+        outputs[idx] = out
+        lock.unlock()
+    }
+
+    let finalOutputs = outputs.compactMap { $0 }
+    let encoder = JSONEncoder()
+    if let data = try? encoder.encode(finalOutputs),
+       let str = String(data: data, encoding: .utf8) {
+        print(str)
+    }
 }

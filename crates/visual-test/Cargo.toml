@@ -19,7 +19,6 @@ path = "src/bin/visual_test_gui.rs"
 required-features = ["gui"]
 
 [dependencies]
-typst2word = { path = "../.." }
 compiler = { path = "../compiler" }
 extract = { path = "../extract" }
 ir = { path = "../ir" }

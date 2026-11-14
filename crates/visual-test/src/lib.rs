@@ -111,11 +111,9 @@ mod tests {
         let out_dir = std::env::temp_dir().join("typst2word_visual_test_unit");
         let cfg = RunConfig {
             out_dir,
-            category_filter: None,
-            id_substring_filter: None,
             skip_word: true,
-            fresh_word: false,
             raster_scale: 1.5,
+            ..RunConfig::default()
         };
         let report = run_suite(&cfg).expect("visual-test IR/OOXML suite must succeed");
         let failed: Vec<_> = report

@@ -316,3 +316,10 @@ Section 3 restored (12pt margin).
 )
 #set text(font: "Times New Roman", size: 11pt)
 Body text with w:header <= w:top and w:footer <= w:bottom.
+
+
+
+
+下面例子中的灰色框是版心轮廓。（待处理
+#set page(paper: "a4")
+#rect(width: 100%, height: 100%, stroke: gray)

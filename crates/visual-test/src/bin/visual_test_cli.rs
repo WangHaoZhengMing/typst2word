@@ -31,6 +31,12 @@ fn main() {
             "--filter" | "-f" => {
                 cfg.id_substring_filter = args.next();
             }
+            "--suite" | "-s" => {
+                cfg.suite_filter = args.next();
+            }
+            "--case" => {
+                cfg.exact_case_id = args.next();
+            }
             "--out-dir" | "-o" => {
                 if let Some(p) = args.next() {
                     cfg.out_dir = PathBuf::from(p);
@@ -45,7 +51,7 @@ fn main() {
             }
             "--help" | "-h" => {
                 println!(
-                    "Usage: visual-test-cli [--skip-word] [--fresh-word] [-c <category>] [-f <substr>] [-o <dir>] [--scale <f64>]"
+                    "Usage: visual-test-cli [--skip-word] [--fresh-word] [-c <category>] [-s <suite>] [--case <id>] [-f <substr>] [-o <dir>] [--scale <f64>]"
                 );
                 return;
             }

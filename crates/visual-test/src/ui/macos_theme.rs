@@ -1,8 +1,8 @@
-//! Native macOS theme configuration and semantic status helpers for `visual-test`.
+//! Native macOS Sequoia / Sonoma theme configuration and semantic status helpers.
 //!
-//! Built on GPUI Kit's `ThemeRegistry` and `macOS Classic` light/dark palette so
-//! every panel, titlebar, sidebar, status bar, and syntax-highlighted editor
-//! follows macOS appearance conventions without hardcoded hex values in views.
+//! Uses distinct macOS material layers (`sidebar` source list, `title_bar` unified chrome,
+//! `muted` neutral Preview canvas backdrop, and `background` inspector surfaces) so the
+//! three-column layout reads effortlessly in both Light and Dark appearances.
 
 use std::rc::Rc;
 
@@ -20,8 +20,6 @@ use crate::model::CaseStatus;
 const MACOS_LIGHT_NAME: &str = "macOS Studio Light";
 const MACOS_DARK_NAME: &str = "macOS Studio Dark";
 
-/// Curated macOS Human Interface Guidelines palette derived from GPUI Kit's
-/// `macOS Classic` theme with native Finder/Xcode sidebar and status bar tokens.
 const MACOS_STUDIO_THEME_JSON: &str = r##"{
   "name": "macOS Studio",
   "author": "typst2word",
@@ -29,39 +27,39 @@ const MACOS_STUDIO_THEME_JSON: &str = r##"{
     {
       "name": "macOS Studio Light",
       "mode": "light",
-      "shadow": false,
+      "shadow": true,
       "colors": {
         "background": "#FFFFFF",
         "foreground": "#1D1D1F",
-        "border": "#DFDFE3",
+        "border": "#DCDCE1",
         "ring": "#007AFF",
         "primary.background": "#007AFF",
         "primary.foreground": "#FFFFFF",
-        "secondary.background": "#EFEFF4",
-        "secondary.hover.background": "#E5E5EA",
-        "secondary.active.background": "#D8D8DE",
+        "secondary.background": "#ECECF1",
+        "secondary.hover.background": "#E2E2E9",
+        "secondary.active.background": "#D6D6DF",
         "secondary.foreground": "#1D1D1F",
-        "accent.background": "#007AFF18",
+        "accent.background": "#007AFF1A",
         "accent.foreground": "#0062CC",
-        "muted.background": "#F4F5F7",
+        "muted.background": "#EAECF0",
         "muted.foreground": "#6E6E73",
         "popover.background": "#FBFBFD",
         "popover.foreground": "#1D1D1F",
-        "sidebar.background": "#F3F3F6",
+        "sidebar.background": "#F2F2F6",
         "sidebar.foreground": "#1D1D1F",
-        "sidebar.border": "#DFDFE3",
-        "title_bar.background": "#F6F6F8",
-        "title_bar.border": "#DFDFE3",
-        "status_bar.background": "#F6F6F8",
-        "status_bar.border": "#DFDFE3",
-        "tab_bar.background": "#EFEFF4",
-        "tab.background": "#EFEFF4",
+        "sidebar.border": "#DCDCE1",
+        "title_bar.background": "#F5F5F8",
+        "title_bar.border": "#DCDCE1",
+        "status_bar.background": "#F5F5F8",
+        "status_bar.border": "#DCDCE1",
+        "tab_bar.background": "#ECECF1",
+        "tab.background": "#ECECF1",
         "tab.active.background": "#FFFFFF",
         "tab.foreground": "#6E6E73",
         "tab.active.foreground": "#1D1D1F",
-        "list.active.background": "#007AFF1A",
+        "list.active.background": "#007AFF20",
         "list.active.border": "#007AFF",
-        "list.hover.background": "#0000000A",
+        "list.hover.background": "#00000009",
         "list.even.background": "#FAFAFC",
         "scrollbar.background": "#FFFFFF00",
         "scrollbar.thumb.background": "#C4C4C9",
@@ -110,40 +108,40 @@ const MACOS_STUDIO_THEME_JSON: &str = r##"{
     {
       "name": "macOS Studio Dark",
       "mode": "dark",
-      "shadow": false,
+      "shadow": true,
       "colors": {
-        "background": "#1E1E20",
-        "foreground": "#E5E5EA",
-        "border": "#323236",
+        "background": "#1D1D20",
+        "foreground": "#EBEBF0",
+        "border": "#303036",
         "ring": "#0A84FF",
         "primary.background": "#0A84FF",
         "primary.foreground": "#FFFFFF",
-        "secondary.background": "#2C2C2E",
-        "secondary.hover.background": "#3A3A3C",
-        "secondary.active.background": "#48484A",
-        "secondary.foreground": "#E5E5EA",
-        "accent.background": "#0A84FF26",
+        "secondary.background": "#2B2B30",
+        "secondary.hover.background": "#37373E",
+        "secondary.active.background": "#44444C",
+        "secondary.foreground": "#EBEBF0",
+        "accent.background": "#0A84FF29",
         "accent.foreground": "#64D2FF",
-        "muted.background": "#252528",
-        "muted.foreground": "#98989D",
-        "popover.background": "#28282B",
-        "popover.foreground": "#E5E5EA",
-        "sidebar.background": "#18181A",
+        "muted.background": "#141417",
+        "muted.foreground": "#98989F",
+        "popover.background": "#26262B",
+        "popover.foreground": "#EBEBF0",
+        "sidebar.background": "#18181B",
         "sidebar.foreground": "#E5E5EA",
-        "sidebar.border": "#2E2E32",
-        "title_bar.background": "#232326",
-        "title_bar.border": "#323236",
-        "status_bar.background": "#232326",
-        "status_bar.border": "#323236",
-        "tab_bar.background": "#28282B",
-        "tab.background": "#28282B",
-        "tab.active.background": "#1E1E20",
-        "tab.foreground": "#98989D",
+        "sidebar.border": "#2C2C31",
+        "title_bar.background": "#222226",
+        "title_bar.border": "#303036",
+        "status_bar.background": "#202024",
+        "status_bar.border": "#303036",
+        "tab_bar.background": "#28282D",
+        "tab.background": "#28282D",
+        "tab.active.background": "#1D1D20",
+        "tab.foreground": "#98989F",
         "tab.active.foreground": "#F2F2F7",
-        "list.active.background": "#0A84FF2B",
+        "list.active.background": "#0A84FF33",
         "list.active.border": "#0A84FF",
-        "list.hover.background": "#FFFFFF0C",
-        "list.even.background": "#222225",
+        "list.hover.background": "#FFFFFF0B",
+        "list.even.background": "#212125",
         "selection.background": "#264F78",
         "scrollbar.background": "#00000000",
         "scrollbar.thumb.background": "#636366",
@@ -155,10 +153,10 @@ const MACOS_STUDIO_THEME_JSON: &str = r##"{
         "base.cyan": "#64D2FF"
       },
       "highlight": {
-        "editor.foreground": "#E5E5EA",
-        "editor.background": "#1B1B1D",
-        "editor.active_line.background": "#27272B",
-        "editor.line_number": "#636366",
+        "editor.foreground": "#EBEBF0",
+        "editor.background": "#1A1A1D",
+        "editor.active_line.background": "#25252A",
+        "editor.line_number": "#636368",
         "editor.active_line_number": "#D1D1D6",
         "editor.invisible": "#0A84FF55",
         "syntax": {
@@ -184,7 +182,7 @@ const MACOS_STUDIO_THEME_JSON: &str = r##"{
           "text.literal": { "color": "#BF5AF2" },
           "title": { "color": "#5DD8FF", "font_weight": 600 },
           "type": { "color": "#D0A8FF" },
-          "variable": { "color": "#E5E5EA" },
+          "variable": { "color": "#EBEBF0" },
           "variable.special": { "color": "#FC5FA3" }
         }
       }
@@ -214,8 +212,8 @@ pub fn install_macos_theme(window: Option<&mut Window>, cx: &mut App) {
         if let Some(dark) = dark_cfg {
             theme.dark_theme = Rc::clone(&dark);
         }
-        theme.font_size = gpui_kit::px(14.0);
-        theme.mono_font_size = gpui_kit::px(12.5);
+        theme.font_size = gpui_kit::px(13.5);
+        theme.mono_font_size = gpui_kit::px(12.0);
         theme.radius = gpui_kit::px(6.0);
         theme.radius_lg = gpui_kit::px(8.0);
     }

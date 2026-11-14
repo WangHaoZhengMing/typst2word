@@ -1,22 +1,28 @@
 //! Modular native macOS desktop inspection studio for `visual-test` (`src/ui/`).
 //!
-//! Architecture:
-//! - [`titlebar`]: Native macOS `TitleBar` (traffic lights inset) + bottom `StatusBar`
-//! - [`sidebar`]: Left column — Finder/Xcode-style source-list navigator
-//! - [`center_stage`]: Center upper split — 3-Up / Side-by-Side / Overlay visual PDF stage
-//! - [`diagnostics`]: Center lower split — Geometry table, IR/OOXML checks, PDFKit lines
-//! - [`code_panel`]: Right column — Syntax-highlighted GPUI Kit `Editor` (`.typ`, `ir.json`, `.xml`)
-//! - [`typst_highlight`]: Custom Typst `InputHighlighter` + lossless OpenXML pretty-formatter
-//! - [`macos_theme`]: Light/Dark macOS Studio palettes synced with system appearance
-//! - [`state`]: `ParityStudioView` state, editor synchronization, and 3-column layout
+//! Layered UI architecture:
+//! - [`actions`]: macOS System Menu Bar (`cx.set_menus`) + global `⌘` keyboard shortcuts
+//! - [`toolbar`]: Unified Xcode-style macOS `TitleBar` with Run Scheme Pop-Up & Quick Open menu
+//! - [`sidebar`]: Finder/Xcode Source-List Navigator with single-row Search + Filter Pop-Up menu
+//! - [`stage`]: Preview-style Paper Comparison Canvas with compact View & Zoom Pop-Up menus
+//! - [`diagnostics`]: Collapsible lower drawer with Geometry table, OOXML checks & PDF lines
+//! - [`inspector`]: Right Xcode-style Code Inspector with `.docx` Package Part Pop-Up menu
+//! - [`docx_parts`]: On-demand `.docx` ZIP XML reader & macOS Word/Preview/Finder openers
+//! - [`status_bar`]: Calm bottom telemetry & case stepper bar
+//! - [`state`]: `ParityStudioView` state, silent batch `run_suite` bridge, and navigation
+//! - [`macos_theme`]: macOS Sequoia/Sonoma Light & Dark studio palettes
+//! - [`typst_highlight`]: Custom Typst syntax highlighter + OpenXML pretty-formatter
 
-mod center_stage;
-mod code_panel;
+pub mod actions;
 mod diagnostics;
+pub mod docx_parts;
+mod inspector;
 pub mod macos_theme;
 mod sidebar;
+mod stage;
 pub mod state;
-mod titlebar;
+mod status_bar;
+mod toolbar;
 pub mod typst_highlight;
 
 use std::{
@@ -25,11 +31,14 @@ use std::{
 };
 
 use gpui_kit::{
-    AppContext as _, Bounds, WindowBounds, WindowOptions, assets::Assets,
-    component::TitleBar, px, size,
+    AppContext as _, Bounds, WindowBounds, WindowOptions, assets::Assets, component::TitleBar, px,
+    size,
 };
 
-pub use state::{CanvasMode, CodeTab, DiagnosticsTab, ParityStudioView, StatusFilter};
+pub use docx_parts::InspectorDoc;
+pub use state::{
+    CanvasMode, DiagnosticsTab, ParityStudioView, RunEngine, RunScope, StatusFilter,
+};
 
 use crate::{
     catalog::build_catalog,
@@ -101,6 +110,7 @@ pub fn run_desktop_app(report_dir: Option<PathBuf>) {
         .with_assets(Assets)
         .run(move |cx| {
             gpui_kit::init(cx);
+            actions::install_macos_menus_and_keys(cx);
 
             let bounds = Bounds::centered(None, size(px(1540.0), px(940.0)), cx);
             let opts = WindowOptions {

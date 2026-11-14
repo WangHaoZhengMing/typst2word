@@ -1874,6 +1874,7 @@ dependencies = [
  "ir",
  "roxmltree 0.21.2",
  "serde_json",
+ "ttf-parser",
  "typst",
  "typst-html",
  "typst-layout",
@@ -8543,7 +8544,6 @@ dependencies = [
  "serde_json",
  "sha2 0.11.1",
  "typst-pdf",
- "typst2word",
  "word-construct",
  "zip",
 ]
