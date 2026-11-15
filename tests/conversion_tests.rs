@@ -631,3 +631,501 @@ Step #box(baseline: 30%, circle(radius: 8pt, fill: rgb("#DBEAFE"), stroke: 0.8pt
     assert!(doc_xml.contains("2563EB"));
     assert!(doc_xml.contains("<w:tcBorders>"));
 }
+
+#[test]
+fn test_exam_outline_pageref_coder_card_spacer_pad_table_and_trailing_linebreak() {
+    let typst_src = r##"
+#set text(font: "PingFang SC", size: 11pt, lang: "zh")
+#set heading(numbering: "1.1")
+#set page(numbering: "第1 页/共 1 页")
+
+#outline()
+#pagebreak()
+
+= 判断题
++ `3e3` 是 double 型常量。#h(1fr) 【$space space$】
+
+= 简答题
+#pad(left: 1em)[
+  #table(
+    columns: (auto, auto),
+    [特性], [说明],
+    [封装], [隐藏内部细节],
+  )
+]
+
+#block(height: 2em)[ ]
+
+= 参考答案
+#let coder(code) = block(fill: luma(245), inset: 8pt, radius: 5pt, width: 100%)[
+  •••
+  #v(-8pt)
+  #code
+]
+
+#text(weight: "bold")[1. #box([正确答案：A], stroke: 1pt, outset: 2.5pt)]#linebreak()
++ 正确选项解析。
+
+== 编程题
+1. #coder(```java
+class Sum {
+  int sum; // 成员变量
+  int max; // 最大值
+}
+```)
+"##;
+
+    let (docx_bytes, ir) = convert_typst_str_to_docx_bytes(typst_src, None)
+        .expect("exam constructs convert cleanly");
+    let doc_xml = assert_valid_docx_xml(&docx_bytes);
+
+    // 1. Outline emits `PAGEREF <bm> \h` inside `第 ... 页` without invalid trailing `\* Arabic` after `\h`.
+    assert!(
+        doc_xml.contains(r#"PAGEREF _typst_loc_"#) && doc_xml.contains(r#" \h""#),
+        "expected valid PAGEREF ... \\h field instruction in outline"
+    );
+    assert!(
+        !doc_xml.contains(r#"\h \* "#),
+        "PAGEREF format switches must never appear after \\h"
+    );
+
+    // 2. `#h(1fr)` + `【$space space$】` emits `<w:tab/>` and OMML `<m:nor/>` non-breaking spaces.
+    assert!(doc_xml.contains("<w:tab/>"));
+    assert!(doc_xml.contains("<m:nor/>"));
+    assert!(
+        doc_xml
+            .matches("<m:t xml:space=\"preserve\">\u{00A0}</m:t>")
+            .count()
+            >= 2
+    );
+
+    // 3. `#pad(left: 1em)[#table(...)]` propagates horizontal padding to `<w:tblInd>`.
+    assert!(
+        doc_xml.contains(r#"<w:tblInd w:w="220" w:type="dxa"/>"#),
+        "expected 11pt (220 dxa) left table indentation from #pad(left: 1em)"
+    );
+
+    // 4. `#block(height: 2em)[ ]` at `11pt` emits an exact `22pt` (`440 dxa`) solid spacer paragraph.
+    assert!(doc_xml.contains(r#"w:line="440" w:lineRule="exact""#));
+
+    // 5. `DocumentIr` keeps trailing `InlineNode::LineBreak`, while `.docx` strips the single
+    //    redundant `<w:br/>` before `</w:p>` and uses `w:space="0"` on inline `<w:bdr>`.
+    let has_ir_trailing_br = ir.sections.iter().flat_map(|s| &s.blocks).chain(&ir.blocks).any(|b| {
+        matches!(
+            b,
+            BlockNode::Paragraph { content, style, .. }
+                if style.ends_with_explicit_linebreak
+                    && matches!(content.last(), Some(typst2word::ir::InlineNode::LineBreak))
+        )
+    });
+    assert!(has_ir_trailing_br, "DocumentIr must preserve semantic trailing LineBreak");
+    assert!(!doc_xml.contains("<w:r><w:br/></w:r></w:p>"));
+    assert!(doc_xml.contains(r#"w:space="0""#));
+
+    // 6. `1. #coder(...)` extracts a `roundRect` `ShapeBlock` with exact fixed-pitch code line spacing,
+    //    `bIns="0"` so bottom descenders are never hard-clipped, and preserves `<w:numPr>` beside the card.
+    assert!(doc_xml.contains(r#"<a:prstGeom prst="roundRect">"#));
+    assert!(doc_xml.contains(r#"bIns="0""#));
+    assert!(doc_xml.contains("<w:numPr>"));
+}
+
+#[test]
+fn test_cross_page_coder_card_and_multiline_table_cell_spacing() {
+    let typst_src = r##"
+#set page(width: 420pt, height: 220pt, margin: 24pt)
+#set text(font: "PingFang SC", size: 11pt, lang: "zh")
+#let coder(code) = block(width: 100%, inset: 1em, fill: rgb("#F6F8FA"), radius: 8pt)[
+  #v(-8pt)
+  #text(size: 24pt, weight: 900, fill: rgb("#FF5F56"))[#sym.bullet]
+  #text(size: 24pt, weight: 900, fill: rgb("#FFBD2E"))[#sym.bullet]
+  #text(size: 24pt, weight: 900, fill: rgb("#27C93F"))[#sym.bullet]
+  #v(-5pt)
+  #text(size: 12pt)[#code]
+]
+
+#table(
+  columns: (auto, 1fr),
+  [代码1],
+  [在这段代码中，Father 是父类，Son 继承并重写了 print 方法，通过多态机制，尽管变量类型是 Father，但实际对象是 Son，最终输出结果为 6。],
+)
+
+#coder(```java
+class Pigeon {
+  void line1() {}
+  void line2() {}
+  void line3() {}
+  void line4() {}
+  void line5() {}
+  void line6() {
+    System.out.println("鸽子在下蛋");
+    int splitBoundaryToken = 1;
+  }
+}
+```)
+"##;
+
+    let (docx_bytes, ir) = convert_typst_str_to_docx_bytes(typst_src, None)
+        .expect("cross-page coder card and multiline table cell convert cleanly");
+    let doc_xml = assert_valid_docx_xml(&docx_bytes);
+
+    // 1. Cross-page split `RawLine` must appear only once across both fragments (never duplicated),
+    //    and total extracted code lines across the two split `ShapeBlock`s must equal 11.
+    assert_eq!(doc_xml.matches("鸽子在下蛋").count(), 1);
+    assert_eq!(doc_xml.matches("splitBoundaryToken").count(), 1);
+    let total_code_lines: usize = ir
+        .blocks
+        .iter()
+        .filter_map(|b| match b {
+            BlockNode::ShapeBlock(s) => Some(
+                s.body
+                    .iter()
+                    .filter_map(|cb| match cb {
+                        BlockNode::CodeBlock { lines, .. } => Some(lines.len()),
+                        _ => None,
+                    })
+                    .sum::<usize>(),
+            ),
+            _ => None,
+        })
+        .sum();
+    assert_eq!(
+        total_code_lines, 11,
+        "cross-page split RawElem must preserve exact 11 code lines without phantom shell duplication"
+    );
+
+    // 2. Both the first and continuation `#coder` fragments must emit `w:lineRule="exact"` and `bIns="0"`.
+    assert!(doc_xml.contains(r#"bIns="0""#));
+    assert!(
+        doc_xml.matches(r#"w:lineRule="exact""#).count() >= 10,
+        "continuation CodeBlock lines must also use calibrated exact line spacing"
+    );
+
+    // 3. Multi-line CJK+Latin `#table` cell paragraph must retain calibrated multi-line leading (`w:line="199"`),
+    //    not single-line compact cell trim (`w:line="154"`).
+    assert!(
+        doc_xml.contains(r#"w:line="199" w:lineRule="auto""#),
+        "expected calibrated multi-line w:line=\"199\" on wrapped CJK+Latin table cell paragraph"
+    );
+}
+
+#[test]
+fn test_centered_padded_block_upright_h4_textbox_lists_and_post_box_spacing() {
+    let typst_src = r##"
+#set text(font: "PingFang SC", lang: "zh", size: 11pt)
+
+#align(center)[
+  #block(inset: (y: 2cm))[
+    #text(size: 28pt, weight: "bold")[主标题文本]\
+    #v(0.5cm)
+    #text(size: 14pt)[副标题说明]
+  ]
+]
+#pagebreak()
+
+==== 第四级小节标题
+
+#block(width: 100%, inset: 12pt, fill: rgb("#F5F5F7"), radius: 8pt)[
+  *要点概述*
+  1. 第一项措施
+    - 子要点甲
+    - 子要点乙
+  2. 第二项措施
+]
+#v(1em)
+
+== 下一节标题
+
+#block(width: 100%, inset: 12pt, fill: rgb("#F3F4F6"), stroke: (left: 4pt + rgb("#6B7280")), radius: 8pt)[
+  *注意事项*
+  需要关注后续影响。
+]
+#v(1em)
+
+后续正文段落内容。
+
+#v(16cm)
+#block(width: 100%, inset: (x: 1.5em, y: 1.2em), fill: rgb("#F5F5F7"), radius: 12pt)[
+  *跨页圆角卡片*
+
+  #lorem(120)
+]
+"##;
+
+    let (docx_bytes, _ir) = convert_typst_str_to_docx_bytes(typst_src, None)
+        .expect("centered padded block, upright H4, textbox lists, and post-box spacing convert cleanly");
+    let doc_xml = assert_valid_docx_xml(&docx_bytes);
+    let styles_xml = read_zip_entry(&docx_bytes, "word/styles.xml");
+
+    // 1. Heading4 style in `word/styles.xml` must not force `<w:i/>` faux italics.
+    let h4_chunk = styles_xml
+        .split(r#"w:styleId="Heading4""#)
+        .nth(1)
+        .and_then(|s| s.split("</w:style>").next())
+        .expect("Heading4 style exists");
+    assert!(
+        !h4_chunk.contains("<w:i/>"),
+        "Heading4 must remain upright bold by default: {h4_chunk}"
+    );
+
+    // 2. `#align(center)[#block(inset: (y: 2cm))[...]]` must center title paragraphs and apply ~2cm (`1134 dxa`) top inset.
+    assert!(
+        doc_xml.contains(r#"<w:jc w:val="center"/><w:spacing w:before="1134""#),
+        "expected centered title paragraph with 2cm (1134 dxa) top inset"
+    );
+
+    // 3. `<w:txbxContent>` inside rounded `ShapeBlock` must preserve `<w:numPr>` numbering for `Enum` and nested `List`.
+    let txbx_chunk = doc_xml
+        .split("<w:txbxContent>")
+        .nth(1)
+        .and_then(|s| s.split("</w:txbxContent>").next())
+        .expect("rounded ShapeBlock emits <w:txbxContent>");
+    assert!(
+        txbx_chunk.matches("<w:numPr>").count() >= 4,
+        "expected <w:numPr> markers on enum and nested bullet items inside <w:txbxContent>: {txbx_chunk}"
+    );
+
+    // 4. `ShapeBlock` outer wrapper `<w:p>` uses a 1pt paragraph mark (`w:sz="2"`) so `Normal` font
+    //    descent does not bloat `<wp:inline>` height at page boundaries.
+    assert!(
+        doc_xml.contains(r#"w:line="240" w:lineRule="auto"/><w:rPr><w:sz w:val="2"/><w:szCs w:val="2"/></w:rPr></w:pPr><w:r>"#),
+        "expected 1pt paragraph mark on ShapeBlock wrapper paragraph"
+    );
+
+    // 5. Post-`Container` (`<w:tbl>`) `#v(1em)` spacing must propagate onto the following paragraph's `w:before` (> 200 dxa).
+    let after_tbl_para = doc_xml
+        .split("</w:tbl>")
+        .nth(1)
+        .and_then(|s| s.split("</w:p>").next())
+        .expect("trailing paragraph after callout table exists");
+    assert!(
+        !after_tbl_para.contains(r#"<w:spacing w:before="0""#),
+        "trailing paragraph after Container + #v(1em) must carry non-zero w:before: {after_tbl_para}"
+    );
+
+    // 6. Multi-page split rounded `ShapeBlock` must not double-apply `inset` as `<wp:anchor>` offset.
+    assert!(
+        !doc_xml.contains("<wp:anchor"),
+        "multi-page split rounded block must not double-apply inset as <wp:anchor> placed_offset_pt"
+    );
+}
+
+#[test]
+fn test_slide_sections_background_valign_full_bleed_furniture_and_inline_pills() {
+    let typst_src = r##"
+#set page(
+  paper: "presentation-16-9",
+  margin: (x: 36pt, top: 54pt, bottom: 27pt),
+  fill: rgb("#FAFAFA"),
+  header: pad(x: -36pt, block(width: 100%, height: 36pt, fill: rgb("#23373B"), inset: (x: 18pt, y: 6pt))[
+    #set text(fill: white, size: 18pt, weight: "bold")
+    1. 演示标题
+  ]),
+  footer: pad(x: -36pt, grid(
+    columns: (30%, 70%),
+    rows: 2pt,
+    rect(width: 100%, height: 100%, fill: rgb("#EB811B")),
+    rect(width: 100%, height: 100%, fill: rgb("#E6DDD6")),
+  )),
+)
+#set text(font: "PingFang SC", lang: "zh", size: 18pt)
+#show heading.where(level: 2): none
+#show raw.where(block: false): box.with(
+  fill: luma(238),
+  inset: (x: 4pt, y: 0pt),
+  outset: (y: 3pt),
+  radius: 3pt,
+)
+#show raw.where(block: true): block.with(
+  fill: luma(242),
+  stroke: 0.5pt + luma(210),
+  inset: 10pt,
+  radius: 6pt,
+  width: 100%,
+)
+
+== 隐藏的小节标题
+
+#align(horizon)[
+  正文包含中文胶囊 `苹方-简` 与英文胶囊 `PingFang SC`：
+
+  ```python
+  # 第一行中文注释
+  x = 1
+  # 第二行中文注释
+  y = 2
+  ```
+]
+
+#page(fill: rgb("#23373B"), header: none, footer: none, margin: 54pt)[
+  #set align(center + horizon)
+  #set text(fill: white, size: 28pt, weight: "bold")
+  感谢观看！
+]
+"##;
+
+    let (docx_bytes, ir) = convert_typst_str_to_docx_bytes(typst_src, None)
+        .expect("slide constructs convert cleanly");
+    let doc_xml = assert_valid_docx_xml(&docx_bytes);
+    let settings_xml = read_zip_entry(&docx_bytes, "word/settings.xml");
+
+    // 1. `#show heading.where(level: 2): none` must collapse hidden empty headings cleanly.
+    assert!(
+        !ir.blocks.iter().any(|b| matches!(b, BlockNode::Heading { .. })),
+        "hidden empty heading must be stripped from DocumentIr"
+    );
+
+    // 2. Both `#align(horizon)` and `#set align(center + horizon)` emit `<w:vAlign w:val="center"/>`.
+    assert!(
+        doc_xml.matches(r#"<w:vAlign w:val="center"/>"#).count() >= 2,
+        "expected <w:vAlign w:val=\"center\"/> on both horizon-aligned slide sections"
+    );
+
+    // 3. Per-section `#page(fill: ...)` enables `<w:displayBackgroundShape/>` and anchors a
+    //    behind-doc full-page background rectangle inside the dark slide's header part.
+    assert!(settings_xml.contains("<w:displayBackgroundShape/>"));
+    let focus_hdr = read_zip_entry(&docx_bytes, "word/header2.xml");
+    assert!(
+        focus_hdr.contains(r#"behindDoc="1""#) && focus_hdr.contains("23373B"),
+        "expected full-page behindDoc background shape in focus-slide header: {focus_hdr}"
+    );
+
+    // 4. Full-bleed `#pad(x: -36pt)` header/footer emit `-720 dxa` outdent and exact `2pt` (`40 dxa`) bar row.
+    let slide1_hdr = read_zip_entry(&docx_bytes, "word/header1.xml");
+    let slide1_ftr = read_zip_entry(&docx_bytes, "word/footer1.xml");
+    assert!(
+        slide1_hdr.contains(r#"<w:tblInd w:w="-720" w:type="dxa"/>"#),
+        "expected -720 dxa full-bleed outdent on slide header: {slide1_hdr}"
+    );
+    assert!(
+        slide1_ftr.contains(r#"<w:tblInd w:w="-720" w:type="dxa"/>"#)
+            && slide1_ftr.contains(r#"<w:trHeight w:val="40" w:hRule="exact"/>"#),
+        "expected -720 dxa full-bleed outdent and exact 40 dxa 2pt row on slide footer: {slide1_ftr}"
+    );
+
+    // 5. Single-line inline pills emit `wrap="none"` without negative `<w:position>`, and boxed
+    //    `raw(block: true)` uses calibrated `w:lineRule="exact"` without a phantom trailing blank `<w:p>`.
+    assert!(doc_xml.contains(r#"wrap="none""#));
+    assert!(doc_xml.contains(r#"w:lineRule="exact""#));
+}
+
+#[test]
+fn test_font_fallback_warning_and_exam_math_constructs() {
+    // Deliberately omit `#set text(font: ...)` so default `Libertinus Serif` /
+    // `New Computer Modern Math` fall back to a host CJK font on Chinese glyphs.
+    let typst_src = r##"
+#set page(paper: "a4")
+#set text(size: 10.5pt)
+#set heading(numbering: "I.")
+
+= 判断题,正确的请在题号前的括号内打勾,错误的打叉,本大题共五个小题每小题两分
+
+7. 已知密度函数 $f(x) = cases(a x + b\, & 0 < x < 1, 0\, & "其它")$，证明统计量 $display(Y = (sqrt(n - 1) X_i) / sqrt(X_2^2 + X_n^2))$ 服从分布.
+
+#figure(
+  table(columns: 2, [X], [1]),
+  caption: [总体概率分布表],
+)
+"##;
+
+    let (docx_bytes, ir) = convert_typst_str_to_docx_bytes(typst_src, None)
+        .expect("exam constructs and font fallback convert cleanly");
+    let doc_xml = assert_valid_docx_xml(&docx_bytes);
+
+    // 1. Font fallback warnings are reported without altering realized font family names.
+    assert!(
+        ir.report
+            .font_fallback_warnings
+            .iter()
+            .any(|w| w.contains("字体回退") && w.contains("未更改原字体名称")),
+        "expected font fallback warning in ConversionReport, got: {:?}",
+        ir.report.font_fallback_warnings
+    );
+    let cjk_families: Vec<&String> = ir
+        .font_metrics
+        .iter()
+        .filter(|(_, m)| m.has_cjk_codepage)
+        .map(|(family, _)| family)
+        .collect();
+    assert!(
+        !cjk_families.is_empty(),
+        "expected fallback CJK font to be detected with has_cjk_codepage=true (including AAT/cmap fonts)"
+    );
+    for family in cjk_families {
+        assert!(
+            doc_xml.contains(&format!(r#"w:eastAsia="{family}""#)),
+            "expected verbatim realized CJK font family `{family}` in <w:rFonts>"
+        );
+    }
+
+    // 2. Numbered heading emits hanging indent for wrapped lines and compact `w:after="16"` before `Enum`,
+    //    while continued `7.` enum item emits `w:before="0"` instead of `180`.
+    let parsed = roxmltree::Document::parse(&doc_xml).expect("valid document.xml");
+    let paragraphs: Vec<_> = parsed
+        .descendants()
+        .filter(|n| n.has_tag_name("p"))
+        .collect();
+
+    let heading_p = paragraphs
+        .iter()
+        .find(|p| {
+            p.descendants().any(|n| {
+                n.has_tag_name("pStyle")
+                    && n.attribute(("http://schemas.openxmlformats.org/wordprocessingml/2006/main", "val"))
+                        == Some("Heading1")
+            })
+        })
+        .expect("Heading1 paragraph present");
+    let heading_xml = &doc_xml[heading_p.range()];
+    assert!(
+        heading_xml.contains("w:hanging="),
+        "expected hanging indent on numbered Heading1: {heading_xml}"
+    );
+
+    let enum_p = paragraphs
+        .iter()
+        .find(|p| doc_xml[p.range()].contains("已知密度函数"))
+        .expect("continued enum paragraph 7 present");
+    let enum_xml = &doc_xml[enum_p.range()];
+    assert!(
+        enum_xml.contains(r#"w:before="0""#),
+        "expected continued enum item 7 to emit w:before=\"0\": {enum_xml}"
+    );
+
+    // 3. Bottom caption after a table figure emits `w:before="100"` (5pt gap).
+    let caption_p = paragraphs
+        .iter()
+        .find(|p| doc_xml[p.range()].contains("总体概率分布表"))
+        .expect("table figure caption paragraph present");
+    let caption_xml = &doc_xml[caption_p.range()];
+    assert!(
+        caption_xml.contains(r#"w:before="100""#),
+        "expected w:before=\"100\" on bottom caption after table figure: {caption_xml}"
+    );
+
+    // 4. `cases(...)` left-aligns every piecewise column with zero `<m:cSp>`, and inline `display(...)`
+    //    fraction compensates Word's inline fraction shrink even with nested subscripts.
+    assert!(
+        doc_xml.contains(
+            r#"<m:mPr><m:rSpRule m:val="0"/><m:cGpRule m:val="3"/><m:cSp m:val="0"/><m:cGp m:val="80"/><m:mcs><m:mc><m:mcPr><m:count m:val="1"/><m:mcJc m:val="left"/></m:mcPr></m:mc><m:mc><m:mcPr><m:count m:val="1"/><m:mcJc m:val="left"/></m:mcPr></m:mc></m:mcs></m:mPr>"#
+        ),
+        "expected left-aligned per-column <m:mPr> for cases(...) matrix"
+    );
+    let frac_node = parsed
+        .descendants()
+        .find(|n| n.has_tag_name("f"))
+        .expect("inline display fraction <m:f> present");
+    let max_frac_sz: u32 = frac_node
+        .descendants()
+        .filter(|n| n.has_tag_name("sz"))
+        .filter_map(|n| {
+            n.attribute(("http://schemas.openxmlformats.org/wordprocessingml/2006/main", "val"))
+                .and_then(|v| v.parse::<u32>().ok())
+        })
+        .max()
+        .unwrap_or(0);
+    assert!(
+        max_frac_sz > 24,
+        "expected inline display(...) fraction run <w:sz> compensation (>24 half-pt), got {max_frac_sz}"
+    );
+}
+
