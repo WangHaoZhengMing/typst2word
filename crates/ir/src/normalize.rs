@@ -6,22 +6,141 @@
 //!    Typst columns/pages (preserving 1-to-N `LayoutFragmentIr` slices in `DocumentIr::reference_layout`).
 //! 3. Cleaning leading, trailing, or duplicate consecutive [`BlockNode::PageBreak`] markers.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use crate::{
-    BlockLayoutSpanIr, BlockNode, DocumentIr, InlineNode, NodeId, NodeOrigin, NodeReferenceLayout,
-    PageSetupIr, TableKindIr, TableRowIr,
+    BlockLayoutSpanIr, BlockNode, DocumentIr, InlineNode, LinkTargetIr, NodeId, NodeOrigin,
+    NodeReferenceLayout, PageSetupIr, ParagraphStyleIr, TableKindIr, TableRowIr,
 };
 
-/// Normalize `DocumentIr` structure (coalesce adjacent text runs, merge split containers,
-/// and clean redundant page breaks).
+/// Normalize `DocumentIr` structure (coalesce adjacent text runs, collapse `#show heading: none`
+/// zero-fragment headings, merge split containers, and clean redundant page breaks).
 pub fn normalize_document_ir(doc: &mut DocumentIr) {
     visit_document_inline_lists_mut(doc, &mut coalesce_adjacent_text_runs);
+    collapse_hidden_empty_headings(doc);
     merge_split_containers(doc);
     visit_document_block_lists_mut(doc, &mut merge_split_styled_containers);
     clean_redundant_pagebreaks(&mut doc.blocks);
     for section in &mut doc.sections {
         clean_redundant_pagebreaks(&mut section.blocks);
+    }
+}
+
+/// Remove invisible zero-fragment `Heading` blocks created by `#show heading: none` (e.g. slide or
+/// running-header templates that introspect headings without rendering them in flow), forwarding
+/// any intra-document referenced bookmark onto the following block so links/outlines keep working.
+fn collapse_hidden_empty_headings(doc: &mut DocumentIr) {
+    let mut referenced_anchors: HashSet<String> = HashSet::new();
+    visit_document_inline_lists_mut(doc, &mut |inlines| {
+        for inline in inlines.iter() {
+            match inline {
+                InlineNode::Link {
+                    target: Some(LinkTargetIr::Anchor(anchor)),
+                    ..
+                }
+                | InlineNode::Ref { target: anchor, .. } => {
+                    referenced_anchors.insert(anchor.clone());
+                }
+                _ => {}
+            }
+        }
+    });
+    visit_document_block_lists_mut(doc, &mut |blocks| {
+        for block in blocks.iter() {
+            if let BlockNode::Outline { entries, .. } = block {
+                for entry in entries {
+                    if let Some(bm) = &entry.target_bookmark {
+                        referenced_anchors.insert(bm.clone());
+                    }
+                }
+            }
+        }
+    });
+
+    let layouts = std::mem::take(&mut doc.reference_layout);
+    let mut removed_count = 0usize;
+    let mut prune_fn = |blocks: &mut Vec<BlockNode>| {
+        let mut i = 0;
+        while i < blocks.len() {
+            let is_hidden_heading = match &blocks[i] {
+                BlockNode::Heading {
+                    id,
+                    numbering,
+                    content,
+                    box_style,
+                    ..
+                } => {
+                    content.is_empty()
+                        && numbering.is_none()
+                        && box_style.is_none()
+                        && layouts.get(id).is_none_or(|l| l.fragments.is_empty())
+                }
+                _ => false,
+            };
+            if !is_hidden_heading {
+                i += 1;
+                continue;
+            }
+            let BlockNode::Heading { bookmark, .. } = blocks.remove(i) else {
+                unreachable!()
+            };
+            removed_count += 1;
+            if let Some(bm) = bookmark
+                && referenced_anchors.contains(&bm)
+            {
+                let attached = blocks
+                    .get_mut(i)
+                    .is_some_and(|next| attach_bookmark_to_first_carrier(next, &bm));
+                if !attached {
+                    blocks.insert(
+                        i,
+                        BlockNode::Paragraph {
+                            id: NodeId::UNSET,
+                            content: Vec::new(),
+                            style: ParagraphStyleIr {
+                                space_before_pt: 0.0,
+                                space_after_pt: 0.0,
+                                line_spacing_pt: Some(1.0),
+                                ..Default::default()
+                            },
+                            bookmark: Some(bm),
+                        },
+                    );
+                    i += 1;
+                }
+            }
+        }
+    };
+    visit_document_block_lists_mut(doc, &mut prune_fn);
+    doc.reference_layout = layouts;
+    doc.report.headings_count = doc.report.headings_count.saturating_sub(removed_count);
+}
+
+fn attach_bookmark_to_first_carrier(block: &mut BlockNode, bm: &str) -> bool {
+    match block {
+        BlockNode::Paragraph { bookmark, .. }
+        | BlockNode::Heading { bookmark, .. }
+        | BlockNode::Figure { bookmark, .. } => {
+            if bookmark.is_none() {
+                *bookmark = Some(bm.to_string());
+                true
+            } else {
+                false
+            }
+        }
+        BlockNode::List { items, .. } => items
+            .first_mut()
+            .and_then(|it| it.blocks.first_mut())
+            .is_some_and(|b| attach_bookmark_to_first_carrier(b, bm)),
+        BlockNode::Enum { items, .. } => items
+            .first_mut()
+            .and_then(|it| it.blocks.first_mut())
+            .is_some_and(|b| attach_bookmark_to_first_carrier(b, bm)),
+        BlockNode::Container(c) => c
+            .body
+            .first_mut()
+            .is_some_and(|b| attach_bookmark_to_first_carrier(b, bm)),
+        _ => false,
     }
 }
 
@@ -539,6 +658,7 @@ where
             }
             for entry in entries {
                 visit_inlines_block_lists_mut(&mut entry.title, f);
+                visit_inlines_block_lists_mut(&mut entry.page_inlines, f);
             }
         }
         BlockNode::Bibliography { title, entries } => {
@@ -630,6 +750,7 @@ where
                     }
                     for entry in entries {
                         visit_inline_list_recursive_mut(&mut entry.title, f);
+                        visit_inline_list_recursive_mut(&mut entry.page_inlines, f);
                     }
                 }
                 BlockNode::Bibliography { title, entries } => {

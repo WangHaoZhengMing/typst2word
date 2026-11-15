@@ -11,5 +11,9 @@ pub struct OutlineEntryIr {
     pub prefix: Option<String>,
     pub title: Vec<InlineNode>,
     pub page: String,
+    /// Formatted page-number runs/fields (e.g. `"第 "` + `PAGEREF` + `" 页"`), preserving
+    /// target page numbering prefix/suffix and extracted font styling.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub page_inlines: Vec<InlineNode>,
     pub target_bookmark: Option<String>,
 }

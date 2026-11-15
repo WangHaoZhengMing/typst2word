@@ -226,6 +226,8 @@ pub enum BlockNode {
         content: Vec<InlineNode>,
         bookmark: Option<String>,
         align: HAlignIr,
+        #[serde(default)]
+        left_indent_pt: f64,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         box_style: Option<ContainerStyleIr>,
     },
@@ -325,6 +327,8 @@ pub enum BlockNode {
         length_pt: f64,
         stroke: StrokeIr,
         align: HAlignIr,
+        #[serde(default)]
+        left_indent_pt: f64,
     },
     /// Explicit page break (`#pagebreak()`).
     PageBreak,

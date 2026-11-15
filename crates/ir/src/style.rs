@@ -83,12 +83,19 @@ pub struct ParagraphStyleIr {
     /// Scoped `StyleChain` resolved `par.leading` (`pt`, with local `em` evaluated).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolved_par_leading_pt: Option<f64>,
+    /// Extra bottom padding (`pt`) inherited from an enclosing unstyled `#pad` / `#block(inset: ...)`.
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
+    pub pad_bottom_pt: f64,
     /// Scoped `StyleChain` resolved language/region (`#set text(lang: ..., region: ...)`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub locale: Option<LocaleIr>,
     /// Scoped `StyleChain` resolved text direction (`ltr` / `rtl`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dir: Option<TextDirIr>,
+}
+
+fn is_zero_f64(v: &f64) -> bool {
+    v.abs() < 1e-6
 }
 
 impl Default for ParagraphStyleIr {
@@ -111,6 +118,7 @@ impl Default for ParagraphStyleIr {
             resolved_default_font_size_pt: None,
             resolved_par_spacing_pt: None,
             resolved_par_leading_pt: None,
+            pad_bottom_pt: 0.0,
             locale: None,
             dir: None,
         }

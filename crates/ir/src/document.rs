@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{BlockNode, ColorHex, LocaleIr, TextDirIr, UnsupportedIr};
+use super::{BlockNode, ColorHex, LocaleIr, TextDirIr, UnsupportedIr, VAlignIr};
 
 /// Document-level metadata extracted from `DocumentInfo` (`#set document(...)`).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -57,6 +57,9 @@ pub struct PageSetupIr {
     pub mirror_margins: bool,
     pub columns: usize,
     pub fill: Option<ColorHex>,
+    /// Page-level vertical content alignment (`top`, `horizon` -> `Center`, `bottom`).
+    #[serde(default)]
+    pub v_align: VAlignIr,
     /// Default (or odd-page when `different_odd_even` is true) header.
     pub header: Vec<BlockNode>,
     /// Default (or odd-page when `different_odd_even` is true) footer.
@@ -105,6 +108,7 @@ impl PageSetupIr {
             && self.mirror_margins == other.mirror_margins
             && self.columns == other.columns
             && self.fill == other.fill
+            && self.v_align == other.v_align
             && self.page_number_format == other.page_number_format
     }
 }
@@ -124,6 +128,7 @@ impl Default for PageSetupIr {
             mirror_margins: false,
             columns: 1,
             fill: None,
+            v_align: VAlignIr::Top,
             header: Vec::new(),
             footer: Vec::new(),
             first_page_header: None,
@@ -157,4 +162,8 @@ pub struct ConversionReport {
     pub links_count: usize,
     pub unsupported_elements: Vec<UnsupportedIr>,
     pub compiler_warnings: Vec<String>,
+    /// Warnings emitted when Typst or the host system falls back to another font
+    /// (original font family names in IR are preserved verbatim without substitution).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub font_fallback_warnings: Vec<String>,
 }

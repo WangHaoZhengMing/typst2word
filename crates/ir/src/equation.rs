@@ -40,6 +40,10 @@ pub enum MathNodeIr {
         num: Box<MathNodeIr>,
         denom: Box<MathNodeIr>,
         style: MathFracStyleIr,
+        /// Explicit math size override (`Some(true)` for `display(...)` inside inline math,
+        /// `Some(false)` for `inline(...)` inside display math).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        display_style: Option<bool>,
     },
     /// Square root or $n$-th root (`sqrt`, `root`).
     Radical {
@@ -80,7 +84,12 @@ pub enum MathNodeIr {
         elements: Vec<MathNodeIr>,
     },
     /// 2D matrix grid (`mat`, `vec`, `cases`).
-    Matrix { rows: Vec<Vec<MathNodeIr>> },
+    Matrix {
+        rows: Vec<Vec<MathNodeIr>>,
+        /// Whether columns are left-aligned with compact piecewise spacing (`cases(...)`).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        left_aligned: bool,
+    },
     /// Multi-line aligned equation array.
     EquationArray { rows: Vec<MathNodeIr> },
     /// Diacritical accent above a base (`hat`, `tilde`, `vec`, `dot`, ...).
