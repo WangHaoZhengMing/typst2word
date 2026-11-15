@@ -56,6 +56,7 @@ pub enum WordMathNode {
     },
     Matrix {
         rows: Vec<Vec<WordMathNode>>,
+        left_aligned: bool,
     },
     EquationArray {
         rows: Vec<WordMathNode>,
@@ -299,21 +300,35 @@ fn calibrate_math_node_inner(
                 })
                 .collect(),
         ),
-        MathNodeIr::Fraction { num, denom, style } => {
+        MathNodeIr::Fraction {
+            num,
+            denom,
+            style,
+            display_style,
+        } => {
             let is_vert = matches!(style, MathFracStyleIr::Vertical | MathFracStyleIr::NoBar);
             let next_in_frac = in_vertical_fraction || is_vert;
+            // Explicit `display(...)` / `inline(...)` math size overrides on vertical fractions
+            // take precedence even when nested subscripts/radicals lower `typst_min_glyph_pt`.
+            let local_frac_sz = match (is_vert, display_style) {
+                (true, Some(true)) => crate::FractionScaleMode::InlineDisplayCompensated
+                    .resolve_font_size_pt(run_font_size_pt),
+                (true, Some(false)) => crate::FractionScaleMode::BlockInlineCompensated
+                    .resolve_font_size_pt(run_font_size_pt),
+                _ => fraction_font_size_pt,
+            };
             WordMathNode::Fraction {
                 num: Box::new(calibrate_math_node_inner(
                     num,
                     run_font_size_pt,
-                    fraction_font_size_pt,
+                    local_frac_sz,
                     width_scale_pct,
                     next_in_frac,
                 )),
                 denom: Box::new(calibrate_math_node_inner(
                     denom,
                     run_font_size_pt,
-                    fraction_font_size_pt,
+                    local_frac_sz,
                     width_scale_pct,
                     next_in_frac,
                 )),
@@ -476,7 +491,7 @@ fn calibrate_math_node_inner(
                 })
                 .collect(),
         },
-        MathNodeIr::Matrix { rows } => WordMathNode::Matrix {
+        MathNodeIr::Matrix { rows, left_aligned } => WordMathNode::Matrix {
             rows: rows
                 .iter()
                 .map(|row| {
@@ -493,6 +508,7 @@ fn calibrate_math_node_inner(
                         .collect()
                 })
                 .collect(),
+            left_aligned: *left_aligned,
         },
         MathNodeIr::EquationArray { rows } => WordMathNode::EquationArray {
             rows: rows
@@ -610,7 +626,9 @@ fn inspect_node_structure(
             }
             (rows, frac_d, tall, root_g, any_g)
         }
-        MathNodeIr::Fraction { num, denom, style } => {
+        MathNodeIr::Fraction {
+            num, denom, style, ..
+        } => {
             let is_vert = matches!(style, MathFracStyleIr::Vertical | MathFracStyleIr::NoBar);
             let (_, f1, t1, _, ag1) = inspect_node_structure(num, true);
             let (_, f2, t2, _, ag2) = inspect_node_structure(denom, true);
@@ -678,7 +696,7 @@ fn inspect_node_structure(
             }
             (rows, frac_d, tall, root_g, any_g)
         }
-        MathNodeIr::Matrix { rows } => {
+        MathNodeIr::Matrix { rows, .. } => {
             let r_cnt = rows.len().max(1);
             let mut frac_d = 0usize;
             let mut root_g = false;
@@ -738,13 +756,15 @@ fn estimate_node_em_width(node: &MathNodeIr, in_display_context: bool) -> f64 {
             .iter()
             .map(|c| estimate_node_em_width(c, in_display_context))
             .sum(),
-        MathNodeIr::Fraction { num, denom, style } => {
+        MathNodeIr::Fraction {
+            num,
+            denom,
+            style,
+            display_style,
+        } => {
             let is_vert = matches!(style, MathFracStyleIr::Vertical | MathFracStyleIr::NoBar);
-            let child_scale = if is_vert && !in_display_context {
-                0.73
-            } else {
-                1.0
-            };
+            let is_disp = display_style.unwrap_or(in_display_context);
+            let child_scale = if is_vert && !is_disp { 0.73 } else { 1.0 };
             let nw = estimate_node_em_width(num, false) * child_scale;
             let dw = estimate_node_em_width(denom, false) * child_scale;
             if is_vert {
@@ -815,7 +835,7 @@ fn estimate_node_em_width(node: &MathNodeIr, in_display_context: bool) -> f64 {
             let seps_total = sep_w * elements.len().saturating_sub(1) as f64;
             open_w + elems_w + seps_total + close_w
         }
-        MathNodeIr::Matrix { rows } => {
+        MathNodeIr::Matrix { rows, left_aligned } => {
             let num_cols = rows.iter().map(|r| r.len()).max().unwrap_or(0);
             let mut total_w = 0.0;
             for c in 0..num_cols {
@@ -826,7 +846,8 @@ fn estimate_node_em_width(node: &MathNodeIr, in_display_context: bool) -> f64 {
                     .fold(0.0_f64, f64::max);
                 total_w += col_max;
             }
-            total_w + num_cols.saturating_sub(1) as f64 * 0.85
+            let col_gap_em = if *left_aligned { 0.50 } else { 0.85 };
+            total_w + num_cols.saturating_sub(1) as f64 * col_gap_em
         }
         MathNodeIr::EquationArray { rows } => rows
             .iter()

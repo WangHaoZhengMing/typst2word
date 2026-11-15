@@ -13,6 +13,7 @@ pub struct FigureConstruct {
     pub eff_indent_dxa: usize,
     pub caption_before_dxa: i64,
     pub caption_after_dxa: i64,
+    pub caption_line_dxa: i64,
     pub caption_keep_with_next: bool,
 }
 
@@ -34,11 +35,18 @@ impl FigureConstruct {
             })
             .unwrap_or(0);
         let eff_indent_dxa = indent_left_dxa.max(body_indent_dxa);
+        // Word `<w:tbl>` has zero bottom margin, so a bottom caption after a table needs ~5pt
+        // (`100 dxa`, plus ~2pt top internal line-box leading) to match Typst's `0.65em` figure gap.
+        let caption_before_dxa = match (caption_pos, body.last()) {
+            (CaptionPositionIr::Bottom, Some(BlockNode::Table(_))) => 100,
+            _ => 20,
+        };
         Self {
             caption_pos,
             eff_indent_dxa,
-            caption_before_dxa: 20,
+            caption_before_dxa,
             caption_after_dxa,
+            caption_line_dxa: 199,
             caption_keep_with_next,
         }
     }

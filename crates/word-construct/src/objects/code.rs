@@ -13,6 +13,8 @@ pub enum CodeBlockConstruct<'a> {
     ShadedBoxTable {
         bg_hex: &'a str,
         border_color_hex: &'a str,
+        border_sz_eighths_pt: u32,
+        left_indent_dxa: usize,
     },
 }
 
@@ -25,9 +27,14 @@ impl<'a> CodeBlockConstruct<'a> {
         if fill.is_none() && stroke.is_none() {
             Self::UnboxedLines { left_indent_dxa }
         } else {
+            let border_sz_eighths_pt = stroke
+                .map(|s| ((s.thickness_pt * 8.0).round() as u32).clamp(2, 96))
+                .unwrap_or(if fill.is_some() { 0 } else { 6 });
             Self::ShadedBoxTable {
                 bg_hex: fill.unwrap_or("F6F8FA"),
                 border_color_hex: stroke.map(|s| s.color.as_str()).or(fill).unwrap_or("D0D7DE"),
+                border_sz_eighths_pt,
+                left_indent_dxa,
             }
         }
     }

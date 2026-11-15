@@ -33,12 +33,12 @@ pub enum ParagraphIndentationConstruct {
 
 impl ParagraphIndentationConstruct {
     pub fn solve(style: &ParagraphStyleIr) -> Self {
-        let left_dxa = pt_to_dxa(style.left_indent_pt).max(0);
-        let right_dxa = pt_to_dxa(style.right_indent_pt).max(0);
+        let left_dxa = pt_to_dxa(style.left_indent_pt);
+        let right_dxa = pt_to_dxa(style.right_indent_pt);
         let first_dxa = pt_to_dxa(style.first_line_indent_pt).max(0);
         let hang_dxa = pt_to_dxa(style.hanging_indent_pt).max(0);
 
-        match (left_dxa > 0 || right_dxa > 0, hang_dxa > 0, first_dxa > 0) {
+        match (left_dxa != 0 || right_dxa != 0, hang_dxa > 0, first_dxa > 0) {
             (_, true, _) => Self::Hanging {
                 left_dxa: left_dxa + hang_dxa,
                 right_dxa,
@@ -65,6 +65,7 @@ pub struct ParagraphConstruct {
     pub before_dxa: i64,
     pub after_dxa: i64,
     pub line_dxa: i64,
+    pub line_rule_exact: bool,
     pub indentation: ParagraphIndentationConstruct,
     pub right_tab_stop_dxa: Option<i64>,
     pub keep_with_next: bool,
@@ -112,17 +113,30 @@ impl ParagraphConstruct {
         let after_dxa = pt_to_dxa(style.space_after_pt).max(0);
         let indentation = ParagraphIndentationConstruct::solve(style);
 
+        // Empty spacer paragraphs (`#block(height: ...)[ ]`) use an exact `1pt` (`20 dxa`) line
+        // box with a `1pt` (`2` half-pt) paragraph mark so Word adds zero extra font descent.
+        let is_empty_spacer = content.is_empty()
+            && style.line_spacing_pt.is_some()
+            && style.resolved_font_size_pt.is_none();
+        let (eff_line_dxa, mark_rpr_sz_half_pt) = if is_empty_spacer {
+            let exact_dxa = pt_to_dxa(style.line_spacing_pt.unwrap_or(1.0)).max(20);
+            (exact_dxa, Some(2))
+        } else {
+            (line_dxa, paragraph_mark_rpr_sz_half_pt(content))
+        };
+
         Self {
             align,
             before_dxa,
             after_dxa,
-            line_dxa,
+            line_dxa: eff_line_dxa,
+            line_rule_exact: is_empty_spacer,
             indentation,
             right_tab_stop_dxa,
             keep_with_next: keep_with_next_override || style.sticky,
             keep_lines: !style.breakable,
             rtl: style.dir == Some(ir::TextDirIr::Rtl),
-            mark_rpr_sz_half_pt: paragraph_mark_rpr_sz_half_pt(content),
+            mark_rpr_sz_half_pt,
             needs_zwsp_for_inline_eq: is_only_inline_equation(content),
         }
     }
@@ -204,6 +218,9 @@ fn estimate_inlines_width_pt(content: &[InlineNode]) -> f64 {
 /// Whether `content` contains a single `#h(1fr)`-style fill space reaching the right margin
 /// (as opposed to a fixed `#h(36pt)` horizontal spacer mid-line).
 pub fn has_flush_right_horizontal_space(content: &[InlineNode], content_width_dxa: i64) -> bool {
+    if content.iter().any(|inl| matches!(inl, InlineNode::Tab)) {
+        return true;
+    }
     let mut large_count = 0usize;
     let mut max_space_pt = 0.0_f64;
     for inl in content {
@@ -430,8 +447,8 @@ impl ParagraphConstruct {
             return None;
         }
 
-        let left_dxa = pt_to_dxa(style.left_indent_pt).max(0);
-        let right_dxa = pt_to_dxa(style.right_indent_pt).max(0);
+        let left_dxa = pt_to_dxa(style.left_indent_pt);
+        let right_dxa = pt_to_dxa(style.right_indent_pt);
         let first_dxa = pt_to_dxa(style.first_line_indent_pt).max(0);
         let hang_dxa = pt_to_dxa(style.hanging_indent_pt).max(0);
 

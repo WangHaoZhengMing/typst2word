@@ -28,7 +28,7 @@ impl TableCellRole {
             Self::StyledContainer => 0.0,
             Self::SemanticTable { has_list: true } | Self::LayoutGrid { has_list: true } => 3.8,
             Self::SemanticTable { has_list: false } => 0.6,
-            Self::LayoutGrid { has_list: false } => 2.2,
+            Self::LayoutGrid { has_list: false } => 2.1,
         }
     }
 
@@ -40,6 +40,15 @@ impl TableCellRole {
             (Self::StyledContainer, false) => 0,
             (Self::SemanticTable { has_list: false }, _) => {
                 pt_to_dxa((inset_bottom_pt - 5.4).max(0.0))
+            }
+            (Self::LayoutGrid { has_list: false }, _) => {
+                // Conserve total internal leading (~4.2pt = 2.1pt top + 2.1pt bottom) of Word's
+                // compact `LayoutGrid` cell line box relative to Typst's `cap-height` box: when
+                // `inset_top_pt == 0` (e.g. `#grid(gutter: ...)`), `tcMar.top` is clamped at 0 and
+                // absorbs 0pt, so `tcMar.bottom` absorbs the full 4.2pt excess.
+                let top_absorbed_pt = inset_top_pt.clamp(0.0, 2.1);
+                let rem_trim_pt = 4.2 - top_absorbed_pt;
+                pt_to_dxa((inset_bottom_pt - rem_trim_pt).max(0.0))
             }
             (role, _) => {
                 let v_sub = role.vertical_top_trim_pt(inset_top_pt);

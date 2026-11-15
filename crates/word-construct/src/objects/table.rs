@@ -66,6 +66,7 @@ pub struct TableRowConstruct<'a> {
     pub is_header: bool,
     pub is_footer: bool,
     pub min_height_dxa: Option<i64>,
+    pub is_exact_height: bool,
     pub keep_rows_together: bool,
     pub cells: Vec<TableCellSlotConstruct<'a>>,
 }
@@ -85,16 +86,11 @@ impl<'a> TableConstruct<'a> {
     pub fn solve(table: &'a TableIr) -> Self {
         let kind = table.kind;
 
-        let indent_dxa = (table.left_indent_pt > 0.5 && table.align == HAlignIr::Left).then(|| {
-            let first_cell_left_inset = table
-                .rows
-                .first()
-                .and_then(|r| r.cells.first())
-                .filter(|c| c.borders.left.is_some())
-                .map(|c| c.inset.left)
-                .unwrap_or(0.0);
-            pt_to_dxa(table.left_indent_pt + first_cell_left_inset)
-        });
+        // With `compatibilityMode=15` in `word/settings.xml`, Word aligns the leading
+        // edge of `<w:tbl>` directly at `margin_left + tblInd` without legacy cell-margin
+        // overhang, so `left_indent_pt` (including negative full-bleed `#pad(x: -2em)`) maps 1:1.
+        let indent_dxa = (table.left_indent_pt.abs() > 0.5 && table.align == HAlignIr::Left)
+            .then(|| pt_to_dxa(table.left_indent_pt));
 
         let total_w_dxa: i64 = table.col_widths_pt.iter().map(|&w| pt_to_dxa(w)).sum();
         let width = if total_w_dxa > 0 {
@@ -145,7 +141,10 @@ impl<'a> TableConstruct<'a> {
                 let keep_rows_together = if kind == TableKindIr::StyledContainer {
                     num_rows == 2 && row_idx == 0 && row.cells.iter().all(|c| c.blocks.len() <= 1)
                 } else {
-                    !next_row_is_complex_layout && num_rows <= 15 && row_idx + 1 < num_rows
+                    // Only glue repeated header rows to the first data row; forcing `<w:keepNext/>`
+                    // across all data rows of `<= 15`-row tables/grids turns breakable multi-row
+                    // grids (e.g. 4-row multiple-choice `#grid`s) into unbreakable page blocks.
+                    row.is_header && !next_row_is_complex_layout && row_idx + 1 < num_rows
                 };
                 let split_policy = if row.is_footer {
                     RowSplitPolicy::CantSplit
@@ -156,10 +155,15 @@ impl<'a> TableConstruct<'a> {
                 } else {
                     RowSplitPolicy::CantSplit
                 };
-                let min_height_dxa = row
+                let is_exact_height = row
                     .height_pt
-                    .map(pt_to_dxa)
-                    .filter(|&h_dxa| h_dxa > 40);
+                    .is_some_and(|h| (0.5..=6.0).contains(&h))
+                    && row.cells.iter().all(|c| c.blocks.is_empty());
+                let min_height_dxa = if is_exact_height {
+                    row.height_pt.map(|h| pt_to_dxa(h).max(10))
+                } else {
+                    row.height_pt.map(pt_to_dxa).filter(|&h_dxa| h_dxa > 40)
+                };
 
                 let cells = Self::expand_row_cell_slots(table, row_idx, num_cols);
 
@@ -168,6 +172,7 @@ impl<'a> TableConstruct<'a> {
                     is_header: row.is_header,
                     is_footer: row.is_footer,
                     min_height_dxa,
+                    is_exact_height,
                     keep_rows_together,
                     cells,
                 }

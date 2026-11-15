@@ -6,7 +6,7 @@
 
 use crate::{EnumMarkerWidthKind, FollowingBlockKind, ListItemLayoutInput, WordListItemLayout};
 
-use ir::{BlockNode, EnumItemIr, ListItemIr, TableKindIr};
+use ir::{BlockNode, EnumItemIr, ListItemIr, TableIr, TableKindIr};
 use crate::units::pt_to_dxa;
 
 /// Type-safe representation of a list/enum item's marker style in Word.
@@ -67,7 +67,11 @@ impl<'a> ListItemConstruct<'a> {
             Some(BlockNode::List { tight: true, .. } | BlockNode::Enum { tight: true, .. }) => {
                 FollowingBlockKind::TightList
             }
+            Some(BlockNode::List { tight: false, .. } | BlockNode::Enum { tight: false, .. }) => {
+                FollowingBlockKind::LooseList
+            }
             Some(BlockNode::Paragraph { .. }) => FollowingBlockKind::Paragraph,
+            Some(BlockNode::CodeBlock { .. }) => FollowingBlockKind::CodeBlock,
             Some(_) => FollowingBlockKind::Other,
         };
         WordListItemLayout::solve(ListItemLayoutInput {
@@ -84,6 +88,45 @@ impl<'a> ListItemConstruct<'a> {
             first_para_line_spacing_pt,
             following_block,
         })
+    }
+
+    /// Solve extra bottom inset (`pt`) for a child `TableIr` at `idx` inside this item so that
+    /// subsequent blocks in the same item (or after the final top-level item) honor `par.spacing`
+    /// after accounting for `WordCellMarginsDxa`'s internal-leading trim.
+    pub fn solve_child_table_bottom_pad_pt(&self, idx: usize, tbl: &TableIr) -> f64 {
+        let is_last_block = idx + 1 == self.blocks.len();
+        if is_last_block {
+            if self.item_gap_dxa > 0 && self.is_last_top {
+                4.5
+            } else {
+                0.0
+            }
+        } else if tbl.kind != TableKindIr::SemanticTable {
+            let item_gap_pt = (self.item_gap_dxa as f64 / 20.0).max(0.0);
+            let par_leading_pt = self
+                .blocks
+                .first()
+                .and_then(|b| match b {
+                    BlockNode::Paragraph { style, .. } => {
+                        style.resolved_par_leading_pt.or(style.line_spacing_pt)
+                    }
+                    _ => None,
+                })
+                .unwrap_or(7.15);
+            match self.blocks.get(idx + 1) {
+                // Text paragraphs / lists contribute their own top line-box leading above cap-height.
+                Some(
+                    BlockNode::Paragraph { .. }
+                    | BlockNode::List { .. }
+                    | BlockNode::Enum { .. },
+                ) => item_gap_pt + 0.5 * par_leading_pt,
+                // Solid block boxes (`ShapeBlock`, `CodeBlock`, `Figure`, `Table`) have zero top
+                // internal leading, so pass the full `par.spacing = item_gap + par_leading`.
+                _ => item_gap_pt + par_leading_pt,
+            }
+        } else {
+            0.0
+        }
     }
 }
 
@@ -117,10 +160,15 @@ pub fn solve_list_sequence_construct<'a>(
                         item_gap_dxa,
                         trailing_after_dxa,
                     );
-                    let prev_ended_with_table =
-                        idx > 0 && matches!(items[idx - 1].blocks.last(), Some(BlockNode::Table(_)));
-                    let before_dxa = if prev_ended_with_table && item_gap_dxa > 0 {
-                        item_gap_dxa + 64
+                    let prev_table_extra_dxa = if idx > 0 {
+                        trailing_table_descent_deficit_dxa(items[idx - 1].blocks.last())
+                    } else {
+                        None
+                    };
+                    let before_dxa = if let Some(extra_dxa) = prev_table_extra_dxa
+                        && item_gap_dxa > 0
+                    {
+                        item_gap_dxa + extra_dxa
                     } else if idx == 0 && level == 0 && trailing_after_dxa.is_none() {
                         104
                     } else {
@@ -153,7 +201,7 @@ pub fn solve_list_sequence_construct<'a>(
         ListSequenceSource::DecimalEnum {
             items,
             num_id,
-            start_val,
+            start_val: _,
         } => {
             let num_items = items.len();
             items
@@ -168,12 +216,18 @@ pub fn solve_list_sequence_construct<'a>(
                         item_gap_dxa,
                         trailing_after_dxa,
                     );
-                    let prev_ended_with_table =
-                        idx > 0 && matches!(items[idx - 1].blocks.last(), Some(BlockNode::Table(_)));
-                    let before_dxa = if prev_ended_with_table && item_gap_dxa > 0 {
-                        item_gap_dxa + 64
-                    } else if idx == 0 && start_val > 1 {
-                        item_gap_dxa.max(180)
+                    let prev_table_extra_dxa = if idx > 0 {
+                        trailing_table_descent_deficit_dxa(items[idx - 1].blocks.last())
+                    } else {
+                        None
+                    };
+                    // Keep `before_dxa = 0` at `idx == 0` regardless of `start_val` so preceding
+                    // headings, paragraphs, and figures control inter-block spacing cleanly
+                    // (post-table gaps are supplied via `solved_block_before_dxa`).
+                    let before_dxa = if let Some(extra_dxa) = prev_table_extra_dxa
+                        && item_gap_dxa > 0
+                    {
+                        item_gap_dxa + extra_dxa
                     } else {
                         0
                     };
@@ -206,6 +260,18 @@ pub fn solve_list_sequence_construct<'a>(
                 })
                 .collect()
         }
+    }
+}
+
+fn trailing_table_descent_deficit_dxa(last_block: Option<&BlockNode>) -> Option<i64> {
+    match last_block {
+        Some(BlockNode::Table(tbl)) => match tbl.kind {
+            TableKindIr::SemanticTable => Some(64),
+            // A compact `LayoutGrid` / `StyledContainer` trailing row (`w:line="164"`) has ~0.9pt
+            // (`18 dxa`) less bottom line-box descent than a body paragraph (`w:line="199"`).
+            TableKindIr::LayoutGrid | TableKindIr::StyledContainer => Some(18),
+        },
+        _ => None,
     }
 }
 

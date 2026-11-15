@@ -15,6 +15,9 @@ pub struct HeadingConstruct {
     pub after_dxa: i64,
     pub line_dxa: i64,
     pub align: HAlignIr,
+    /// Hanging indent (`dxa`) for left-aligned numbered headings so wrapped lines align under
+    /// the heading title rather than under the numbering prefix (`left - hanging == 0` on line 1).
+    pub hanging_dxa: i64,
     pub prefix_run: Option<TextRunIr>,
 }
 
@@ -54,7 +57,10 @@ impl HeadingConstruct {
             let after_dxa = if compact_after {
                 20
             } else {
-                pt_to_dxa(sz_pt * 0.483)
+                // Solid blocks (`Table`, `ShapeBlock`, `Figure`, `List`) have zero internal top
+                // leading, so `0.55em` Typst gap minus `~0.23em` heading descent leaves `0.32em`
+                // (while `Heading -> Heading` still collapses to the next heading's `0.567em` `w:before`).
+                pt_to_dxa(sz_pt * 0.32)
             };
             (before_dxa, after_dxa, line_dxa)
         } else {
@@ -103,12 +109,33 @@ impl HeadingConstruct {
             }
         });
 
+        let hanging_dxa = match (&prefix_run, align) {
+            (Some(pref), HAlignIr::Left) => {
+                let em_w: f64 = pref
+                    .text
+                    .chars()
+                    .map(|ch| {
+                        if crate::is_cjk_or_fullwidth_char(ch) {
+                            1.0
+                        } else if matches!(ch, 'I' | 'i' | 'l' | '.' | ',' | ':' | ' ') {
+                            0.33
+                        } else {
+                            0.54
+                        }
+                    })
+                    .sum();
+                pt_to_dxa(em_w * sz_pt).max(0)
+            }
+            _ => 0,
+        };
+
         Self {
             style_id,
             before_dxa,
             after_dxa,
             line_dxa,
             align,
+            hanging_dxa,
             prefix_run,
         }
     }

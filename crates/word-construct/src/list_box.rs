@@ -18,9 +18,13 @@ pub enum FollowingBlockKind {
     GridTable,
     /// Followed by a tight child `List` or `Enum`.
     TightList,
+    /// Followed by a loose child `List` or `Enum`.
+    LooseList,
     /// Followed by a continuation `Paragraph`.
     Paragraph,
-    /// Followed by any other block (`CodeBlock`, `Figure`, `EquationBlock`, semantic `Table`, etc.).
+    /// Followed by an indented `CodeBlock` (`w:before="20"` + exact code line box).
+    CodeBlock,
+    /// Followed by any other block (`Figure`, `ShapeBlock`, `EquationBlock`, semantic `Table`, etc.).
     Other,
 }
 
@@ -80,11 +84,20 @@ impl WordListItemLayout {
         let first_after_dxa = match (input.following_block, input.num_blocks > 1, input.tight) {
             (FollowingBlockKind::GridTable, _, _) => first_line_gap_dxa,
             (FollowingBlockKind::TightList, true, _) | (_, true, true) => 0,
-            // Respect the list/enum's actual `item_gap_dxa` (derived from `par.spacing - par.leading`)
-            // without forcing an artificial `132 dxa` (`6.6pt`) floor on tighter custom `par(spacing: ...)`.
-            (FollowingBlockKind::Paragraph, true, false) => input.item_gap_dxa,
-            (_, true, false) => 10,
-            (_, false, _) => {
+            // In a loose list/enum, continuation paragraphs, nested loose lists, and block boxes
+            // (`ShapeBlock`, `CodeBlock`, `Figure`, etc.) all step by `par.spacing` in Typst;
+            // keep `input.item_gap_dxa` (`par.spacing - par.leading`) rather than collapsing to 0.5pt.
+            // Indented `CodeBlock` already contributes `w:before="20"` (`1pt`) plus exact code
+            // line-box top headroom (~1.4pt), so subtract `48 dxa` (`2.4pt`) from `item_gap_dxa`.
+            (FollowingBlockKind::CodeBlock, true, false) => (input.item_gap_dxa - 48).max(10),
+            (
+                FollowingBlockKind::Paragraph
+                | FollowingBlockKind::LooseList
+                | FollowingBlockKind::Other,
+                true,
+                false,
+            ) => input.item_gap_dxa,
+            (FollowingBlockKind::None, _, _) | (_, false, _) => {
                 // Single-block item: this first paragraph is ALSO the last block of the item!
                 // If it carries an explicit `space_after_pt` (e.g. from `#v(3cm)` / `#v(4cm)`),
                 // preserve it so Word renders the vertical answer whitespace.

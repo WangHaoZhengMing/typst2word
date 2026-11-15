@@ -101,7 +101,12 @@ impl WordParagraphConstruct {
             base_font_pt,
             default_font_pt,
         ) {
-            ParagraphScaleProfile::ExplicitLinebreakTerminated => 0.0,
+            // Once the single redundant trailing `<w:br/>` before `</w:p>` is stripped during
+            // `WordDocument` lowering, a `linebreak()`-terminated `ParElem` in Typst still carries
+            // standard `(par.spacing - par.leading).max(0.0)` inter-paragraph spacing.
+            ParagraphScaleProfile::ExplicitLinebreakTerminated => {
+                (spacing_pt - leading_pt).max(0.0)
+            }
             ParagraphScaleProfile::DisplayTitle => spacing_pt + 2.0,
             ParagraphScaleProfile::SubHeading => (spacing_pt - 3.0).max(2.0),
             // In Typst, consecutive paragraph baselines step by `cap_height + par.spacing`, whereas
