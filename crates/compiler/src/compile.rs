@@ -29,7 +29,7 @@ use typst::introspection::{
 };
 use typst::layout::{
     AlignElem, BlockBody, BlockElem, BoxElem, ColbreakElem, ColumnsElem, HElem, HideElem, MoveElem,
-    PagebreakElem, RepeatElem, RotateElem, ScaleElem, SkewElem,
+    PadElem, PagebreakElem, RepeatElem, RotateElem, ScaleElem, SkewElem,
 };
 use typst::model::StrongElem;
 use typst::routines::{Arenas, Pair, RealizationKind, Routines};
@@ -192,6 +192,29 @@ fn annotate_content_for_realization(
             return Some(cloned.pack());
         }
         return None;
+    }
+
+    if let Some(pad) = content.to_packed::<PadElem>()
+        && !is_cetz_span(content.span())
+    {
+        let mut cloned = pad.clone();
+        if let Some(updated_body) = annotate_content_for_realization(&pad.body, engine, locator) {
+            cloned.body = updated_body;
+        }
+        let mut packed = cloned.pack();
+        if let Some(lbl) = content.label() {
+            packed.set_label(lbl);
+        }
+        if let Some(loc) = content.location() {
+            packed.set_location(loc);
+        } else if !content.is_prepared() {
+            // `PadElem` has a built-in `Target::Paged` native show rule, so assign a synthetic
+            // location pre-realization to preserve its `Tag::Start(PadElem)` / `Tag::End(PadElem)`.
+            let key = typst_utils::hash128(&packed);
+            let loc = locator.next_location(engine, key, packed.span());
+            packed.set_location(loc);
+        }
+        return Some(packed);
     }
 
     if let Some(blk) = content.to_packed::<BlockElem>()
@@ -542,6 +565,7 @@ fn realize_fragment_pairs<'a>(
         let should_wrap = !already_tagged
             && !is_cetz_span(item.span())
             && ((item.is::<BlockElem>() && is_styled_or_structural_block(item, chain))
+                || (item.is::<PadElem>() && item.location().is_none())
                 || item.is::<ColbreakElem>()
                 || item.is::<LinebreakElem>()
                 || (item.is::<BoxElem>() && item.location().is_none())
@@ -563,9 +587,10 @@ fn realize_fragment_pairs<'a>(
 /// - Keep `__typst2word_page_styles` markers for page-root style extraction AND
 ///   `RealizedSemanticStore`.
 /// - Wrap untagged `BlockElem` and `ColbreakElem` in `INTERNAL_TAG_FLAGS` markers.
-/// - Emit terminated `PagebreakElem` internal markers ONLY for genuine user/show-rule
-///   pagebreaks (`!ptr::eq(shared_weak) && !boundary`) that actually break a page, without
-///   splitting contiguous `PagebreakElem` runs (`pages::collect::migrate_unterminated_tags`).
+/// - Emit terminated `PagebreakElem` internal markers whenever a pagebreak (including scoped
+///   `#page(...)[...]` / `#set page(...)` weak breaks between non-empty pages) actually breaks
+///   a page; `ir::normalize::clean_redundant_pagebreaks` strips leading/trailing breaks at
+///   Word `<w:sectPr>` section boundaries while preserving breaks inside consolidated sections.
 fn realize_document_pairs<'a>(
     pairs: Vec<Pair<'a>>,
     engine: &mut Engine,
@@ -603,7 +628,8 @@ fn realize_document_pairs<'a>(
                     let strong = !pb.weak.get(pb_chain);
 
                     if is_set_page_synthetic {
-                        if page_has_content && !pb.boundary.get(pb_chain) {
+                        if page_has_content && has_following_content && !pb.boundary.get(pb_chain) {
+                            explicit_breaks.push((pb_item, pb_chain, run_start + offset));
                             page_has_content = false;
                         }
                     } else if strong {
@@ -690,6 +716,7 @@ fn realize_document_pairs<'a>(
         let should_wrap = !already_tagged
             && !is_cetz_span(item.span())
             && ((item.is::<BlockElem>() && is_styled_or_structural_block(item, chain))
+                || (item.is::<PadElem>() && item.location().is_none())
                 || item.is::<ColbreakElem>()
                 || item.is::<LinebreakElem>()
                 || (item.is::<BoxElem>() && item.location().is_none())
@@ -767,6 +794,7 @@ fn is_styled_or_structural_block(item: &Content, chain: StyleChain<'_>) -> bool 
         || blk.sticky.get(chain)
         || !blk.breakable.get(chain)
         || !matches!(blk.width.get(chain), Smart::Auto)
+        || !matches!(blk.height.get(chain), typst::layout::Sizing::Auto)
 }
 
 /// Complete compilation result from the Typst backend, holding:

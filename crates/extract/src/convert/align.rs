@@ -134,9 +134,7 @@ impl<'a> ExtractorContext<'a> {
             } else {
                 gl
             }
-        } else if min_x < self.content_left_pt - 4.0 {
-            0.0
-        } else if count > 1 && width <= col_w + 12.0 {
+        } else if count > 1 && min_x >= self.content_left_pt - 4.0 && width <= col_w + 12.0 {
             let col_idx = (((min_x - self.content_left_pt + 4.0).max(0.0))
                 / (col_w + gutter_pt).max(1.0))
             .floor() as usize;
@@ -145,7 +143,7 @@ impl<'a> ExtractorContext<'a> {
         } else {
             self.content_left_pt
         };
-        Some((min_x - left_bound).max(0.0))
+        Some(min_x - left_bound)
     }
 
     pub(crate) fn find_explicit_align_elem(nodes: &[TreeNode]) -> Option<HAlignIr> {

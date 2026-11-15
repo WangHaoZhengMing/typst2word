@@ -16,8 +16,8 @@ struct EquationTypography {
     context_font_size_pt: f64,
     max_glyph_pt: Option<f64>,
     min_glyph_pt: Option<f64>,
-    math_font: Option<&'static str>,
-    cjk_font: Option<&'static str>,
+    math_font: Option<String>,
+    cjk_font: Option<String>,
 }
 
 impl<'a> ExtractorContext<'a> {
@@ -42,8 +42,8 @@ impl<'a> ExtractorContext<'a> {
             eq,
             chain,
             Some(typo.context_font_size_pt),
-            typo.math_font,
-            typo.cjk_font,
+            typo.math_font.as_deref(),
+            typo.cjk_font.as_deref(),
         );
         let max_available_width_pt =
             Some((self.current_column_width_pt() - self.container_inset_pt).max(60.0));
@@ -125,8 +125,8 @@ impl<'a> ExtractorContext<'a> {
     ) -> EquationTypography {
         let mut max_size_pt = 0.0_f64;
         let mut min_size_pt = f64::INFINITY;
-        let mut math_font: Option<&'static str> = None;
-        let mut cjk_font: Option<&'static str> = None;
+        let mut math_font: Option<String> = None;
+        let mut cjk_font: Option<String> = None;
         Self::scan_equation_text_nodes(
             nodes,
             &mut max_size_pt,
@@ -150,8 +150,8 @@ impl<'a> ExtractorContext<'a> {
 
         if cjk_font.is_none() {
             for fam in chain.get_ref(typst::text::TextElem::font).into_iter() {
-                if let Some(mapped) = Self::classify_cjk_font_static(fam.as_str()) {
-                    cjk_font = Some(mapped);
+                if Self::is_cjk_font_family(fam.as_str()) {
+                    cjk_font = Some(fam.as_str().to_string());
                     break;
                 }
             }
@@ -170,8 +170,8 @@ impl<'a> ExtractorContext<'a> {
         nodes: &[TreeNode],
         max_size_pt: &mut f64,
         min_size_pt: &mut f64,
-        math_font: &mut Option<&'static str>,
-        cjk_font: &mut Option<&'static str>,
+        math_font: &mut Option<String>,
+        cjk_font: &mut Option<String>,
     ) {
         for node in nodes {
             match node {
@@ -186,15 +186,15 @@ impl<'a> ExtractorContext<'a> {
                     if sz > 1.0 && sz < *min_size_pt {
                         *min_size_pt = sz;
                     }
+                    // Preserve the exact realized font family name verbatim (`"Hei"`, `"SimSun"`,
+                    // `"New Computer Modern Math"`, etc.) without substituting another family.
                     let fam = text.font.info().family.as_str();
                     if cjk_font.is_none()
-                        && let Some(cjk) = Self::classify_cjk_font_static(fam)
+                        && (text.text.chars().any(ir::is_cjk_char) || Self::is_cjk_font_family(fam))
                     {
-                        *cjk_font = Some(cjk);
-                    } else if math_font.is_none()
-                        && let Some(mf) = Self::classify_math_font_static(fam)
-                    {
-                        *math_font = Some(mf);
+                        *cjk_font = Some(fam.to_string());
+                    } else if math_font.is_none() && Self::is_math_font_family(fam) {
+                        *math_font = Some(fam.to_string());
                     }
                 }
                 TreeNode::Group { pos, children, .. } => {
@@ -411,41 +411,33 @@ impl<'a> ExtractorContext<'a> {
         }
     }
 
-    pub(crate) fn classify_cjk_font_static(fam: &str) -> Option<&'static str> {
-        let low = fam.trim().to_ascii_lowercase();
-        if low.contains("pingfang") {
-            Some("PingFang SC")
-        } else if low.contains("song") || low.contains("simsun") {
-            Some("Songti SC")
-        } else if low.contains("hei") || low.contains("yahei") {
-            Some("Heiti SC")
-        } else if low.contains("kai") {
-            Some("Kaiti SC")
-        } else if low.contains("fangsong") {
-            Some("Fangsong SC")
-        } else {
-            None
-        }
+    pub(crate) fn is_cjk_font_family(fam: &str) -> bool {
+        let low = fam.trim().to_lowercase();
+        low.contains("pingfang")
+            || low.contains("song")
+            || low.contains("simsun")
+            || low.contains("hei")
+            || low.contains("yahei")
+            || low.contains("kai")
+            || low.contains("fangsong")
+            || low.contains("source han")
+            || low.contains("noto serif cjk")
+            || low.contains("noto sans cjk")
+            || low.contains("苹方")
+            || low.contains("宋")
+            || low.contains("黑")
+            || low.contains("楷")
+            || low.contains("仿宋")
     }
 
-    pub(crate) fn classify_math_font_static(fam: &str) -> Option<&'static str> {
+    pub(crate) fn is_math_font_family(fam: &str) -> bool {
         let low = fam.trim().to_ascii_lowercase();
-        if low.contains("stix") || low.contains("xits") {
-            Some("STIX Two Math")
-        } else if low.contains("cambria") {
-            Some("Cambria Math")
-        } else if low.contains("fira") {
-            Some("Fira Math")
-        } else if low.contains("libertinus") {
-            Some("Libertinus Math")
-        } else if low.contains("computer modern")
+        low.contains("math")
+            || low.contains("stix")
+            || low.contains("xits")
+            || low.contains("cambria")
             || low.contains("newcm")
-            || low.contains("latin modern")
-        {
-            Some("New Computer Modern Math")
-        } else {
-            None
-        }
+            || low.contains("computer modern")
     }
 
     pub(crate) fn find_equation_number_text(nodes: &[TreeNode]) -> Option<String> {

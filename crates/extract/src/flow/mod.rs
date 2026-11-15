@@ -22,6 +22,7 @@ use typst::text::{
 };
 use typst::visualize::LineElem;
 
+use compiler::compile::is_cetz_span;
 use crate::ExtractorContext;
 use crate::frame_tree::TreeNode;
 use crate::inline::ActiveInlineState;
@@ -69,32 +70,19 @@ impl<'a> ExtractorContext<'a> {
                         let mut runs = Vec::new();
                         Self::collect_raw_line_runs(&stray_inlines, &mut runs);
                         if !runs.is_empty() {
-                            if let Some(BlockNode::CodeBlock { lines, .. }) = blocks.last_mut() {
-                                lines.push(runs);
-                                Self::normalize_empty_code_line_metrics(lines);
-                            } else {
-                                let mut lines = vec![runs];
-                                Self::normalize_empty_code_line_metrics(&mut lines);
-                                let id = self.alloc_node_with_fragments(
-                                    Span::detached(),
-                                    None,
-                                    Some(SemanticRoleIr::CodeBlock { lang: None }),
-                                    &stray_inlines,
-                                );
-                                blocks.push(BlockNode::CodeBlock {
-                                    id,
-                                    lang: None,
-                                    lines,
-                                    fill: None,
-                                    stroke: None,
-                                });
-                            }
+                            self.append_or_create_orphan_raw_line(
+                                Span::detached(),
+                                None,
+                                &stray_inlines,
+                                runs,
+                                &mut blocks,
+                            );
                         }
                     }
                     stray_inlines.clear();
                 } else {
-                    let first_y = Self::nodes_first_page_top_y(&stray_inlines);
-                    let last_y = Self::nodes_last_page_bottom_y(&stray_inlines);
+                    let first_y = self.nodes_first_page_top_y(&stray_inlines);
+                    let last_y = self.nodes_last_page_bottom_y(&stray_inlines);
                     let before_len = blocks.len();
                     self.flush_stray_inlines(&mut stray_inlines, &mut blocks, inherited_align);
                     if blocks.len() > before_len {
@@ -106,15 +94,15 @@ impl<'a> ExtractorContext<'a> {
             self.extract_block_from_node(node, &mut blocks, list_level, inherited_align);
             if blocks.len() > before_len {
                 let single_slice = std::slice::from_ref(node);
-                let first_y = Self::nodes_first_page_top_y(single_slice);
-                let last_y = Self::nodes_last_page_bottom_y(single_slice);
+                let first_y = self.nodes_first_page_top_y(single_slice);
+                let last_y = self.nodes_last_page_bottom_y(single_slice);
                 block_source_spans.push((blocks.len() - 1, first_y, last_y));
             }
         }
 
         if !stray_inlines.is_empty() {
-            let first_y = Self::nodes_first_page_top_y(&stray_inlines);
-            let last_y = Self::nodes_last_page_bottom_y(&stray_inlines);
+            let first_y = self.nodes_first_page_top_y(&stray_inlines);
+            let last_y = self.nodes_last_page_bottom_y(&stray_inlines);
             let before_len = blocks.len();
             self.flush_stray_inlines(&mut stray_inlines, &mut blocks, inherited_align);
             if blocks.len() > before_len {
@@ -201,8 +189,8 @@ impl<'a> ExtractorContext<'a> {
         }
         let slice = std::slice::from_ref(node);
         if let (Some((p1, top_y, _)), Some((p2, bot_y, _))) = (
-            Self::nodes_first_page_top_y(slice),
-            Self::nodes_last_page_bottom_y(slice),
+            self.nodes_first_page_top_y(slice),
+            self.nodes_last_page_bottom_y(slice),
         ) && p1 == p2
             && (bot_y - top_y).abs() <= 2.5
             && let Some(&fn_top_y) = self.footnote_top_y_by_page.get(&p1)
@@ -388,6 +376,11 @@ impl<'a> ExtractorContext<'a> {
                         && !Self::contains_block_elements(children))
                     || elem.is::<typst::text::LinebreakElem>()
                     || elem.is::<typst::layout::HElem>()
+                    || (elem.elem().name() == "context"
+                        && !is_cetz_span(elem.span())
+                        && !Self::contains_cetz_shapes_recursive(children)
+                        && !children.is_empty()
+                        && children.iter().all(Self::is_stray_inline_node))
             }
             _ => false,
         }
@@ -549,7 +542,7 @@ impl<'a> ExtractorContext<'a> {
                 Some(SemanticRoleIr::Paragraph),
                 stray,
             );
-            let para_lines = Self::collect_paragraph_line_metrics(stray, base_font_pt);
+            let para_lines = self.collect_paragraph_line_metrics(stray, base_font_pt);
             self.record_inline_shape_line_contexts(stray, &inlines, base_font_pt);
             (id, para_lines)
         } else {

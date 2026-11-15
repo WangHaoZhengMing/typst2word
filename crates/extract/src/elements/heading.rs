@@ -47,14 +47,31 @@ impl<'a> ExtractorContext<'a> {
         blocks: &mut Vec<BlockNode>,
         inherited_align: HAlignIr,
     ) {
-        let (level, outlined) = {
+        let (level, outlined, style_align) = {
             let chain = self.scoped_style_chain(Some(loc));
-            (heading.resolve_level(chain).get(), heading.outlined.get(chain))
+            let (ha, _) = Self::alignment_to_ir(typst::foundations::Smart::Custom(
+                chain.get(typst::layout::AlignElem::alignment),
+            ));
+            (
+                heading.resolve_level(chain).get(),
+                heading.outlined.get(chain),
+                ha,
+            )
+        };
+        let eff_inherited_align = if style_align != HAlignIr::Left {
+            style_align
+        } else {
+            inherited_align
         };
         let (box_style, content_nodes) = Self::extract_heading_box_style_and_nodes(children);
-        let align = self
+        let inferred = self
             .infer_node_halign(&content_nodes)
-            .unwrap_or(inherited_align);
+            .unwrap_or(eff_inherited_align);
+        let align = if inferred == HAlignIr::Left && eff_inherited_align != HAlignIr::Left {
+            eff_inherited_align
+        } else {
+            inferred
+        };
         let bookmark = self.bookmarks.get(&loc).cloned();
         let (numbering, content) =
             self.extract_heading_numbering_and_body(heading, Some(loc), &content_nodes);
@@ -77,6 +94,7 @@ impl<'a> ExtractorContext<'a> {
             content,
             bookmark,
             align,
+            left_indent_pt: 0.0,
             box_style,
         });
     }

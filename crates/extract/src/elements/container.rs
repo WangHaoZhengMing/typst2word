@@ -6,7 +6,6 @@ use typst::layout::{GridCell, GroupItem, Point, Size};
 use typst::model::TableCell;
 use typst::pdf::ArtifactElem;
 use typst::syntax::Span;
-use typst::text::RawElem;
 use typst::visualize::{CurveItem, Geometry};
 
 use crate::color::paint_to_hex;
@@ -211,6 +210,17 @@ impl<'a> ExtractorContext<'a> {
             .unwrap_or(max_h_pt)
             .max(20.0);
 
+        // Do not assume vertical padding equals horizontal `inset.x` when the laid-out height has
+        // near-zero vertical margin around `content_h` (e.g. `#block(height: 100%, inset: (x: 1em))`).
+        // `estimate_nodes_bbox` includes full glyph ascender/descender (~5.8pt beyond Typst's
+        // `cap-height..baseline` text box), so only clamp when `height_pt <= content_h + 6.0`.
+        let (_, _, _, content_h) = Self::estimate_nodes_bbox(&content_nodes);
+        let v_pad = if has_box_sides && content_h > 0.5 && height_pt <= content_h + 6.0 {
+            ((height_pt - content_h).max(0.0) * 0.5).min(v_pad)
+        } else {
+            v_pad
+        };
+
         let has_full_width_child_group = content_nodes.iter().any(|n| {
             let mut cur = n;
             while let TreeNode::Element { children, .. } = cur {
@@ -280,6 +290,26 @@ impl<'a> ExtractorContext<'a> {
             None
         });
 
+        // When a sharp-cornered container wraps only a single `CodeBlock` (`#block(fill: ...)[```...```]`),
+        // transfer `(fill, stroke)` directly onto `CodeBlock` so it stays a native breakable code block.
+        if body_blocks.len() == 1
+            && corner_radius_pt.is_none()
+            && !(has_partial_border && stroke.is_none())
+            && let Some(BlockNode::CodeBlock {
+                fill: code_fill,
+                stroke: code_stroke,
+                ..
+            }) = body_blocks.first_mut()
+        {
+            if code_fill.is_none() {
+                *code_fill = fill;
+            }
+            if code_stroke.is_none() {
+                *code_stroke = stroke;
+            }
+            return body_blocks.pop();
+        }
+
         let has_distinct_header_bar = match body_blocks.first() {
             Some(BlockNode::ShapeBlock(hdr)) => {
                 hdr.fill.is_some() && hdr.fill != fill && (hdr.width_pt - width_pt).abs() <= 6.0
@@ -297,10 +327,13 @@ impl<'a> ExtractorContext<'a> {
             _ => false,
         };
 
+        // Allow any rounded container fragment that fits within the page's drawable content area
+        // (Typst already splits cross-page breakable `BlockElem`s into per-page `GroupItem` fragments).
+        let max_single_page_box_h_pt = (self.current_page_content_height_pt() - 12.0).max(120.0);
         let can_use_rounded_shape_box = corner_radius_pt.is_some_and(|r| r > 0.5)
             && !(has_partial_border && stroke.is_none())
             && !has_distinct_header_bar
-            && height_pt <= 320.0
+            && height_pt <= max_single_page_box_h_pt
             && body_blocks.iter().all(|b| {
                 matches!(
                     b,
@@ -501,16 +534,14 @@ impl<'a> ExtractorContext<'a> {
     }
 
     pub(crate) fn is_direct_table_or_code_container(nodes: &[TreeNode]) -> bool {
+        // Only skip raw `TableCell` / `GridCell` wrappers; styled `#block(...)` containers wrapping
+        // `RawElem` (e.g. macOS-style `#coder` cards) must be extracted as containers so their
+        // background shape is not left behind as a separate empty `ShapeBlock`.
         for node in nodes {
-            if let TreeNode::Element { elem, .. } = node {
-                if elem.is::<TableCell>() || elem.is::<GridCell>() {
-                    return true;
-                }
-                if let Some(raw) = elem.to_packed::<RawElem>()
-                    && raw.block.get(typst::foundations::StyleChain::default())
-                {
-                    return true;
-                }
+            if let TreeNode::Element { elem, .. } = node
+                && (elem.is::<TableCell>() || elem.is::<GridCell>())
+            {
+                return true;
             }
         }
         false

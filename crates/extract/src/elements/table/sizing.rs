@@ -141,10 +141,15 @@ impl<'a> ExtractorContext<'a> {
             }
         }
 
-        // For non-semantic multi-column grids where all columns have laid-out X coordinates,
-        // use exact inter-column X deltas from Typst's layout engine (`col_min_x[x+1] - col_min_x[x]`).
+        // For non-semantic multi-column grids with `auto` or `fr` tracks where all columns
+        // have laid-out X coordinates, refine widths from Typst's inter-column X deltas.
+        // Skip when every track is already an explicit `Sizing::Rel` (`30%`, `100pt`, etc.)
+        // so centered/right-aligned cell contents do not skew explicit column widths.
+        let has_auto_col = (0..num_cols)
+            .any(|x| matches!(grid.cols.get(x * factor), Some(Sizing::Auto) | None));
         if !is_semantic_table
             && num_cols > 1
+            && (total_fr > 0.0 || has_auto_col)
             && col_min_x.iter().all(|x| x.is_finite())
             && col_min_x.windows(2).all(|w| w[1] > w[0] + 12.0)
         {
@@ -167,8 +172,8 @@ impl<'a> ExtractorContext<'a> {
                     } else {
                         gr
                     }
-                } else if col_min_x[0] < self.content_left_pt - 4.0 {
-                    avail_w_pt
+                } else if col_min_x[0] < self.content_left_pt - 1.5 {
+                    col_min_x[0].max(0.0) + avail_w_pt
                 } else if col_count > 1 && col_min_x[0] >= self.content_left_pt - 4.0 {
                     let cidx = (((col_min_x[0] - self.content_left_pt).max(0.0))
                         / (col_w + col_gutter).max(1.0))

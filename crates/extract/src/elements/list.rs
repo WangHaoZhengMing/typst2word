@@ -250,8 +250,8 @@ impl<'a> ExtractorContext<'a> {
                     }
                 }
                 PdfMarkerTagKind::ListItemBody => {
-                    let first_y = Self::nodes_first_page_top_y(&marker_children);
-                    let last_y = Self::nodes_last_page_bottom_y(&marker_children);
+                    let first_y = self.nodes_first_page_top_y(&marker_children);
+                    let last_y = self.nodes_last_page_bottom_y(&marker_children);
                     let blocks = self.extract_blocks_from_nodes(
                         &marker_children,
                         list_level + 1,

@@ -22,13 +22,19 @@ pub(crate) fn extract_vec(
         .map(|item| vec![extract_math_child(item, styles, ctx)])
         .collect();
     if open.is_empty() && close.is_empty() {
-        return MathNodeIr::Matrix { rows };
+        return MathNodeIr::Matrix {
+            rows,
+            left_aligned: false,
+        };
     }
     MathNodeIr::Delimited {
         open,
         close,
         separator: String::new(),
-        elements: vec![MathNodeIr::Matrix { rows }],
+        elements: vec![MathNodeIr::Matrix {
+            rows,
+            left_aligned: false,
+        }],
     }
 }
 
@@ -50,13 +56,19 @@ pub(crate) fn extract_mat(
         })
         .collect();
     if open.is_empty() && close.is_empty() {
-        return MathNodeIr::Matrix { rows };
+        return MathNodeIr::Matrix {
+            rows,
+            left_aligned: false,
+        };
     }
     MathNodeIr::Delimited {
         open,
         close,
         separator: String::new(),
-        elements: vec![MathNodeIr::Matrix { rows }],
+        elements: vec![MathNodeIr::Matrix {
+            rows,
+            left_aligned: false,
+        }],
     }
 }
 
@@ -90,12 +102,18 @@ pub(crate) fn extract_cases(
         })
         .collect();
     if open.is_empty() && close.is_empty() {
-        return MathNodeIr::Matrix { rows };
+        return MathNodeIr::Matrix {
+            rows,
+            left_aligned: true,
+        };
     }
     MathNodeIr::Delimited {
         open,
         close,
         separator: String::new(),
-        elements: vec![MathNodeIr::Matrix { rows }],
+        elements: vec![MathNodeIr::Matrix {
+            rows,
+            left_aligned: true,
+        }],
     }
 }

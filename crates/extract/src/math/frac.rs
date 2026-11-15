@@ -1,7 +1,7 @@
 //! Fractions (`frac`), Binomials (`binom`), and Radicals (`root`, `sqrt`) -> `MathNodeIr`.
 
 use typst::foundations::{Packed, StyleChain};
-use typst::math::{BinomElem, FracElem, FracStyle, RootElem};
+use typst::math::{BinomElem, EquationElem, FracElem, FracStyle, MathSize, RootElem};
 
 use crate::math::node::extract_math_node;
 use crate::math::{MathStyleCtx, extract_math_child, wrap_nodes};
@@ -17,10 +17,16 @@ pub(crate) fn extract_frac(
         FracStyle::Skewed => MathFracStyleIr::Skewed,
         FracStyle::Horizontal => MathFracStyleIr::Horizontal,
     };
+    let display_style = match (styles.get(EquationElem::size), ctx.is_display) {
+        (MathSize::Display, false) => Some(true),
+        (MathSize::Text, true) => Some(false),
+        _ => None,
+    };
     MathNodeIr::Fraction {
         num: Box::new(extract_math_child(&frac.num, styles, ctx)),
         denom: Box::new(extract_math_child(&frac.denom, styles, ctx)),
         style,
+        display_style,
     }
 }
 
@@ -39,10 +45,16 @@ pub(crate) fn extract_binom(
         }
         extract_math_node(item, styles, ctx, &mut denom_nodes);
     }
+    let display_style = match (styles.get(EquationElem::size), ctx.is_display) {
+        (MathSize::Display, false) => Some(true),
+        (MathSize::Text, true) => Some(false),
+        _ => None,
+    };
     let stack = MathNodeIr::Fraction {
         num: Box::new(extract_math_child(&binom.upper, styles, ctx)),
         denom: Box::new(wrap_nodes(denom_nodes)),
         style: MathFracStyleIr::NoBar,
+        display_style,
     };
     MathNodeIr::Delimited {
         open: "(".to_string(),

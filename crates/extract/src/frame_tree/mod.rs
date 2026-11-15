@@ -8,10 +8,11 @@ use std::collections::HashSet;
 use typst::foundations::{Content, StyleChain, StyledElem};
 use typst::introspection::{Location, Tag};
 use typst::layout::{Frame, FrameItem, GroupItem, Inherit, Point, Size};
-use typst::model::{DirectLinkElem, EmphElem, LinkElem, LinkMarker, StrongElem, Destination};
+use typst::math::EquationElem;
+use typst::model::{Destination, DirectLinkElem, EmphElem, LinkElem, LinkMarker, StrongElem};
 use typst::syntax::Span;
 use typst::text::{
-    HighlightElem, OverlineElem, SmallcapsElem, StrikeElem, SubElem, SuperElem, TextElem,
+    HighlightElem, OverlineElem, RawElem, SmallcapsElem, StrikeElem, SubElem, SuperElem, TextElem,
     TextItem, UnderlineElem,
 };
 use typst::visualize::{Image, Shape};
@@ -152,11 +153,13 @@ impl<'a> ExtractorContext<'a> {
     /// line frames while keeping hard/transformed groups and pairing `Tag::Start` / `Tag::End`.
     pub(crate) fn build_frame_tree(&mut self, frame: &Frame, base_offset: Point) -> Vec<TreeNode> {
         let saved_style = self.active_text_style;
+        let saved_fonts = self.active_configured_fonts.clone();
         let mut root_nodes: Vec<TreeNode> = Vec::new();
         let mut stack: Vec<OpenElement> = Vec::new();
         self.append_frame_items_to_tree(frame, base_offset, &mut root_nodes, &mut stack);
         self.flush_open_stack(&mut root_nodes, &mut stack);
         self.active_text_style = saved_style;
+        self.active_configured_fonts = saved_fonts;
         root_nodes
     }
 
@@ -169,6 +172,7 @@ impl<'a> ExtractorContext<'a> {
         page_range: std::ops::Range<usize>,
     ) -> Vec<TreeNode> {
         let saved_style = self.active_text_style;
+        let saved_fonts = self.active_configured_fonts.clone();
         self.active_text_style = (None, None);
         let mut root_nodes: Vec<TreeNode> = Vec::new();
         let mut stack: Vec<OpenElement> = Vec::new();
@@ -195,6 +199,7 @@ impl<'a> ExtractorContext<'a> {
 
         self.flush_open_stack(&mut root_nodes, &mut stack);
         self.active_text_style = saved_style;
+        self.active_configured_fonts = saved_fonts;
         root_nodes
     }
 
@@ -229,6 +234,11 @@ impl<'a> ExtractorContext<'a> {
                                 (raw_tr.abs() > 1e-4).then_some(raw_tr),
                                 (raw_bl.abs() > 1e-4).then_some(raw_bl),
                             );
+                            self.active_configured_fonts = chain
+                                .get_ref(TextElem::font)
+                                .into_iter()
+                                .map(|f| f.as_str().to_string())
+                                .collect();
                         }
                         continue;
                     }
@@ -314,6 +324,7 @@ impl<'a> ExtractorContext<'a> {
                             && group.frame.size().x.to_pt() > 100.0)
                             || (!has_root_shape && group.frame.size().x.to_pt() > 350.0));
                     let saved_text_style = self.active_text_style;
+                    let saved_fonts = self.active_configured_fonts.clone();
                     if can_split_merge {
                         if let Some(mut pending) = self.pending_split_group.take() {
                             let offset = Point::new(typst::layout::Abs::zero(), pending.cum_y);
@@ -380,8 +391,10 @@ impl<'a> ExtractorContext<'a> {
                         Self::push_node(root_nodes, stack, node);
                     }
                     self.active_text_style = saved_text_style;
+                    self.active_configured_fonts = saved_fonts;
                 }
                 FrameItem::Text(text) => {
+                    self.record_text_font_fallback(&text, stack);
                     let (tracking_pt, baseline_shift_pt) = self.active_text_style;
                     Self::push_node(
                         root_nodes,
@@ -419,6 +432,7 @@ impl<'a> ExtractorContext<'a> {
     fn attach_detached_child_groups(&mut self, closed: &mut OpenElement) {
         if let Some(detached) = self.logical_child_groups.remove(&closed.loc) {
             let saved_style = self.active_text_style;
+            let saved_fonts = self.active_configured_fonts.clone();
             let mut det_stack: Vec<OpenElement> = Vec::new();
             self.group_tree_depth += 1;
             for (gpos, grp) in detached {
@@ -432,6 +446,50 @@ impl<'a> ExtractorContext<'a> {
             self.flush_open_stack(&mut closed.children, &mut det_stack);
             self.group_tree_depth -= 1;
             self.active_text_style = saved_style;
+            self.active_configured_fonts = saved_fonts;
+        }
+    }
+
+    /// Detect when Typst shaped a `TextItem` using a fallback font outside the active
+    /// `TextElem::font` list, recording a warning without altering the realized font name.
+    fn record_text_font_fallback(&mut self, text: &TextItem, stack: &[OpenElement]) {
+        if text.text.chars().all(|c| {
+            c.is_whitespace() || matches!(c, '\u{2060}' | '\u{200b}' | '\u{feff}' | '\u{ad}')
+        }) {
+            return;
+        }
+        let in_equation = stack.iter().any(|o| o.elem.is::<EquationElem>());
+        if in_equation && !text.text.chars().any(ir::is_cjk_char) {
+            return;
+        }
+        let realized = text.font.info().family.as_str();
+        let in_raw = stack.iter().any(|o| o.elem.is::<RawElem>());
+        if in_raw
+            && !text.text.chars().any(ir::is_cjk_char)
+            && text
+                .font
+                .info()
+                .flags
+                .contains(typst::text::FontFlags::MONOSPACE)
+        {
+            return;
+        }
+        if self.active_configured_fonts.is_empty()
+            || self
+                .active_configured_fonts
+                .iter()
+                .any(|cfg| font_family_matches_configured(realized, cfg))
+        {
+            return;
+        }
+        let cfg_display = self.active_configured_fonts.join(", ");
+        if self
+            .seen_font_fallbacks
+            .insert((cfg_display.clone(), realized.to_string()))
+        {
+            self.report.font_fallback_warnings.push(format!(
+                "字体回退：当前字体 [{cfg_display}] 未覆盖部分字符，已回退为 \"{realized}\"（未更改原字体名称）"
+            ));
         }
     }
 
@@ -472,4 +530,43 @@ impl<'a> ExtractorContext<'a> {
             Self::push_node(root_nodes, stack, node);
         }
     }
+}
+
+/// Check whether a realized OpenType family name matches a configured `TextElem::font` entry,
+/// accounting for case-insensitive matching and standard bilingual CJK family name aliases
+/// in OpenType `name` tables without conflating distinct fallback fonts (such as `"Hei"`).
+fn font_family_matches_configured(realized: &str, configured: &str) -> bool {
+    let r = realized.trim();
+    let c = configured.trim();
+    if r.eq_ignore_ascii_case(c) {
+        return true;
+    }
+    const LOCALIZED_ALIASES: &[(&str, &str)] = &[
+        ("pingfang sc", "苹方-简"),
+        ("pingfang tc", "苹方-繁"),
+        ("pingfang hk", "苹方-港"),
+        ("heiti sc", "黑体-简"),
+        ("heiti tc", "黑体-繁"),
+        ("songti sc", "宋体-简"),
+        ("songti tc", "宋体-繁"),
+        ("kaiti sc", "楷体-简"),
+        ("kaiti tc", "楷体-繁"),
+        ("fangsong sc", "仿宋-简"),
+        ("stsong", "华文宋体"),
+        ("stheiti", "华文黑体"),
+        ("stkaiti", "华文楷体"),
+        ("stfangsong", "华文仿宋"),
+        ("simsun", "宋体"),
+        ("nsimsun", "新宋体"),
+        ("simhei", "黑体"),
+        ("kaiti", "楷体"),
+        ("fangsong", "仿宋"),
+        ("microsoft yahei", "微软雅黑"),
+        ("dengxian", "等线"),
+        ("source han serif sc", "思源宋体"),
+        ("source han sans sc", "思源黑体"),
+    ];
+    LOCALIZED_ALIASES.iter().any(|&(en, zh)| {
+        (r.eq_ignore_ascii_case(en) && c == zh) || (c.eq_ignore_ascii_case(en) && r == zh)
+    })
 }

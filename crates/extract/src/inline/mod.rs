@@ -184,9 +184,13 @@ impl<'a> ExtractorContext<'a> {
                         }
                     }
 
-                    if self.try_extract_inline_box_group(
+                    let prev_origin = self.group_origin_offset;
+                    self.group_origin_offset += *pos;
+                    let extracted = self.try_extract_inline_box_group(
                         group, *pos, children, out, state, last_y, last_x_end,
-                    ) {
+                    );
+                    if extracted {
+                        self.group_origin_offset = prev_origin;
                         continue;
                     }
 
@@ -199,6 +203,7 @@ impl<'a> ExtractorContext<'a> {
                         &mut inner_y,
                         &mut inner_x,
                     );
+                    self.group_origin_offset = prev_origin;
                     *last_x_end = Some(pos.x.to_pt() + group.frame.size().x.to_pt());
                 }
                 TreeNode::Element {
@@ -251,18 +256,28 @@ impl<'a> ExtractorContext<'a> {
 
         if let Some(h) = elem.to_packed::<typst::layout::HElem>() {
             let chain = self.scoped_style_chain(Some(loc));
-            if !h.weak.get(chain)
-                && let typst::layout::Spacing::Rel(rel) = h.amount
-            {
-                let base_em =
-                    Self::resolve_length_pt(chain.get(typst::text::TextElem::size).0, 11.0);
-                let col_w = self.current_column_width_pt();
-                let w_pt = Self::resolve_length_pt(rel.abs, base_em) + rel.rel.get() * col_w;
-                if w_pt > 0.5 {
-                    out.push(InlineNode::HorizontalSpace { width_pt: w_pt });
-                    if let Some(prev_x) = last_x_end.as_mut() {
-                        *prev_x += w_pt;
+            if !h.weak.get(chain) {
+                match h.amount {
+                    typst::layout::Spacing::Rel(rel) => {
+                        let base_em =
+                            Self::resolve_length_pt(chain.get(typst::text::TextElem::size).0, 11.0);
+                        let col_w = self.current_column_width_pt();
+                        let w_pt =
+                            Self::resolve_length_pt(rel.abs, base_em) + rel.rel.get() * col_w;
+                        if w_pt > 0.5 {
+                            out.push(InlineNode::HorizontalSpace { width_pt: w_pt });
+                            if let Some(prev_x) = last_x_end.as_mut() {
+                                *prev_x += w_pt;
+                            }
+                        }
                     }
+                    // Fractional fill spacing (`#h(1fr)`) maps semantically to a flush-right tab;
+                    // reset `last_x_end` so the following glyph does not also synthesize a fixed gap.
+                    typst::layout::Spacing::Fr(fr) if fr.get() > 0.0 => {
+                        out.push(InlineNode::Tab);
+                        *last_x_end = None;
+                    }
+                    _ => {}
                 }
             }
             return;

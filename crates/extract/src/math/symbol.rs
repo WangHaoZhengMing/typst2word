@@ -218,8 +218,8 @@ pub(crate) fn build_math_run(
             styles
                 .get_ref(TextElem::font)
                 .into_iter()
-                .find_map(|f| crate::ExtractorContext::classify_cjk_font_static(f.as_str()))
-                .map(str::to_string)
+                .find(|f| crate::ExtractorContext::is_cjk_font_family(f.as_str()))
+                .map(|f| f.as_str().to_string())
         })
     } else {
         ctx.math_font.map(str::to_string)

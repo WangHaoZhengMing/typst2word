@@ -38,26 +38,26 @@ use node::extract_math_node;
 
 /// Active math styling state propagated down `StyledElem` chains.
 #[derive(Debug, Clone, Copy, Default)]
-pub(crate) struct MathStyleCtx {
+pub(crate) struct MathStyleCtx<'a> {
     pub(crate) is_display: bool,
     pub(crate) in_eq_arr: bool,
     pub(crate) force_limits: Option<bool>,
     pub(crate) base_font_size_pt: Option<f64>,
-    pub(crate) math_font: Option<&'static str>,
-    pub(crate) cjk_font: Option<&'static str>,
+    pub(crate) math_font: Option<&'a str>,
+    pub(crate) cjk_font: Option<&'a str>,
 }
 
 /// Extract a Typst `EquationElem` into a list of semantic `MathNodeIr` nodes,
 /// first running `RealizationKind::Math` so `#show` rules, `context`, and nested
 /// `$...$` equation references are evaluated faithfully.
-pub(crate) fn extract_equation_math_nodes(
+pub(crate) fn extract_equation_math_nodes<'a>(
     compiled: &CompiledTypstDocument,
     world: &TypstWorld,
     eq: &Packed<EquationElem>,
     styles: StyleChain,
     base_font_size_pt: Option<f64>,
-    math_font: Option<&'static str>,
-    cjk_font: Option<&'static str>,
+    math_font: Option<&'a str>,
+    cjk_font: Option<&'a str>,
 ) -> Vec<MathNodeIr> {
     let is_block = eq.block.get(styles);
     let ctx = MathStyleCtx {

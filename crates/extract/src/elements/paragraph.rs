@@ -136,9 +136,20 @@ impl<'a> ExtractorContext<'a> {
         let mut hanging_indent_pt =
             Self::resolve_length_pt(par.hanging_indent.get(chain), base_font_pt);
 
-        let inferred = self.infer_node_halign(children).unwrap_or(inherited_align);
-        let base_align = if inferred == HAlignIr::Left && inherited_align != HAlignIr::Left {
+        // Honor `#align(center/right)[#block(...)[...]]` in `StyleChain` even when an enclosing
+        // auto-width `Group` shrinks tightly around the text (`width >= 0.85 * gw`).
+        let (style_align, _) =
+            Self::alignment_to_ir(Smart::Custom(chain.get(typst::layout::AlignElem::alignment)));
+        let eff_inherited_align = if style_align != HAlignIr::Left {
+            style_align
+        } else {
             inherited_align
+        };
+        let inferred = self
+            .infer_node_halign(children)
+            .unwrap_or(eff_inherited_align);
+        let base_align = if inferred == HAlignIr::Left && eff_inherited_align != HAlignIr::Left {
+            eff_inherited_align
         } else {
             inferred
         };
@@ -164,12 +175,15 @@ impl<'a> ExtractorContext<'a> {
             {
                 let mut line_starts: Vec<(f64, f64)> = Vec::new();
                 Self::collect_line_left_edges(children, Point::zero(), &mut line_starts);
-                let block_vis_left = if line_starts.len() <= 1 && first_line_indent_pt > 0.5 {
-                    (vis_left - first_line_indent_pt).max(0.0)
-                } else {
-                    vis_left
-                };
-                if (2.0..=48.0).contains(&block_vis_left) {
+                let block_vis_left =
+                    if line_starts.len() <= 1 && first_line_indent_pt > 0.5 && vis_left > 0.0 {
+                        (vis_left - first_line_indent_pt).max(0.0)
+                    } else {
+                        vis_left
+                    };
+                if (2.0..=48.0).contains(&block_vis_left)
+                    || (-144.0..=-1.5).contains(&block_vis_left)
+                {
                     left_indent_pt = block_vis_left;
                 }
             }
@@ -222,7 +236,7 @@ impl<'a> ExtractorContext<'a> {
             Some(SemanticRoleIr::Paragraph),
             children,
         );
-        if let Some(para_lines) = Self::collect_paragraph_line_metrics(children, base_font_pt) {
+        if let Some(para_lines) = self.collect_paragraph_line_metrics(children, base_font_pt) {
             self.reference_layout.entry(id).or_default().paragraph_lines = Some(para_lines);
         }
         self.record_inline_shape_line_contexts(children, &content, base_font_pt);
@@ -529,6 +543,7 @@ impl<'a> ExtractorContext<'a> {
     /// Excludes sub/superscripts, equations, footnotes, and multi-line/tall inline `#box` interiors
     /// so tall inline objects never contaminate the paragraph's text line-spacing measurement.
     pub(crate) fn collect_paragraph_line_metrics(
+        &self,
         nodes: &[TreeNode],
         base_font_pt: f64,
     ) -> Option<ParagraphLineMetricsIr> {
@@ -536,7 +551,7 @@ impl<'a> ExtractorContext<'a> {
         let mut has_tall_inline_object = false;
         Self::walk_paragraph_baselines(
             nodes,
-            Point::zero(),
+            self.group_origin_offset,
             base_font_pt,
             &mut raw_lines,
             &mut has_tall_inline_object,
@@ -545,30 +560,34 @@ impl<'a> ExtractorContext<'a> {
             return None;
         }
 
-        raw_lines.sort_by(|a, b| {
-            a.0.cmp(&b.0)
-                .then_with(|| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal))
-                .then_with(|| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
-        });
-
-        // Deduplicate baselines on the same page and column (`|dx| < 200pt`) within 3.0pt tolerance.
+        // Group leaf text runs into visual lines in layout/reading order within each `(page, column)`
+        // pass (`|dy| < 3.0pt`), recording `(page_idx, line_min_x_pt, baseline_y_pt)`.
+        // Avoids splitting wide (>200pt) mixed CJK/Latin lines into bogus sub-lines while keeping
+        // multi-column wraps (`y` jumping back up to the next column's top) cleanly separated.
         let mut lines: Vec<(usize, f64, f64)> = Vec::with_capacity(raw_lines.len());
+        let mut col_start = 0usize;
         for (p, x, y) in raw_lines {
-            if let Some(last) = lines.last_mut()
-                && last.0 == p
-                && (x - last.1).abs() < 200.0
-                && (y - last.2).abs() < 3.0
+            if let Some(&(last_p, _, last_y)) = lines.last()
+                && (p != last_p || y < last_y - 3.0)
             {
-                continue;
+                col_start = lines.len();
             }
-            lines.push((p, x, y));
+            if let Some(existing) = lines[col_start..]
+                .iter_mut()
+                .find(|(lp, _, ly)| *lp == p && (*ly - y).abs() < 3.0)
+            {
+                existing.1 = existing.1.min(x);
+            } else {
+                lines.push((p, x, y));
+            }
         }
 
         let line_count = lines.len();
         let first_baseline_y_pt = lines.first()?.2;
         let last_baseline_y_pt = lines.last()?.2;
 
-        // Collect same-page, same-column consecutive baseline steps.
+        // Collect same-page, same-column consecutive baseline steps by comparing each visual line's
+        // leftmost start coordinate (`line_min_x_pt`, where first-line indent differs by <= ~2em).
         // When `has_tall_inline_object` is true, cap candidate steps at `2.2 * S` so a line hosting
         // a tall `#box` / image / display fraction is excluded from the normal text baseline step.
         let min_step = base_font_pt * 0.80;
@@ -579,9 +598,9 @@ impl<'a> ExtractorContext<'a> {
         };
         let mut steps: Vec<f64> = Vec::new();
         for pair in lines.windows(2) {
-            let (p0, x0, y0) = pair[0];
-            let (p1, x1, y1) = pair[1];
-            if p0 == p1 && (x1 - x0).abs() < 200.0 {
+            let (p0, min_x0, y0) = pair[0];
+            let (p1, min_x1, y1) = pair[1];
+            if p0 == p1 && y1 > y0 && (min_x1 - min_x0).abs() < 120.0 {
                 let dy = y1 - y0;
                 if dy >= min_step && dy <= max_step {
                     steps.push(dy);

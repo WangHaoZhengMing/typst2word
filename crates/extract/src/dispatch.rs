@@ -40,89 +40,10 @@ impl<'a> ExtractorContext<'a> {
                 pos,
                 children,
             } => {
-                // 1. Standalone CeTZ canvas group.
-                if Self::is_cetz_group_nodes(children) {
-                    if let Some(canvas) = self.extract_cetz_canvas(
-                        children,
-                        Some(group.frame.size()),
-                        inherited_align,
-                    ) {
-                        self.report.cetz_canvases_count += 1;
-                        blocks.push(BlockNode::CetzCanvas(canvas));
-                        return;
-                    }
-                }
-
-                // 2. Styled `block(...)` or `box(...)` container with fill or border stroke.
-                if let Some(styled_box) = self.try_extract_styled_container_group(
-                    group,
-                    *pos,
-                    children,
-                    list_level,
-                    inherited_align,
-                ) {
-                    blocks.push(styled_box);
-                    return;
-                }
-
-                // 2.5. 2D `#place(dx, dy, ...)` positioned canvas group (`#block(width: 100%, height: ...)[ #place(...) ]`).
-                if let Some(placed_para) = self.try_extract_placed_canvas_group(
-                    group,
-                    children,
-                    list_level,
-                    inherited_align,
-                ) {
-                    blocks.push(placed_para);
-                    return;
-                }
-
-                // 3. Regular layout group: extract inner blocks and propagate horizontal offset.
-                let prev_group_bounds = self.active_group_bounds_pt;
-                let gw = group.frame.size().x.to_pt();
-                if gw > 20.0 {
-                    self.active_group_bounds_pt = Some((0.0, gw));
-                }
-                let mut inner =
-                    self.extract_blocks_from_nodes(children, list_level, inherited_align);
-                self.active_group_bounds_pt = prev_group_bounds;
-                if inner.len() == 1
-                    && let Some(BlockNode::CodeBlock { fill, stroke, .. }) = inner.first_mut()
-                    && fill.is_none()
-                    && stroke.is_none()
-                {
-                    let (f, s) = Self::find_code_block_box_style(children);
-                    *fill = f;
-                    *stroke = s;
-                }
-                self.apply_group_left_offset(group, *pos, list_level, &mut inner);
-                let group_h_pt = group.frame.size().y.to_pt();
-                if inner.len() >= 2
-                    && let Some(BlockNode::Paragraph { id, style, .. }) = inner.last_mut()
-                {
-                    if style.resolved_par_spacing_pt.is_some() && !id.is_unset() {
-                        self.reference_layout
-                            .entry(*id)
-                            .or_default()
-                            .flow
-                            .get_or_insert_with(Default::default)
-                            .in_multi_block_group_tail = true;
-                    } else if (1.5..6.0).contains(&style.space_after_pt) {
-                        style.space_after_pt = 6.05;
-                    }
-                }
-                if group_h_pt >= 15.0 && inner.len() >= 2 {
-                    let last_idx = inner.len() - 1;
-                    let keep_all = group_h_pt <= 240.0 && inner.len() <= 6;
-                    for (idx, b) in inner.iter_mut().enumerate() {
-                        if let BlockNode::Paragraph { style, .. } = b {
-                            style.breakable = false;
-                            if idx == 0 || (keep_all && idx < last_idx) {
-                                style.sticky = true;
-                            }
-                        }
-                    }
-                }
-                blocks.extend(inner);
+                let prev_origin = self.group_origin_offset;
+                self.group_origin_offset += *pos;
+                self.extract_group_block(group, *pos, children, blocks, list_level, inherited_align);
+                self.group_origin_offset = prev_origin;
             }
             TreeNode::Shape { shape, span, pos } => {
                 if let Some(shape_ir) =
@@ -142,6 +63,7 @@ impl<'a> ExtractorContext<'a> {
                             length_pt: (x2_pt - x1_pt).abs(),
                             stroke: shape_ir.stroke.unwrap_or_default(),
                             align: inherited_align,
+                            left_indent_pt: 0.0,
                         });
                         return;
                     }
@@ -184,6 +106,114 @@ impl<'a> ExtractorContext<'a> {
             }
             TreeNode::Text { .. } | TreeNode::Link { .. } => {}
         }
+    }
+
+    fn extract_group_block(
+        &mut self,
+        group: &typst::layout::GroupItem,
+        pos: Point,
+        children: &[TreeNode],
+        blocks: &mut Vec<BlockNode>,
+        list_level: usize,
+        inherited_align: HAlignIr,
+    ) {
+        // 1. Standalone CeTZ canvas group.
+        if Self::is_cetz_group_nodes(children)
+            && let Some(canvas) =
+                self.extract_cetz_canvas(children, Some(group.frame.size()), inherited_align)
+        {
+            self.report.cetz_canvases_count += 1;
+            blocks.push(BlockNode::CetzCanvas(canvas));
+            return;
+        }
+
+        // 2. Styled `block(...)` or `box(...)` container with fill or border stroke.
+        if let Some(mut styled_box) = self.try_extract_styled_container_group(
+            group,
+            pos,
+            children,
+            list_level,
+            inherited_align,
+        ) {
+            self.apply_group_left_offset(
+                group,
+                pos,
+                list_level,
+                std::slice::from_mut(&mut styled_box),
+            );
+            blocks.push(styled_box);
+            return;
+        }
+
+        // 2.5. 2D `#place(dx, dy, ...)` positioned canvas group (`#block(width: 100%, height: ...)[ #place(...) ]`).
+        if let Some(placed_para) =
+            self.try_extract_placed_canvas_group(group, children, list_level, inherited_align)
+        {
+            blocks.push(placed_para);
+            return;
+        }
+
+        // 3. Regular layout group: extract inner blocks and propagate horizontal offset.
+        //    Transform any enclosing narrowed bounds (e.g. from `BlockElem(inset: ...)` or
+        //    `PadElem`) into `group`'s local coordinate frame `(0.0 .. gw)` so child tables and
+        //    paragraphs do not double-count or lose outer horizontal insets.
+        let prev_group_bounds = self.active_group_bounds_pt;
+        let gw = group.frame.size().x.to_pt();
+        if gw > 20.0 {
+            let gx = pos.x.to_pt();
+            self.active_group_bounds_pt = match prev_group_bounds {
+                Some((cur_l, cur_r)) => {
+                    let ll = (cur_l - gx).clamp(0.0, gw);
+                    let lr = (cur_r - gx).clamp(ll, gw);
+                    if lr - ll >= 20.0 {
+                        Some((ll, lr))
+                    } else {
+                        Some((0.0, gw))
+                    }
+                }
+                None => Some((0.0, gw)),
+            };
+        }
+        let mut inner = self.extract_blocks_from_nodes(children, list_level, inherited_align);
+        self.active_group_bounds_pt = prev_group_bounds;
+        if inner.len() == 1
+            && let Some(BlockNode::CodeBlock { fill, stroke, .. }) = inner.first_mut()
+            && fill.is_none()
+            && stroke.is_none()
+        {
+            let (f, s) = Self::find_code_block_box_style(children);
+            *fill = f;
+            *stroke = s;
+        }
+        self.apply_group_left_offset(group, pos, list_level, &mut inner);
+        let group_h_pt = group.frame.size().y.to_pt();
+        if inner.len() >= 2
+            && let Some(BlockNode::Paragraph { id, style, .. }) = inner.last_mut()
+        {
+            if style.resolved_par_spacing_pt.is_some() && !id.is_unset() {
+                self.reference_layout
+                    .entry(*id)
+                    .or_default()
+                    .flow
+                    .get_or_insert_with(Default::default)
+                    .in_multi_block_group_tail = true;
+            } else if (1.5..6.0).contains(&style.space_after_pt) {
+                style.space_after_pt = 6.05;
+            }
+        }
+        if group_h_pt >= 15.0 && inner.len() >= 2 {
+            let last_idx = inner.len() - 1;
+            let keep_all = group_h_pt <= 240.0 && inner.len() <= 6;
+            for (idx, b) in inner.iter_mut().enumerate() {
+                if let BlockNode::Paragraph { style, .. } = b {
+                    style.breakable = false;
+                    if idx == 0 || (keep_all && idx < last_idx) {
+                        style.sticky = true;
+                    }
+                }
+            }
+        }
+        blocks.extend(inner);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -282,6 +312,7 @@ impl<'a> ExtractorContext<'a> {
                 table.grid.as_deref(),
                 elem.span(),
                 Some(loc),
+                pos,
                 TableKindIr::SemanticTable,
                 summary,
                 children,
@@ -298,6 +329,7 @@ impl<'a> ExtractorContext<'a> {
                 grid.grid.as_deref(),
                 elem.span(),
                 Some(loc),
+                pos,
                 TableKindIr::LayoutGrid,
                 None,
                 children,
@@ -331,6 +363,9 @@ impl<'a> ExtractorContext<'a> {
             let mut runs = Vec::new();
             Self::collect_raw_line_runs(children, &mut runs);
             if runs.is_empty() {
+                if !raw_line.text.trim().is_empty() {
+                    return;
+                }
                 runs.push(ir::TextRunIr {
                     text: raw_line.text.to_string(),
                     font_family: None,
@@ -338,26 +373,13 @@ impl<'a> ExtractorContext<'a> {
                     ..Default::default()
                 });
             }
-            if let Some(BlockNode::CodeBlock { lines, .. }) = blocks.last_mut() {
-                lines.push(runs);
-                Self::normalize_empty_code_line_metrics(lines);
-            } else {
-                let mut lines = vec![runs];
-                Self::normalize_empty_code_line_metrics(&mut lines);
-                let id = self.alloc_node_with_fragments(
-                    elem.span(),
-                    Some(loc),
-                    Some(SemanticRoleIr::CodeBlock { lang: None }),
-                    children,
-                );
-                blocks.push(BlockNode::CodeBlock {
-                    id,
-                    lang: None,
-                    lines,
-                    fill: None,
-                    stroke: None,
-                });
-            }
+            self.append_or_create_orphan_raw_line(
+                elem.span(),
+                Some(loc),
+                children,
+                runs,
+                blocks,
+            );
             return;
         }
 
@@ -432,6 +454,7 @@ impl<'a> ExtractorContext<'a> {
                     length_pt: (x2_pt - x1_pt).abs(),
                     stroke: shape_ir.stroke.unwrap_or_default(),
                     align: inherited_align,
+                    left_indent_pt: 0.0,
                 });
                 return;
             }
@@ -473,11 +496,11 @@ impl<'a> ExtractorContext<'a> {
 
         // 17. Layout Containers (`AlignElem`, `PadElem`, `ColumnsElem`).
         if let Some(al) = elem.to_packed::<AlignElem>() {
-            self.extract_align_container(al, children, blocks, list_level);
+            self.extract_align_container(al, loc, children, blocks, list_level);
             return;
         }
         if let Some(pad) = elem.to_packed::<PadElem>() {
-            self.extract_pad_container(pad, children, blocks, list_level, inherited_align);
+            self.extract_pad_container(pad, loc, children, blocks, list_level, inherited_align);
             return;
         }
         if let Some(cols_elem) = elem.to_packed::<ColumnsElem>() {
@@ -493,12 +516,64 @@ impl<'a> ExtractorContext<'a> {
         }
 
         // 18. Generic container fallback (recurse into children), honoring `BlockElem`
-        // styled containers (`fill`/`stroke`) as well as `sticky` and `breakable: false`.
+        // styled containers (`fill`/`stroke`), unstyled `inset` padding (`#block(inset: ...)[...]`),
+        // explicit-height empty spacer blocks, `sticky`, and `breakable: false`.
         let blk_props = elem.to_packed::<BlockElem>().map(|blk| {
             let ch = self.scoped_style_chain(Some(loc));
-            (blk.breakable.get(ch), blk.sticky.get(ch))
+            let base_font_pt =
+                Self::resolve_length_pt(ch.get(typst::text::TextElem::size).0, 11.0);
+            let avail_h = self.current_page_content_height_pt();
+            let (cur_l, cur_r) = self
+                .active_group_bounds_pt
+                .unwrap_or((self.content_left_pt, self.content_right_pt));
+            let avail_w = (cur_r - cur_l).max(20.0);
+            let explicit_h_pt = match blk.height.get(ch) {
+                typst::layout::Sizing::Rel(rel) => {
+                    let h = Self::resolve_length_pt(rel.abs, base_font_pt)
+                        + rel.rel.get() * avail_h;
+                    (h > 0.5).then_some(h)
+                }
+                _ => None,
+            };
+            let below_pt = match blk.below.get(ch) {
+                typst::foundations::Smart::Custom(typst::layout::Spacing::Rel(rel)) => {
+                    Self::resolve_length_pt(rel.abs, base_font_pt) + rel.rel.get() * avail_h
+                }
+                _ => Self::resolve_length_pt(ch.get(typst::model::ParElem::spacing), base_font_pt),
+            };
+            let has_fill_or_stroke = blk.fill.get_ref(ch).is_some()
+                || blk
+                    .stroke
+                    .resolve(ch)
+                    .iter()
+                    .any(|s| s.as_ref().is_some_and(|o| o.is_some()));
+            // Only unstyled `#block(inset: ...)` wrappers need `#pad`-equivalent child padding;
+            // styled blocks (`fill` / `stroke`) bake their `inset` into per-page `ShapeBlock` /
+            // `Container` fragments, so re-applying `inset` would double-offset multi-page boxes.
+            let inset_pt = if has_fill_or_stroke {
+                (0.0, 0.0, 0.0, 0.0)
+            } else {
+                let resolved_inset = blk.inset.resolve(ch);
+                let resolve_side =
+                    |rel_opt: Option<typst::layout::Rel<typst::layout::Abs>>, ref_len: f64| {
+                        rel_opt.map_or(0.0, |rel| rel.abs.to_pt() + rel.rel.get() * ref_len)
+                    };
+                (
+                    resolve_side(resolved_inset.left, avail_w),
+                    resolve_side(resolved_inset.right, avail_w),
+                    resolve_side(resolved_inset.top, avail_h),
+                    resolve_side(resolved_inset.bottom, avail_h),
+                )
+            };
+            (
+                blk.breakable.get(ch),
+                blk.sticky.get(ch),
+                explicit_h_pt,
+                below_pt,
+                inset_pt,
+            )
         });
-        if let Some((breakable, sticky)) = blk_props
+        if let Some((breakable, sticky, _, _, _)) = blk_props
             && let Some(styled_box) = self.try_extract_styled_container_nodes(
                 None,
                 elem.span(),
@@ -514,9 +589,56 @@ impl<'a> ExtractorContext<'a> {
             blocks.push(styled_box);
             return;
         }
+        let prev_bounds = self.active_group_bounds_pt;
+        if let Some((_, _, _, _, (in_l, in_r, _, _))) = blk_props
+            && (in_l.abs() > 0.1 || in_r.abs() > 0.1)
+        {
+            let (cur_l, cur_r) =
+                prev_bounds.unwrap_or((self.content_left_pt, self.content_right_pt));
+            let nl = cur_l + in_l;
+            let nr = (cur_r - in_r).max(nl + 20.0);
+            self.active_group_bounds_pt = Some((nl, nr));
+        }
         let mut child_blocks =
             self.extract_blocks_from_nodes(children, list_level, inherited_align);
-        if let Some((breakable, sticky)) = blk_props {
+        self.active_group_bounds_pt = prev_bounds;
+        // Preserve unstyled empty spacer blocks with explicit height (`#block(height: H)[ ]`)
+        // as exact-height empty paragraphs. Moderate or unbreakable spacers store `H` directly
+        // in `line_spacing_pt` (`w:lineRule="exact"`) so Word's `compatibilityMode=15` margin
+        // collapsing (`max(prev.w:after, next.w:before)`) cannot swallow the spacer's height;
+        // tall breakable spacers (`> 48pt`) keep `1pt` line + `H - 1pt` `space_after` so Word
+        // does not treat multi-line answer regions as unbreakable giant line boxes.
+        if child_blocks.is_empty()
+            && let Some((breakable, sticky, Some(h_pt), below_pt, _)) = blk_props
+        {
+            let id = self.alloc_node_with_fragments(
+                elem.span(),
+                Some(loc),
+                Some(ir::SemanticRoleIr::Paragraph),
+                children,
+            );
+            let mut style = ir::ParagraphStyleIr::default();
+            style.align = inherited_align;
+            style.breakable = breakable;
+            style.sticky = sticky;
+            if !breakable || h_pt <= 48.0 {
+                style.line_spacing_pt = Some(h_pt.max(1.0));
+                style.space_after_pt = 0.0;
+            } else {
+                style.line_spacing_pt = Some(1.0);
+                style.space_after_pt = (h_pt - 1.0).max(0.0);
+            }
+            style.resolved_par_spacing_pt = Some(below_pt.max(0.0));
+            blocks.push(BlockNode::Paragraph {
+                id,
+                content: Vec::new(),
+                style,
+                bookmark: None,
+            });
+            return;
+        }
+        if let Some((breakable, sticky, _, _, (in_l, in_r, in_t, in_b))) = blk_props {
+            Self::apply_padding_to_child_blocks(&mut child_blocks, in_l, in_r, in_t, in_b);
             let unbreakable = !breakable;
             if sticky || unbreakable {
                 let last_idx = child_blocks.len().saturating_sub(1);

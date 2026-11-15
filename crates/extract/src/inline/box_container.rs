@@ -31,7 +31,11 @@ struct ResolvedBoxProps {
     uniform_stroke: Option<StrokeIr>,
     corner_radius_pt: Option<f64>,
     inset: SidesPtIr,
-    baseline_shift_pt: Option<f64>,
+    /// Baseline shift for `InlineNode::ShapeInline`: includes `outset.bottom` because `<wp:inline>`
+    /// sits its bottom edge on the paragraph baseline while `outset.bottom` extends below it.
+    shape_baseline_shift_pt: Option<f64>,
+    /// Baseline shift for inline text runs (`TextRunIr`), excluding `outset.bottom`.
+    text_baseline_shift_pt: Option<f64>,
 }
 
 impl<'a> ExtractorContext<'a> {
@@ -110,7 +114,8 @@ impl<'a> ExtractorContext<'a> {
                 }
             };
             let resolved_baseline = at_pt + shift_pt;
-            let baseline_shift_pt = (resolved_baseline.abs() > 0.1).then_some(resolved_baseline);
+            let text_baseline_shift_pt =
+                (resolved_baseline.abs() > 0.1).then_some(resolved_baseline);
 
             let resolved_inset = box_elem.inset.resolve(chain);
             let resolved_outset = box_elem.outset.resolve(chain);
@@ -136,6 +141,9 @@ impl<'a> ExtractorContext<'a> {
                 left: resolve_h(resolved_inset.left) + outset.left,
                 right: resolve_h(resolved_inset.right) + outset.right,
             };
+            let raw_shape_shift = resolved_baseline + outset.bottom;
+            let shape_baseline_shift_pt =
+                (raw_shape_shift.abs() > 0.1).then_some(raw_shape_shift);
 
             let visual_w_pt = box_w_pt + outset.left + outset.right;
             let visual_h_pt = box_h_pt + outset.top + outset.bottom;
@@ -163,7 +171,8 @@ impl<'a> ExtractorContext<'a> {
                     uniform_stroke,
                     corner_radius_pt,
                     inset,
-                    baseline_shift_pt,
+                    shape_baseline_shift_pt,
+                    text_baseline_shift_pt,
                 },
             )
         };
@@ -174,11 +183,11 @@ impl<'a> ExtractorContext<'a> {
         }
 
         // 1. Unstyled wrapper `#box(...)` (no fill and no borders, e.g. `#box(baseline: 30%, circle(...))`
-        //    or `#box(image(...))`): extract inner inlines normally and propagate `baseline_shift_pt`.
+        //    or `#box(image(...))`): extract inner inlines normally and propagate `text_baseline_shift_pt`.
         if props.fill.is_none() && !props.borders.has_any() {
             let start_idx = out.len();
             self.extract_inlines_from_nodes(children, out, state, last_y, last_x_end);
-            if let Some(shift) = props.baseline_shift_pt {
+            if let Some(shift) = props.text_baseline_shift_pt {
                 Self::apply_box_baseline_shift_to_inlines(&mut out[start_idx..], shift);
             }
             return;
@@ -194,12 +203,14 @@ impl<'a> ExtractorContext<'a> {
             }
         }
 
+        let content_offset = group_entry.map_or(Point::zero(), |(_, gpos, _)| gpos);
         let raw_inner = group_entry.map_or(children, |(_, _, gc)| gc);
         let (content_children, shape_nodes) = Self::split_box_bg_and_content(raw_inner);
         self.emit_resolved_inline_box(
             box_elem.span(),
             Some(loc),
             box_pos,
+            content_offset,
             children,
             &content_children,
             &shape_nodes,
@@ -258,10 +269,17 @@ impl<'a> ExtractorContext<'a> {
         let box_h_pt = group.frame.size().y.to_pt();
         let (content_children, shape_nodes) = Self::split_box_bg_and_content(children);
 
+        // Only treat non-`Line` shapes as bottom-underline rules when the box has text height
+        // (`>= 6pt`) and the thin rule sits along the bottom edge; `2pt` progress bars stay shapes.
         let is_bottom_line_only = bg_shapes.len() == 1 && {
-            let b = bg_shapes[0].1.geometry.bbox(None).size();
-            matches!(bg_shapes[0].1.geometry, Geometry::Line(_))
-                || (b.y.to_pt().abs() <= 2.5 && b.x.to_pt().abs() >= 6.0)
+            let (spos, ref s, _) = bg_shapes[0];
+            let b = s.geometry.bbox(None);
+            let sz = b.size();
+            matches!(s.geometry, Geometry::Line(_))
+                || (box_h_pt >= 6.0
+                    && sz.y.to_pt().abs() <= 2.5
+                    && sz.x.to_pt().abs() >= 6.0
+                    && (spos.y + b.min.y).to_pt() >= box_h_pt - 3.5)
         };
         let (fill, borders, uniform_stroke) = if is_bottom_line_only {
             let s = &bg_shapes[0].1;
@@ -296,49 +314,73 @@ impl<'a> ExtractorContext<'a> {
             (f, BordersIr::splat(st.clone()), st)
         };
 
+        // Union `(0..box_w_pt, 0..box_h_pt)` with `bg_shapes` bboxes to capture `#box(outset: ...)`.
+        let mut min_vis_x = 0.0_f64;
+        let mut min_vis_y = 0.0_f64;
+        let mut max_vis_x = box_w_pt.max(0.0);
+        let mut max_vis_y = box_h_pt.max(0.0);
+        for (spos, s, _) in &bg_shapes {
+            let b = s.geometry.bbox(None);
+            min_vis_x = min_vis_x.min((spos.x + b.min.x).to_pt());
+            min_vis_y = min_vis_y.min((spos.y + b.min.y).to_pt());
+            max_vis_x = max_vis_x.max((spos.x + b.max.x).to_pt());
+            max_vis_y = max_vis_y.max((spos.y + b.max.y).to_pt());
+        }
+        let visual_w_pt = (max_vis_x - min_vis_x).max(box_w_pt).max(0.0);
+        let visual_h_pt = (max_vis_y - min_vis_y).max(box_h_pt).max(0.0);
+        let outset_top = (-min_vis_y).max(0.0);
+        let outset_bottom = (max_vis_y - box_h_pt.max(0.0)).max(0.0);
+
         let corner_radius_pt = bg_shapes.iter().find_map(|(_, s, _)| {
             if let Geometry::Curve(curve) = &s.geometry
                 && let Some(CurveItem::Move(p)) = curve.0.first()
             {
                 let rx = p.x.to_pt();
                 let ry = p.y.to_pt();
-                if rx > 0.5 && ry.abs() < 0.5 && rx <= box_w_pt * 0.5 {
+                if rx > 0.5 && ry.abs() < 0.5 && rx <= visual_w_pt * 0.5 {
                     return Some(rx);
-                } else if ry > 0.5 && rx.abs() < 0.5 && ry <= box_h_pt * 0.5 {
+                } else if ry > 0.5 && rx.abs() < 0.5 && ry <= visual_h_pt * 0.5 {
                     return Some(ry);
                 }
             }
             None
         });
         let (min_x, _, _, _) = Self::estimate_nodes_bbox(&content_children);
-        let pad = if min_x.is_finite() {
-            min_x.clamp(0.0, 24.0)
+        let pad_x = if !content_children.is_empty() && min_x.is_finite() {
+            (min_x - min_vis_x).clamp(0.0, 24.0)
         } else {
             0.0
+        };
+        let (pad_top, pad_bottom) = if outset_top > 0.1 || outset_bottom > 0.1 {
+            (outset_top, outset_bottom)
+        } else {
+            (pad_x.min(12.0), pad_x.min(12.0))
         };
         let span = bg_shapes
             .first()
             .map(|(_, _, sp)| *sp)
             .unwrap_or_else(Span::detached);
         let props = ResolvedBoxProps {
-            width_pt: box_w_pt,
-            height_pt: box_h_pt,
+            width_pt: visual_w_pt,
+            height_pt: visual_h_pt,
             fill,
             borders,
             uniform_stroke,
             corner_radius_pt,
             inset: SidesPtIr {
-                top: pad.min(12.0),
-                bottom: pad.min(12.0),
-                left: pad,
-                right: pad,
+                top: pad_top,
+                bottom: pad_bottom,
+                left: pad_x,
+                right: pad_x,
             },
-            baseline_shift_pt: None,
+            shape_baseline_shift_pt: (outset_bottom > 0.1).then_some(outset_bottom),
+            text_baseline_shift_pt: None,
         };
         self.emit_resolved_inline_box(
             span,
             None,
             pos,
+            Point::zero(),
             children,
             &content_children,
             &shape_nodes,
@@ -357,6 +399,7 @@ impl<'a> ExtractorContext<'a> {
         span: Span,
         loc_opt: Option<Location>,
         pos: Point,
+        content_offset: Point,
         all_nodes: &[TreeNode],
         content_children: &[TreeNode],
         shape_nodes: &[TreeNode],
@@ -404,14 +447,18 @@ impl<'a> ExtractorContext<'a> {
         if !is_bottom_line_only {
             let (distinct_lines, font_sz) = Self::count_inline_box_lines(content_children);
             let has_partial_border = props.uniform_stroke.is_none() && props.borders.has_any();
-            let is_spatial_box = distinct_lines >= 2
-                || has_partial_border
-                || props.corner_radius_pt.is_some_and(|r| r >= 1.5)
-                || props.inset.top >= 4.0
-                || props.inset.bottom >= 4.0
-                || props.inset.left >= 6.0
-                || props.inset.right >= 6.0
-                || props.height_pt > font_sz * 1.65;
+            // Require `props.height_pt >= font_sz * 0.85` because Word's `<wps:wsp>` hard-clips
+            // `<w:txbxContent>` to `[0, cy]`, whereas Typst boxes with collapsed `top-edge`/`bounds`
+            // heights (`clip: false`) let glyphs extend outside the box frame.
+            let is_spatial_box = props.height_pt >= font_sz * 0.85
+                && (distinct_lines >= 2
+                    || has_partial_border
+                    || props.corner_radius_pt.is_some_and(|r| r >= 1.5)
+                    || props.inset.top >= 4.0
+                    || props.inset.bottom >= 4.0
+                    || props.inset.left >= 6.0
+                    || props.inset.right >= 6.0
+                    || props.height_pt > font_sz * 1.65);
 
             if is_spatial_box && (props.fill.is_some() || props.borders.has_any()) {
                 let id = self.alloc_node_with_fragments(
@@ -425,12 +472,15 @@ impl<'a> ExtractorContext<'a> {
                 // horizontal `inset` as an extra `left_indent_pt`.
                 let prev_inset = self.container_inset_pt;
                 let prev_gw = self.active_group_bounds_pt;
+                let prev_origin = self.group_origin_offset;
                 self.container_inset_pt += props.inset.left + props.inset.right + 3.0;
                 self.active_group_bounds_pt = Some((0.0, props.width_pt));
+                self.group_origin_offset += content_offset;
                 self.parent_node_stack.push(id);
                 let mut body_blocks =
                     self.extract_blocks_from_nodes(content_children, 0, HAlignIr::Left);
                 self.parent_node_stack.pop();
+                self.group_origin_offset = prev_origin;
                 self.active_group_bounds_pt = prev_gw;
                 self.container_inset_pt = prev_inset;
 
@@ -456,7 +506,7 @@ impl<'a> ExtractorContext<'a> {
                         body: body_blocks,
                         align: HAlignIr::Left,
                         placed_offset_pt: None,
-                        baseline_shift_pt: props.baseline_shift_pt,
+                        baseline_shift_pt: props.shape_baseline_shift_pt,
                     }));
                     *last_y = Some(pos.y.to_pt());
                     *last_x_end = Some(pos.x.to_pt() + props.width_pt);
@@ -473,7 +523,10 @@ impl<'a> ExtractorContext<'a> {
             state.underline = props.borders.bottom.clone();
         } else {
             if let Some(f) = props.fill {
-                state.highlight = Some(f);
+                let (_, font_sz) = Self::count_inline_box_lines(content_children);
+                if props.height_pt >= font_sz * 0.65 {
+                    state.highlight = Some(f);
+                }
             }
             if let Some(st) = props.uniform_stroke {
                 state.border = Some(st);
@@ -540,7 +593,7 @@ impl<'a> ExtractorContext<'a> {
             );
         }
 
-        if let Some(shift) = props.baseline_shift_pt {
+        if let Some(shift) = props.text_baseline_shift_pt {
             Self::apply_box_baseline_shift_to_inlines(&mut out[start_idx..], shift);
         }
 

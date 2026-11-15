@@ -18,7 +18,7 @@ mod inline;
 mod math;
 mod prescan;
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use typst::foundations::{StyleChain, Styles};
 use typst::introspection::Location;
@@ -60,6 +60,10 @@ pub(crate) struct ExtractorContext<'a> {
     pub(crate) active_scope_loc: Option<Location>,
     /// Active `(tracking_pt, baseline_shift_pt)` from `__typst2word_scope` during `frame_tree` build.
     pub(crate) active_text_style: (Option<f64>, Option<f64>),
+    /// Active configured `TextElem::font` list from `__typst2word_scope` during `frame_tree` build.
+    pub(crate) active_configured_fonts: Vec<String>,
+    /// Deduplicated `(configured_fonts, realized_family)` font fallback pairs detected during extraction.
+    pub(crate) seen_font_fallbacks: BTreeSet<(String, String)>,
     /// Map from element `Location` to bookmark anchor name (`_typst_loc_<hash>`).
     pub(crate) bookmarks: HashMap<Location, String>,
     /// Map from label string to bookmark anchor name.
@@ -84,6 +88,8 @@ pub(crate) struct ExtractorContext<'a> {
     pub(crate) content_top_pt: f64,
     /// Right X coordinate (in pt) of the main page content area.
     pub(crate) content_right_pt: f64,
+    /// Bottom Y coordinate (in pt) of the main page content area.
+    pub(crate) content_bottom_pt: f64,
     /// Active section page width (in pt) and whether two-sided mirror margins are active.
     pub(crate) page_width_pt: f64,
     pub(crate) mirror_margins: bool,
@@ -101,12 +107,23 @@ pub(crate) struct ExtractorContext<'a> {
     pub(crate) group_tree_depth: usize,
     /// Horizontal bounds `(left_pt, right_pt)` of the currently active local `Group` or cell frame.
     pub(crate) active_group_bounds_pt: Option<(f64, f64)>,
+    /// Active vertical container height override (`pt`), set while extracting header/footer furniture
+    /// so `#block(height: 100%)` resolves against the header/footer margin rather than body height.
+    pub(crate) active_region_height_pt: Option<f64>,
+    /// Accumulated page-global origin offset (`Point`) when descending into unwrapped `TreeNode::Group` children,
+    /// used strictly for `reference_layout` page fragments, line baselines, and flow spans.
+    pub(crate) group_origin_offset: Point,
 }
 
 impl<'a> ExtractorContext<'a> {
     pub(crate) fn new(compiled: &'a CompiledTypstDocument, world: &'a TypstWorld) -> Self {
         let mut doc_styles = Styles::new();
         Self::collect_document_styles(&compiled.evaluated_content, &mut doc_styles);
+        let initial_fonts: Vec<String> = StyleChain::new(&doc_styles)
+            .get_ref(typst::text::TextElem::font)
+            .into_iter()
+            .map(|f| f.as_str().to_string())
+            .collect();
         Self {
             compiled,
             world,
@@ -119,6 +136,8 @@ impl<'a> ExtractorContext<'a> {
             parent_node_stack: Vec::new(),
             active_scope_loc: None,
             active_text_style: (None, None),
+            active_configured_fonts: initial_fonts,
+            seen_font_fallbacks: BTreeSet::new(),
             bookmarks: HashMap::new(),
             label_bookmarks: HashMap::new(),
             footnotes: HashMap::new(),
@@ -131,6 +150,7 @@ impl<'a> ExtractorContext<'a> {
             content_left_pt: 70.866,
             content_top_pt: 70.866,
             content_right_pt: 595.276 - 70.866,
+            content_bottom_pt: 841.89 - 70.866,
             page_width_pt: 595.276,
             mirror_margins: false,
             page_columns: 1,
@@ -140,6 +160,8 @@ impl<'a> ExtractorContext<'a> {
             pending_split_group: None,
             group_tree_depth: 0,
             active_group_bounds_pt: None,
+            active_region_height_pt: None,
+            group_origin_offset: Point::zero(),
         }
     }
 
@@ -151,6 +173,13 @@ impl<'a> ExtractorContext<'a> {
         } else {
             full_w
         }
+    }
+
+    pub(crate) fn current_page_content_height_pt(&self) -> f64 {
+        if let Some(region_h) = self.active_region_height_pt {
+            return region_h.max(1.0);
+        }
+        (self.content_bottom_pt - self.content_top_pt).max(120.0)
     }
 
     /// Document/page-level `StyleChain` (used for page geometry & margins).
@@ -207,7 +236,7 @@ impl<'a> ExtractorContext<'a> {
         nodes: &[frame_tree::TreeNode],
     ) -> NodeId {
         let id = self.alloc_node_id(span, loc, role);
-        let fragments = Self::collect_page_fragments(nodes);
+        let fragments = self.collect_page_fragments(nodes);
         if !fragments.is_empty() {
             let span_ir = BlockLayoutSpanIr::from_fragments(&fragments);
             let entry = self.reference_layout.entry(id).or_default();
@@ -237,9 +266,9 @@ impl<'a> ExtractorContext<'a> {
     }
 
     /// Group laid-out leaf items in `nodes` by 0-based `page_idx` into 1-to-N `LayoutFragmentIr`s.
-    pub(crate) fn collect_page_fragments(nodes: &[frame_tree::TreeNode]) -> Vec<LayoutFragmentIr> {
+    pub(crate) fn collect_page_fragments(&self, nodes: &[frame_tree::TreeNode]) -> Vec<LayoutFragmentIr> {
         let mut by_page: BTreeMap<usize, (f64, f64, f64, f64)> = BTreeMap::new();
-        Self::accumulate_page_fragments(nodes, Point::zero(), &mut by_page);
+        Self::accumulate_page_fragments(nodes, self.group_origin_offset, &mut by_page);
         by_page
             .into_iter()
             .filter_map(|(page_idx, (min_x, min_y, max_x, max_y))| {
@@ -436,6 +465,8 @@ impl<'a> ExtractorContext<'a> {
             self.content_top_pt = setup.margin_top_pt;
             self.content_right_pt =
                 (setup.width_pt - setup.margin_right_pt).max(setup.margin_left_pt + 36.0);
+            self.content_bottom_pt =
+                (setup.height_pt - setup.margin_bottom_pt).max(setup.margin_top_pt + 36.0);
             self.page_width_pt = setup.width_pt;
             self.mirror_margins = setup.mirror_margins;
             self.page_columns = setup.columns;
@@ -456,6 +487,19 @@ impl<'a> ExtractorContext<'a> {
         };
         let anchors = self.extract_page_line_anchors();
         let font_metrics = self.collect_document_font_metrics();
+        // Warn when realized fonts in the document are embedded in Typst rather than installed
+        // on the host OS, without altering any extracted font family names.
+        for (family, metrics) in &font_metrics {
+            if !metrics.is_system_installed
+                && self
+                    .seen_font_fallbacks
+                    .insert(("<host>".to_string(), family.clone()))
+            {
+                self.report.font_fallback_warnings.push(format!(
+                    "系统未安装字体 \"{family}\"（Typst 内置字体），Word 打开时将由系统回退渲染（未更改原字体名称）"
+                ));
+            }
+        }
 
         let mut doc = DocumentIr::default();
         doc.sections = sections;
@@ -531,7 +575,14 @@ impl<'a> ExtractorContext<'a> {
         let hhea_ascender = face.ascender();
         let hhea_descender = face.descender();
         let hhea_line_gap = face.line_gap();
-        let s_cap_height = face.capital_height();
+        // When `OS/2` (or `sCapHeight` in `OS/2` v0/v1) is absent, fall back to `'H'`'s glyph
+        // bounding box top (`y_max`), matching Typst's own `FontMetrics::from_ttf` definition.
+        let s_cap_height = face.capital_height().or_else(|| {
+            face.glyph_index('H')
+                .and_then(|gid| face.glyph_bounding_box(gid))
+                .map(|bbox| bbox.y_max)
+                .filter(|&h| h > 0)
+        });
         let s_typo_ascender = face.tables().os2.map(|t| t.typographic_ascender());
         let s_typo_descender = face.tables().os2.map(|t| t.typographic_descender());
 
@@ -541,6 +592,7 @@ impl<'a> ExtractorContext<'a> {
         let mut us_win_ascent = None;
         let mut us_win_descent = None;
         let mut has_cjk_codepage = false;
+        let mut has_os2_codepage_field = false;
         if let Some(os2) = face.raw_face().table(ttf_parser::Tag::from_bytes(b"OS/2")) {
             if os2.len() >= 78 {
                 us_win_ascent = Some(u16::from_be_bytes([os2[74], os2[75]]));
@@ -549,12 +601,22 @@ impl<'a> ExtractorContext<'a> {
             if os2.len() >= 86 {
                 let version = u16::from_be_bytes([os2[0], os2[1]]);
                 if version >= 1 {
+                    has_os2_codepage_field = true;
                     let cp1 = u32::from_be_bytes([os2[78], os2[79], os2[80], os2[81]]);
                     // Bits 17..=20: JIS/Japan (CP932), Chinese Simplified (CP936),
                     // Korean Wansung (CP949), Chinese Traditional (CP950).
                     has_cjk_codepage = (cp1 & 0x001E_0000) != 0;
                 }
             }
+        }
+        // Apple AAT / legacy TrueType CJK fonts (such as macOS `Hei.ttf` / `Kai.ttf`) omit the
+        // `OS/2` table (or use version 0 without `ulCodePageRange1`), yet Word's `<w:useFELayout/>`
+        // still applies East Asian CJK line-box expansion (`1.3x`). Detect CJK coverage directly
+        // from `cmap` when `ulCodePageRange1` is absent.
+        if !has_os2_codepage_field {
+            has_cjk_codepage = ['中', '文', '国', '字']
+                .into_iter()
+                .all(|c| face.glyph_index(c).is_some());
         }
 
         let has_gsub_hani = face
@@ -644,6 +706,24 @@ fn setups_identical(a: &PageSetupIr, b: &PageSetupIr) -> bool {
 /// 2. Distinct first page (`different_first_page = true`, `<w:titlePg/>`) + uniform remaining pages.
 /// 3. Alternating odd/even pages (`different_odd_even = true`, `<w:evenAndOddHeaders/>`), optionally
 ///    combined with a distinct first page.
+/// Compare only `PageElem` `#set page(...)` rules so non-page liftable styles (such as
+/// `#set enum(...)` or `#set par(...)`) do not split consecutive pages into separate Word sections.
+fn page_elem_styles_eq(a: Option<&Styles>, b: Option<&Styles>) -> bool {
+    use typst::foundations::NativeElement as _;
+    match (a, b) {
+        (Some(sa), Some(sb)) => sa
+            .as_slice()
+            .iter()
+            .filter(|s| s.element() == Some(typst::layout::PageElem::ELEM))
+            .eq(sb
+                .as_slice()
+                .iter()
+                .filter(|s| s.element() == Some(typst::layout::PageElem::ELEM))),
+        (None, None) => true,
+        _ => false,
+    }
+}
+
 fn consolidate_page_sections(
     page_setups: &[PageSetupIr],
     page_styles: &[Styles],
@@ -654,18 +734,18 @@ fn consolidate_page_sections(
 
     // First partition into maximal runs sharing geometry, numbering format, and `#set page` styles
     // (or identical static setups).
-    let mut out = Vec::new();
+    let mut raw: Vec<(std::ops::Range<usize>, PageSetupIr)> = Vec::new();
     let n = page_setups.len();
     let mut i = 0;
 
     while i < n {
-        // Try dynamic consolidation across maximal run `i..end` sharing the page box & `page_styles[i]`.
+        // Try dynamic consolidation across maximal run `i..end` sharing the page box & `#set page` styles.
         // Identical `#set page` styles guarantee identical source header/footer distances, so the
         // measured `header_margin_pt` (which varies with furniture presence) is not compared here.
         let mut dyn_end = i + 1;
         while dyn_end < n
             && page_setups[dyn_end].has_same_page_box(&page_setups[i])
-            && page_styles.get(dyn_end) == page_styles.get(i)
+            && page_elem_styles_eq(page_styles.get(dyn_end), page_styles.get(i))
         {
             dyn_end += 1;
         }
@@ -673,7 +753,7 @@ fn consolidate_page_sections(
         if dyn_end - i >= 2
             && let Some(consolidated) = try_consolidate_dynamic_run(&page_setups[i..dyn_end], i)
         {
-            out.push((i..dyn_end, consolidated));
+            raw.push((i..dyn_end, consolidated));
             i = dyn_end;
             continue;
         }
@@ -683,8 +763,25 @@ fn consolidate_page_sections(
         while std_end < n && setups_identical(&page_setups[std_end], &page_setups[i]) {
             std_end += 1;
         }
-        out.push((i..std_end, page_setups[i].clone()));
+        raw.push((i..std_end, page_setups[i].clone()));
         i = std_end;
+    }
+
+    // Coalesce adjacent static sections whose resolved `PageSetupIr` is identical.
+    let mut out: Vec<(std::ops::Range<usize>, PageSetupIr)> = Vec::with_capacity(raw.len());
+    for (range, setup) in raw {
+        if let Some((prev_range, prev_setup)) = out.last_mut()
+            && prev_range.end == range.start
+            && !prev_setup.different_first_page
+            && !prev_setup.different_odd_even
+            && !setup.different_first_page
+            && !setup.different_odd_even
+            && setups_identical(prev_setup, &setup)
+        {
+            prev_range.end = range.end;
+        } else {
+            out.push((range, setup));
+        }
     }
 
     out

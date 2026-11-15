@@ -3,6 +3,7 @@
 //! Records physical `(page_idx, top_y_pt, bottom_y_pt)` spans into `DocumentIr::reference_layout`
 //! keyed by `NodeId` without embedding Word-specific spacing thresholds on `ParagraphStyleIr`.
 
+use typst::layout::Point;
 use typst::syntax::Span;
 
 use crate::ExtractorContext;
@@ -10,35 +11,46 @@ use crate::frame_tree::{TreeNode, decode_page_and_local_y};
 use ir::{BlockLayoutSpanIr, BlockNode, NextBlockKindIr, NextBlockLayoutMeasureIr, SemanticRoleIr};
 
 impl<'a> ExtractorContext<'a> {
-    pub(crate) fn nodes_first_page_top_y(nodes: &[TreeNode]) -> Option<(usize, f64, f64)> {
+    pub(crate) fn nodes_first_page_top_y(&self, nodes: &[TreeNode]) -> Option<(usize, f64, f64)> {
+        Self::nodes_first_page_top_y_at(nodes, self.group_origin_offset)
+    }
+
+    fn nodes_first_page_top_y_at(
+        nodes: &[TreeNode],
+        offset: Point,
+    ) -> Option<(usize, f64, f64)> {
         for node in nodes {
             match node {
                 TreeNode::Text { text, pos, .. } => {
                     if text.text.trim().is_empty() {
                         continue;
                     }
-                    let raw_y = (pos.y - text.size * 0.8).to_pt();
-                    return Some(decode_page_and_local_y(raw_y, pos.x.to_pt()));
+                    let abs_x = (offset.x + pos.x).to_pt();
+                    let raw_y = (offset.y + pos.y - text.size * 0.8).to_pt();
+                    return Some(decode_page_and_local_y(raw_y, abs_x));
                 }
                 TreeNode::Group { group, pos, .. } => {
                     if group.frame.size().x.to_pt() <= 0.0 && group.frame.size().y.to_pt() <= 0.0 {
                         continue;
                     }
-                    return Some(decode_page_and_local_y(pos.y.to_pt(), pos.x.to_pt()));
+                    let p = offset + *pos;
+                    return Some(decode_page_and_local_y(p.y.to_pt(), p.x.to_pt()));
                 }
                 TreeNode::Shape { shape, pos, .. } => {
                     let b = shape.geometry.bbox(None);
-                    let raw_y = (pos.y + b.min.y).to_pt();
-                    return Some(decode_page_and_local_y(raw_y, pos.x.to_pt()));
+                    let abs_x = (offset.x + pos.x).to_pt();
+                    let raw_y = (offset.y + pos.y + b.min.y).to_pt();
+                    return Some(decode_page_and_local_y(raw_y, abs_x));
                 }
                 TreeNode::Image { pos, .. } => {
-                    return Some(decode_page_and_local_y(pos.y.to_pt(), pos.x.to_pt()));
+                    let p = offset + *pos;
+                    return Some(decode_page_and_local_y(p.y.to_pt(), p.x.to_pt()));
                 }
                 TreeNode::Element { elem, children, .. } => {
                     if Self::is_page_furniture_elem(elem) {
                         continue;
                     }
-                    if let Some(found) = Self::nodes_first_page_top_y(children) {
+                    if let Some(found) = Self::nodes_first_page_top_y_at(children, offset) {
                         return Some(found);
                     }
                 }
@@ -48,37 +60,48 @@ impl<'a> ExtractorContext<'a> {
         None
     }
 
-    pub(crate) fn nodes_last_page_bottom_y(nodes: &[TreeNode]) -> Option<(usize, f64, f64)> {
+    pub(crate) fn nodes_last_page_bottom_y(&self, nodes: &[TreeNode]) -> Option<(usize, f64, f64)> {
+        Self::nodes_last_page_bottom_y_at(nodes, self.group_origin_offset)
+    }
+
+    fn nodes_last_page_bottom_y_at(
+        nodes: &[TreeNode],
+        offset: Point,
+    ) -> Option<(usize, f64, f64)> {
         for node in nodes.iter().rev() {
             match node {
                 TreeNode::Text { text, pos, .. } => {
                     if text.text.trim().is_empty() {
                         continue;
                     }
-                    let raw_y = (pos.y + text.size * 0.2).to_pt();
-                    return Some(decode_page_and_local_y(raw_y, pos.x.to_pt()));
+                    let abs_x = (offset.x + pos.x).to_pt();
+                    let raw_y = (offset.y + pos.y + text.size * 0.2).to_pt();
+                    return Some(decode_page_and_local_y(raw_y, abs_x));
                 }
                 TreeNode::Group { group, pos, .. } => {
                     if group.frame.size().x.to_pt() <= 0.0 && group.frame.size().y.to_pt() <= 0.0 {
                         continue;
                     }
-                    let raw_y = (pos.y + group.frame.size().y).to_pt();
-                    return Some(decode_page_and_local_y(raw_y, pos.x.to_pt()));
+                    let abs_x = (offset.x + pos.x).to_pt();
+                    let raw_y = (offset.y + pos.y + group.frame.size().y).to_pt();
+                    return Some(decode_page_and_local_y(raw_y, abs_x));
                 }
                 TreeNode::Shape { shape, pos, .. } => {
                     let b = shape.geometry.bbox(None);
-                    let raw_y = (pos.y + b.max.y).to_pt();
-                    return Some(decode_page_and_local_y(raw_y, pos.x.to_pt()));
+                    let abs_x = (offset.x + pos.x).to_pt();
+                    let raw_y = (offset.y + pos.y + b.max.y).to_pt();
+                    return Some(decode_page_and_local_y(raw_y, abs_x));
                 }
                 TreeNode::Image { size, pos, .. } => {
-                    let raw_y = (pos.y + size.y).to_pt();
-                    return Some(decode_page_and_local_y(raw_y, pos.x.to_pt()));
+                    let abs_x = (offset.x + pos.x).to_pt();
+                    let raw_y = (offset.y + pos.y + size.y).to_pt();
+                    return Some(decode_page_and_local_y(raw_y, abs_x));
                 }
                 TreeNode::Element { elem, children, .. } => {
                     if Self::is_page_furniture_elem(elem) {
                         continue;
                     }
-                    if let Some(found) = Self::nodes_last_page_bottom_y(children) {
+                    if let Some(found) = Self::nodes_last_page_bottom_y_at(children, offset) {
                         return Some(found);
                     }
                 }
@@ -142,16 +165,22 @@ impl<'a> ExtractorContext<'a> {
         spans: &[(usize, Option<(usize, f64, f64)>, Option<(usize, f64, f64)>)],
     ) {
         for &(idx, start, end) in spans {
-            if let Some(BlockNode::Paragraph { id, .. }) = blocks.get_mut(idx) {
-                if id.is_unset() {
-                    *id = self.alloc_node_id(
-                        Span::detached(),
-                        None,
-                        Some(SemanticRoleIr::Paragraph),
-                    );
-                }
+            let Some(block) = blocks.get_mut(idx) else {
+                continue;
+            };
+            if let BlockNode::Paragraph { id, .. } = block
+                && id.is_unset()
+            {
+                *id = self.alloc_node_id(
+                    Span::detached(),
+                    None,
+                    Some(SemanticRoleIr::Paragraph),
+                );
+            }
+            let id = block.node_id();
+            if !id.is_unset() {
                 let span = BlockLayoutSpanIr::from_start_end(start, end);
-                let entry = self.reference_layout.entry(*id).or_default();
+                let entry = self.reference_layout.entry(id).or_default();
                 if matches!(entry.span, BlockLayoutSpanIr::Unmeasured) {
                     entry.span = span;
                 }
@@ -204,6 +233,17 @@ impl<'a> ExtractorContext<'a> {
                 flow.self_span = span_a;
                 flow.next = Some(measure);
             } else {
+                let id_a = blocks[idx_a].node_id();
+                if !id_a.is_unset() {
+                    let flow = self
+                        .reference_layout
+                        .entry(id_a)
+                        .or_default()
+                        .flow
+                        .get_or_insert_with(Default::default);
+                    flow.self_span = span_a;
+                    flow.next = Some(measure);
+                }
                 self.record_trailing_transition_on_last_block(
                     &mut blocks[..=idx_a],
                     span_a,

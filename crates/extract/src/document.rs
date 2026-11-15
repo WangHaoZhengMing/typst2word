@@ -3,7 +3,7 @@
 
 use typst::foundations::{NativeElement as _, Smart, StyleChain, StyledElem, Styles};
 use typst::introspection::Tag;
-use typst::layout::{Dir, Frame, FrameItem, PageElem};
+use typst::layout::{AlignElem, BlockElem, Dir, Frame, FrameItem, PadElem, PageElem};
 use typst::model::{Document, Numbering};
 use typst::pdf::{ArtifactElem, ArtifactKind};
 use typst::text::TextElem;
@@ -12,7 +12,9 @@ use compiler::PAGE_STYLES_LABEL;
 use crate::ExtractorContext;
 use crate::color::paint_to_hex;
 use crate::frame_tree::TreeNode;
-use ir::{BlockNode, HAlignIr, LocaleIr, MetadataIr, PageNumberFormatIr, PageSetupIr, TextDirIr};
+use ir::{
+    BlockNode, HAlignIr, LocaleIr, MetadataIr, PageNumberFormatIr, PageSetupIr, TextDirIr, VAlignIr,
+};
 
 impl<'a> ExtractorContext<'a> {
     /// Extract the shared page-level `Styles` trunk directly from `__typst2word_page_styles`
@@ -211,28 +213,40 @@ impl<'a> ExtractorContext<'a> {
             setup.margin_top_pt = cfg_top.unwrap_or(default_margin_pt);
             setup.margin_bottom_pt = cfg_bottom.unwrap_or(default_margin_pt);
 
+            let (_, style_va) =
+                Self::alignment_to_ir(Smart::Custom(chain.get(AlignElem::alignment)));
+
             self.content_left_pt = setup.margin_left_pt;
             self.content_top_pt = setup.margin_top_pt;
             self.content_right_pt =
                 (setup.width_pt - setup.margin_right_pt).max(setup.margin_left_pt + 36.0);
+            self.content_bottom_pt =
+                (setup.height_pt - setup.margin_bottom_pt).max(setup.margin_top_pt + 36.0);
             self.page_width_pt = setup.width_pt;
             self.mirror_margins = setup.mirror_margins;
 
+            setup.v_align = if style_va != VAlignIr::Top {
+                style_va
+            } else {
+                self.infer_page_body_valign(page_nodes)
+            };
+
             for node in page_nodes {
-                self.collect_header_footer_artifacts(node, &mut setup.header, &mut setup.footer);
+                self.collect_header_footer_artifacts(
+                    node,
+                    setup.margin_top_pt,
+                    setup.margin_bottom_pt,
+                    &mut setup.header,
+                    &mut setup.footer,
+                );
             }
             self.zero_header_footer_paragraph_spacing(&mut setup.header);
             self.zero_header_footer_paragraph_spacing(&mut setup.footer);
 
-            setup.header_margin_pt = self
-                .find_artifact_y_bounds(page_nodes, ArtifactKind::Header)
-                .map(|(min_y, _)| {
-                    if setup.margin_top_pt < 36.0 {
-                        min_y.clamp(0.0, (setup.margin_top_pt - 6.0).max(0.0))
-                    } else {
-                        min_y.clamp(12.0, (setup.margin_top_pt - 12.0).max(12.0))
-                    }
-                })
+            setup.header_margin_pt = (!setup.header.is_empty())
+                .then(|| self.find_artifact_y_bounds(page_nodes, ArtifactKind::Header))
+                .flatten()
+                .map(|(min_y, _)| min_y.clamp(0.0, (setup.margin_top_pt - 4.0).max(0.0)))
                 .unwrap_or_else(|| {
                     if setup.margin_top_pt < 48.0 {
                         (setup.margin_top_pt * 0.5).clamp(0.0, setup.margin_top_pt)
@@ -240,15 +254,12 @@ impl<'a> ExtractorContext<'a> {
                         (setup.margin_top_pt * 0.58).max(28.0).min(setup.margin_top_pt)
                     }
                 });
-            setup.footer_margin_pt = self
-                .find_artifact_y_bounds(page_nodes, ArtifactKind::Footer)
+            setup.footer_margin_pt = (!setup.footer.is_empty())
+                .then(|| self.find_artifact_y_bounds(page_nodes, ArtifactKind::Footer))
+                .flatten()
                 .map(|(_, max_y)| {
                     let dist_bottom = (setup.height_pt - max_y).max(0.0);
-                    if setup.margin_bottom_pt < 36.0 {
-                        dist_bottom.clamp(0.0, (setup.margin_bottom_pt - 6.0).max(0.0))
-                    } else {
-                        dist_bottom.clamp(12.0, (setup.margin_bottom_pt - 12.0).max(12.0))
-                    }
+                    dist_bottom.clamp(0.0, (setup.margin_bottom_pt - 4.0).max(0.0))
                 })
                 .unwrap_or_else(|| {
                     if setup.margin_bottom_pt < 48.0 {
@@ -263,9 +274,145 @@ impl<'a> ExtractorContext<'a> {
         setup
     }
 
-    pub(crate) fn zero_header_footer_paragraph_spacing(&mut self, blocks: &mut [BlockNode]) {
-        for block in blocks {
-            if let BlockNode::Paragraph { id, style, .. } = block {
+    /// Detect page-level vertical alignment when a slide/section body uses either an explicit
+    /// `AlignElem` wrapper (`#align(horizon)[...]`) or a scoped `#set align(horizon)` / `bottom`
+    /// rule backed by laid-out vertical slack on the section's first page.
+    fn infer_page_body_valign(&self, page_nodes: &[TreeNode]) -> VAlignIr {
+        let mut visible_roots: Vec<TreeNode> = Vec::new();
+        for node in page_nodes {
+            if let TreeNode::Element { elem, .. } = node {
+                if elem.is::<typst::layout::PagebreakElem>() {
+                    if !visible_roots.is_empty() {
+                        break;
+                    }
+                    continue;
+                }
+                if Self::is_page_furniture_elem(elem)
+                    || elem.is::<typst::layout::ColbreakElem>()
+                    || elem.is::<typst::layout::HideElem>()
+                {
+                    continue;
+                }
+            }
+            let (_, _, w, h) = Self::estimate_nodes_bbox(std::slice::from_ref(node));
+            if w > 0.1 || h > 0.1 {
+                visible_roots.push(node.clone());
+            }
+        }
+        if visible_roots.is_empty() {
+            return VAlignIr::Top;
+        }
+        if visible_roots.len() == 1 {
+            let mut cur = &visible_roots[0];
+            loop {
+                match cur {
+                    TreeNode::Element {
+                        elem,
+                        loc,
+                        children,
+                        ..
+                    } => {
+                        if let Some(al) = elem.to_packed::<AlignElem>() {
+                            let ch = self.scoped_style_chain(Some(*loc));
+                            let (_, va) = Self::alignment_to_ir(Smart::Custom(al.alignment.get(ch)));
+                            if va != VAlignIr::Top {
+                                return va;
+                            }
+                        }
+                        let is_transparent_wrapper = elem.is::<PadElem>()
+                            || elem.is::<BlockElem>()
+                            || elem.elem().name() == "context";
+                        if is_transparent_wrapper && children.len() == 1 {
+                            cur = &children[0];
+                            continue;
+                        }
+                        break;
+                    }
+                    TreeNode::Group { children, .. } if children.len() == 1 => {
+                        cur = &children[0];
+                    }
+                    _ => break,
+                }
+            }
+        }
+
+        // Fallback for `#set align(horizon)` / `#set align(bottom)` scopes (e.g. Touying
+        // `#title-slide`, `#new-section-slide`, `#focus-slide`): check the style chain on
+        // the first page's visible elements and verify symmetric/bottom slack in the frame.
+        let scoped_va = self.find_first_scoped_valign(&visible_roots);
+        if scoped_va != VAlignIr::Top {
+            let frags = self.collect_page_fragments(&visible_roots);
+            if let Some(first_p) = frags.iter().map(|f| f.page_idx).min() {
+                let min_top = frags
+                    .iter()
+                    .filter(|f| f.page_idx == first_p)
+                    .map(|f| f.top_y_pt)
+                    .fold(f64::INFINITY, f64::min);
+                let max_bot = frags
+                    .iter()
+                    .filter(|f| f.page_idx == first_p)
+                    .map(|f| f.top_y_pt + f.height_pt)
+                    .fold(f64::NEG_INFINITY, f64::max);
+                if min_top.is_finite() && max_bot.is_finite() {
+                    let top_slack = (min_top - self.content_top_pt).max(0.0);
+                    let bot_slack = (self.content_bottom_pt - max_bot).max(0.0);
+                    match scoped_va {
+                        VAlignIr::Center
+                            if top_slack > 12.0 && (top_slack - bot_slack).abs() <= 24.0 =>
+                        {
+                            return VAlignIr::Center;
+                        }
+                        VAlignIr::Bottom if top_slack > 24.0 && bot_slack <= 18.0 => {
+                            return VAlignIr::Bottom;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        VAlignIr::Top
+    }
+
+    fn find_first_scoped_valign(&self, nodes: &[TreeNode]) -> VAlignIr {
+        for node in nodes {
+            match node {
+                TreeNode::Element {
+                    elem,
+                    loc,
+                    children,
+                    ..
+                } => {
+                    if Self::is_page_furniture_elem(elem) || elem.is::<typst::layout::HideElem>() {
+                        continue;
+                    }
+                    let ch = self.scoped_style_chain(Some(*loc));
+                    let (_, va) = Self::alignment_to_ir(Smart::Custom(ch.get(AlignElem::alignment)));
+                    if va != VAlignIr::Top {
+                        return va;
+                    }
+                    let inner = self.find_first_scoped_valign(children);
+                    if inner != VAlignIr::Top {
+                        return inner;
+                    }
+                }
+                TreeNode::Group { children, .. } => {
+                    let inner = self.find_first_scoped_valign(children);
+                    if inner != VAlignIr::Top {
+                        return inner;
+                    }
+                }
+                _ => {}
+            }
+        }
+        VAlignIr::Top
+    }
+
+    pub(crate) fn zero_header_footer_paragraph_spacing(&mut self, blocks: &mut Vec<BlockNode>) {
+        for block in blocks.iter_mut() {
+            if let BlockNode::Paragraph {
+                id, content, style, ..
+            } = block
+            {
                 if !id.is_unset() {
                     self.reference_layout.remove(id);
                 }
@@ -273,7 +420,23 @@ impl<'a> ExtractorContext<'a> {
                 style.space_after_pt = 0.0;
                 style.resolved_par_spacing_pt = None;
                 style.resolved_par_leading_pt = None;
+                if content.is_empty() {
+                    style.line_spacing_pt = None;
+                }
             }
+        }
+        // Drop furniture slots consisting solely of empty spacer paragraphs (e.g. `#block(height: 100%)[]`).
+        if blocks.iter().all(|b| {
+            matches!(
+                b,
+                BlockNode::Paragraph {
+                    content,
+                    bookmark: None,
+                    ..
+                } if content.is_empty()
+            )
+        }) {
+            blocks.clear();
         }
     }
 
@@ -312,6 +475,8 @@ impl<'a> ExtractorContext<'a> {
     pub(crate) fn collect_header_footer_artifacts(
         &mut self,
         node: &TreeNode,
+        header_region_h_pt: f64,
+        footer_region_h_pt: f64,
         header: &mut Vec<BlockNode>,
         footer: &mut Vec<BlockNode>,
     ) {
@@ -320,14 +485,18 @@ impl<'a> ExtractorContext<'a> {
                 if let Some(artifact) = elem.to_packed::<ArtifactElem>() {
                     match artifact.kind.get(StyleChain::default()) {
                         ArtifactKind::Header => {
+                            let prev_h = self.active_region_height_pt.replace(header_region_h_pt);
                             let align = self.infer_node_halign(children).unwrap_or(HAlignIr::Left);
                             let blocks = self.extract_blocks_from_nodes(children, 0, align);
+                            self.active_region_height_pt = prev_h;
                             header.extend(blocks);
                             return;
                         }
                         ArtifactKind::Footer => {
+                            let prev_h = self.active_region_height_pt.replace(footer_region_h_pt);
                             let align = self.infer_node_halign(children).unwrap_or(HAlignIr::Left);
                             let blocks = self.extract_blocks_from_nodes(children, 0, align);
+                            self.active_region_height_pt = prev_h;
                             footer.extend(blocks);
                             return;
                         }
@@ -335,12 +504,24 @@ impl<'a> ExtractorContext<'a> {
                     }
                 }
                 for child in children {
-                    self.collect_header_footer_artifacts(child, header, footer);
+                    self.collect_header_footer_artifacts(
+                        child,
+                        header_region_h_pt,
+                        footer_region_h_pt,
+                        header,
+                        footer,
+                    );
                 }
             }
             TreeNode::Group { children, .. } => {
                 for child in children {
-                    self.collect_header_footer_artifacts(child, header, footer);
+                    self.collect_header_footer_artifacts(
+                        child,
+                        header_region_h_pt,
+                        footer_region_h_pt,
+                        header,
+                        footer,
+                    );
                 }
             }
             _ => {}

@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use typst::foundations::Content;
 use typst::introspection::Location;
 use typst::layout::grid::resolve::{CellGrid, Entry};
-use typst::layout::{Size, Sizing};
+use typst::layout::{Point, Size, Sizing};
 use typst::syntax::Span;
 use typst::visualize::Paint;
 
@@ -28,6 +28,7 @@ impl<'a> ExtractorContext<'a> {
         cell_grid: Option<&CellGrid>,
         span: Span,
         loc_opt: Option<Location>,
+        pos: Point,
         kind: TableKindIr,
         summary: Option<String>,
         children: &[TreeNode],
@@ -47,6 +48,11 @@ impl<'a> ExtractorContext<'a> {
         } else {
             SemanticRoleIr::Grid
         };
+        let in_quote = self.parent_node_stack.iter().any(|pid| {
+            self.origins
+                .get(pid)
+                .is_some_and(|o| matches!(o.role, Some(SemanticRoleIr::Quote)))
+        });
         let table_id = self.alloc_node_with_fragments(span, loc_opt, Some(role), children);
         self.parent_node_stack.push(table_id);
 
@@ -55,16 +61,78 @@ impl<'a> ExtractorContext<'a> {
         let mut cell_nodes_map: CellNodeMap = HashMap::new();
         Self::collect_table_cell_nodes(children, &mut cell_nodes_map);
 
+        let (bbox_x, _, bbox_w, _) = Self::estimate_nodes_bbox(children);
+        let table_origin_x = match children {
+            [TreeNode::Group { pos: gpos, .. }] => gpos.x.to_pt(),
+            _ => pos.x.to_pt(),
+        };
+        let col_w = self.current_column_width_pt();
+        let (col_count, col_gutter) = self.active_columns;
+        let ref_x = if bbox_w > 0.5 && bbox_x.is_finite() {
+            bbox_x.min(table_origin_x)
+        } else {
+            table_origin_x
+        };
+        let (left_bound, right_bound) = if let Some((gl, gr)) = self.active_group_bounds_pt {
+            if col_count > 1 && ref_x >= gl - 4.0 && bbox_w <= col_w + 12.0 {
+                let col_idx = (((ref_x - gl + 4.0).max(0.0)) / (col_w + col_gutter).max(1.0))
+                    .floor() as usize;
+                let cl = gl + (col_idx.min(col_count - 1) as f64) * (col_w + col_gutter);
+                (cl, cl + col_w)
+            } else {
+                (gl, gr.max(gl + 40.0))
+            }
+        } else if col_count > 1 && ref_x >= self.content_left_pt - 4.0 && bbox_w <= col_w + 12.0 {
+            let col_idx = (((ref_x - self.content_left_pt + 4.0).max(0.0))
+                / (col_w + col_gutter).max(1.0))
+            .floor() as usize;
+            let cl =
+                self.content_left_pt + (col_idx.min(col_count - 1) as f64) * (col_w + col_gutter);
+            (cl, cl + col_w)
+        } else {
+            (self.content_left_pt, self.content_right_pt)
+        };
+
+        // Capture untagged soft `#pad(...)` horizontal offsets (e.g. full-bleed `#pad(x: -36pt)`
+        // slide header/footer grids or `#pad(left: ...)` inside `#show` / `context`).
+        let untagged_pad_offset_pt =
+            if self.container_inset_pt <= 0.1 && list_level == 0 && !in_quote {
+                let raw_off = table_origin_x - left_bound;
+                if (-144.0..=-1.5).contains(&raw_off) || (2.0..=48.0).contains(&raw_off) {
+                    raw_off
+                } else {
+                    0.0
+                }
+            } else {
+                0.0
+            };
+
         let left_indent_pt = if list_level > 0 && inherited_align == HAlignIr::Left {
             15.0 * list_level as f64
         } else {
+            untagged_pad_offset_pt
+        };
+        let base_avail_w = if self.container_inset_pt <= 0.1
+            && let Some((l, r)) = self.active_group_bounds_pt
+        {
+            (r - l).max(40.0)
+        } else {
+            self.current_column_width_pt() - self.container_inset_pt
+        };
+        let content_avail_w = (base_avail_w - left_indent_pt.max(0.0)).max(120.0);
+        let single_outer_group_w = match children {
+            [TreeNode::Group { group, .. }] => group.frame.size().x.to_pt(),
+            _ => 0.0,
+        };
+        let laid_out_span_w = if bbox_w > 0.5 && bbox_x.is_finite() {
+            (bbox_x + bbox_w - table_origin_x.min(bbox_x)).max(bbox_w)
+        } else {
             0.0
         };
-        let content_avail_w =
-            (self.current_column_width_pt() - left_indent_pt - self.container_inset_pt).max(120.0);
-        let outer_group_w = Self::find_group_size(children).x.to_pt();
-        let avail_w_pt = if outer_group_w > 40.0 {
-            outer_group_w
+        let avail_w_pt = if single_outer_group_w > 40.0 {
+            single_outer_group_w
+        } else if laid_out_span_w > content_avail_w + 1.0 {
+            laid_out_span_w
         } else {
             content_avail_w
         };
@@ -170,12 +238,22 @@ impl<'a> ExtractorContext<'a> {
             }
         }
 
+        let total_table_w: f64 = dims.col_widths_pt.iter().sum();
+        let is_right_flushed_narrow = inherited_align == HAlignIr::Left
+            && list_level == 0
+            && left_indent_pt <= 0.5
+            && !dims.inferred_center_align
+            && total_table_w < (right_bound - left_bound) - 24.0
+            && table_origin_x - left_bound > 12.0
+            && (right_bound - (table_origin_x + total_table_w)).abs() <= 4.0;
         let align = if inherited_align == HAlignIr::Left && dims.inferred_center_align {
             HAlignIr::Center
+        } else if is_right_flushed_narrow {
+            HAlignIr::Right
         } else {
             inherited_align
         };
-        let eff_left_indent_pt = if align == HAlignIr::Center {
+        let eff_left_indent_pt = if align != HAlignIr::Left {
             0.0
         } else {
             left_indent_pt
@@ -338,12 +416,7 @@ impl<'a> ExtractorContext<'a> {
                             let ins = if is_semantic_table {
                                 SidesPtIr::default()
                             } else {
-                                SidesPtIr {
-                                    top: 1.0,
-                                    bottom: 1.0,
-                                    left: 0.0,
-                                    right: 2.0,
-                                }
+                                SidesPtIr::zero()
                             };
                             (ins, HAlignIr::Left, VAlignIr::Top, is_header, Vec::new())
                         };
@@ -366,17 +439,23 @@ impl<'a> ExtractorContext<'a> {
             }
         }
 
+        // Preserve Typst's exact `grid(gutter: ...)` row gutter in IR; Word line-box leading
+        // compensation belongs exclusively in `word-construct` (`WordCellMarginsDxa`).
         if !is_semantic_table && grid.has_gutter {
+            let base_font_pt = Self::resolve_length_pt(
+                self.scoped_style_chain(None).get(typst::text::TextElem::size).0,
+                11.0,
+            );
             let row_has_bottom_border = row_cells.iter().any(|c| c.borders.bottom.is_some());
             if row_has_bottom_border {
                 if y > 0
                     && let Some(Sizing::Rel(rel)) = grid.rows.get(raw_y - 1)
                     && rel.rel.is_zero()
                 {
-                    let row_gutter_pt = Self::resolve_length_pt(rel.abs, 11.0);
-                    if row_gutter_pt > 1.3 {
+                    let row_gutter_pt = Self::resolve_length_pt(rel.abs, base_font_pt);
+                    if row_gutter_pt > 0.0 {
                         for c in &mut row_cells {
-                            c.inset.top += row_gutter_pt - 1.3;
+                            c.inset.top += row_gutter_pt;
                         }
                     }
                 }
@@ -384,10 +463,10 @@ impl<'a> ExtractorContext<'a> {
                 && let Some(Sizing::Rel(rel)) = grid.rows.get(raw_y + 1)
                 && rel.rel.is_zero()
             {
-                let row_gutter_pt = Self::resolve_length_pt(rel.abs, 11.0);
-                if row_gutter_pt > 1.3 {
+                let row_gutter_pt = Self::resolve_length_pt(rel.abs, base_font_pt);
+                if row_gutter_pt > 0.0 {
                     for c in &mut row_cells {
-                        c.inset.bottom += row_gutter_pt - 1.3;
+                        c.inset.bottom += row_gutter_pt;
                     }
                 }
             }
