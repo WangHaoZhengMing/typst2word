@@ -139,6 +139,7 @@ impl<'a> DocxWriter<'a> {
                     );
                 }
                 BlockNode::CodeBlock {
+                    id,
                     lang,
                     lines,
                     fill,
@@ -146,6 +147,7 @@ impl<'a> DocxWriter<'a> {
                     ..
                 } => {
                     self.render_code_block_with_layout(
+                        *id,
                         lang.as_deref(),
                         lines,
                         fill.as_deref(),
@@ -175,8 +177,8 @@ impl<'a> DocxWriter<'a> {
         }
         let _ = write!(
             out,
-            r#"<w:jc w:val="center"/><w:spacing w:before="{}" w:after="{}"/>"#,
-            construct.caption_before_dxa, construct.caption_after_dxa,
+            r#"<w:jc w:val="center"/><w:spacing w:before="{}" w:after="{}" w:line="{}" w:lineRule="auto"/>"#,
+            construct.caption_before_dxa, construct.caption_after_dxa, construct.caption_line_dxa,
         );
         if construct.eff_indent_dxa > 0 {
             let _ = write!(out, r#"<w:ind w:left="{}"/>"#, construct.eff_indent_dxa);

@@ -20,7 +20,9 @@ impl<'a> DocxWriter<'a> {
         for setup in &setups {
             // An explicit empty part prevents inheriting a previous section's non-empty furniture,
             // while avoiding phantom empty header/footer height when no section has used one yet.
-            let has_header = !setup.header.is_empty();
+            // Also allocate a header part when a section overrides the document `<w:background>` fill.
+            let has_custom_bg = setup.fill != self.doc.page_setup.fill;
+            let has_header = !setup.header.is_empty() || has_custom_bg;
             let has_footer = !setup.footer.is_empty();
             let default_hdr = if has_header || seen_header {
                 Some(self.alloc_rel_id())
@@ -32,11 +34,13 @@ impl<'a> DocxWriter<'a> {
             } else {
                 None
             };
-            let first_hdr = (setup.different_first_page && setup.first_page_header.is_some())
+            let first_hdr = (setup.different_first_page
+                && (setup.first_page_header.is_some() || has_custom_bg))
                 .then(|| self.alloc_rel_id());
             let first_ftr = (setup.different_first_page && setup.first_page_footer.is_some())
                 .then(|| self.alloc_rel_id());
-            let even_hdr = (setup.different_odd_even && setup.even_page_header.is_some())
+            let even_hdr = (setup.different_odd_even
+                && (setup.even_page_header.is_some() || has_custom_bg))
                 .then(|| self.alloc_rel_id());
             let even_ftr = (setup.different_odd_even && setup.even_page_footer.is_some())
                 .then(|| self.alloc_rel_id());

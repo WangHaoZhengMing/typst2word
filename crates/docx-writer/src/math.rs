@@ -190,8 +190,24 @@ fn render_math_node(node: &WordMathNode, out: &mut String) {
             }
             out.push_str("</m:d>");
         }
-        WordMathNode::Matrix { rows } => {
+        WordMathNode::Matrix { rows, left_aligned } => {
             out.push_str("<m:m>");
+            if *left_aligned {
+                let max_cols = rows.iter().map(Vec::len).max().unwrap_or(0);
+                if max_cols > 0 {
+                    // `cases(...)` left-aligns every piecewise column (`<m:mcJc m:val="left"/>`)
+                    // and zeros Word's default 1em `<m:cSp>` minimum column spacing (`CT_MPr`).
+                    out.push_str(
+                        r#"<m:mPr><m:rSpRule m:val="0"/><m:cGpRule m:val="3"/><m:cSp m:val="0"/><m:cGp m:val="80"/><m:mcs>"#,
+                    );
+                    for _ in 0..max_cols {
+                        out.push_str(
+                            r#"<m:mc><m:mcPr><m:count m:val="1"/><m:mcJc m:val="left"/></m:mcPr></m:mc>"#,
+                        );
+                    }
+                    out.push_str("</m:mcs></m:mPr>");
+                }
+            }
             for row in rows {
                 out.push_str("<m:mr>");
                 for cell in row {
@@ -300,10 +316,14 @@ fn render_math_run(run: &WordMathRun, out: &mut String) {
         return;
     }
     let has_cjk = run.has_cjk;
+    // OMML collapses plain ASCII spaces inside math-italic `<m:r>` runs (`$space space$` -> `0pt`);
+    // mark whitespace-only math runs `<m:nor/>` and emit non-breaking spaces with `xml:space="preserve"`.
+    let is_whitespace_only = run.text.chars().all(char::is_whitespace);
+    let emit_nor = has_cjk || is_whitespace_only;
     out.push_str("<m:r>");
-    if has_cjk || run.script.is_some() || run.style.is_some() {
+    if emit_nor || run.script.is_some() || run.style.is_some() {
         out.push_str("<m:rPr>");
-        if has_cjk {
+        if emit_nor {
             out.push_str("<m:nor/>");
         }
         if let Some(scr) = run.script {
@@ -352,8 +372,23 @@ fn render_math_run(run: &WordMathRun, out: &mut String) {
         }
         out.push_str("</w:rPr>");
     }
-    out.push_str("<m:t>");
-    out.push_str(&escape_xml_text(&run.text));
+    let preserve_space =
+        is_whitespace_only || run.text.starts_with(' ') || run.text.ends_with(' ');
+    if preserve_space {
+        out.push_str(r#"<m:t xml:space="preserve">"#);
+    } else {
+        out.push_str("<m:t>");
+    }
+    if is_whitespace_only {
+        let nbsp_text: String = run
+            .text
+            .chars()
+            .map(|c| if c == ' ' { '\u{00A0}' } else { c })
+            .collect();
+        out.push_str(&escape_xml_text(&nbsp_text));
+    } else {
+        out.push_str(&escape_xml_text(&run.text));
+    }
     out.push_str("</m:t></m:r>");
 }
 

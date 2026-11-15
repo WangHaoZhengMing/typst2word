@@ -30,13 +30,36 @@ impl<'a> DocxWriter<'a> {
     pub(crate) fn render_inline(&mut self, inline: &InlineNode, out: &mut String) {
         match inline {
             InlineNode::Field { kind, format, content } => {
+                // In Word field syntax, general format switches (`\* ...`) must precede
+                // field-specific switches such as `PAGEREF`'s `\h` hyperlink switch.
                 let mut instruction = match kind {
                     word_construct::model::FieldKindIr::Page => "PAGE".to_string(),
                     word_construct::model::FieldKindIr::NumPages => "NUMPAGES".to_string(),
-                    word_construct::model::FieldKindIr::PageRef { bookmark } => format!("PAGEREF {bookmark} \\h"),
+                    word_construct::model::FieldKindIr::PageRef { bookmark } => {
+                        format!("PAGEREF {bookmark}")
+                    }
                 };
-                if let Some(format) = format { instruction.push_str(&format!(" \\* {format}")); }
-                let _ = write!(out, r#"<w:fldSimple w:instr="{}" w:dirty="true">"#, crate::xml::escape_xml(&instruction));
+                if let Some(format) = format {
+                    let _ = write!(instruction, " \\* {format}");
+                }
+                if matches!(kind, word_construct::model::FieldKindIr::PageRef { .. }) {
+                    instruction.push_str(" \\h");
+                }
+                // Header/footer `PAGE` and `NUMPAGES` fields recalculate silently when marked
+                // `w:dirty="true"`, whereas body `PAGEREF` fields marked `w:dirty="true"` trigger
+                // Word's modal "This document contains fields that may refer to other files"
+                // prompt on open. `PageRef` already carries Typst's evaluated page text in
+                // `content` and remains live for hyperlink navigation (`\h`) and manual update.
+                let dirty_attr = if matches!(kind, word_construct::model::FieldKindIr::PageRef { .. }) {
+                    ""
+                } else {
+                    r#" w:dirty="true""#
+                };
+                let _ = write!(
+                    out,
+                    r#"<w:fldSimple w:instr="{}"{dirty_attr}>"#,
+                    crate::xml::escape_xml(&instruction)
+                );
                 self.render_inlines(content, out);
                 out.push_str("</w:fldSimple>");
             }

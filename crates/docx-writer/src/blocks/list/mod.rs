@@ -6,7 +6,9 @@ use std::fmt::Write as _;
 
 use word_construct::list::{ListSequenceSource, solve_list_sequence_construct};
 use crate::writer::DocxWriter;
-use word_construct::model::{BlockNode, EnumItemIr, InlineNode, ListItemIr, TermItemIr, TextRunIr};
+use word_construct::model::{
+    BlockNode, EnumItemIr, InlineNode, ListItemIr, NodeId, TermItemIr, TextRunIr,
+};
 
 impl<'a> DocxWriter<'a> {
     /// `BlockNode::List` -> bullet-numbered paragraphs (`numId` 1).
@@ -20,14 +22,23 @@ impl<'a> DocxWriter<'a> {
         hanging_pt: f64,
         out: &mut String,
     ) {
-        self.render_list_collapsed(
-            items, tight, level, spacing_pt, indent_pt, hanging_pt, false, out,
+        self.render_list_collapsed_with_id(
+            NodeId::UNSET,
+            items,
+            tight,
+            level,
+            spacing_pt,
+            indent_pt,
+            hanging_pt,
+            false,
+            out,
         );
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn render_list_collapsed(
+    pub(crate) fn render_list_collapsed_with_id(
         &mut self,
+        id: NodeId,
         items: &[ListItemIr],
         tight: bool,
         level: usize,
@@ -45,6 +56,44 @@ impl<'a> DocxWriter<'a> {
             indent_pt,
             hanging_pt,
             None,
+            None,
+        );
+        if collapse_before {
+            if let Some(first) = constructs.first_mut() {
+                first.before_dxa = 0;
+            }
+        } else if !id.is_unset()
+            && let Some(&before_dxa) = self.doc.solved_block_before_dxa.get(&id)
+            && let Some(first) = constructs.first_mut()
+        {
+            first.before_dxa = first.before_dxa.max(before_dxa);
+        }
+        for item_construct in &constructs {
+            self.render_list_or_enum_item_blocks(item_construct.blocks, item_construct, out);
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn render_list_in_box(
+        &mut self,
+        items: &[ListItemIr],
+        tight: bool,
+        level: usize,
+        spacing_pt: Option<f64>,
+        indent_pt: f64,
+        hanging_pt: f64,
+        collapse_before: bool,
+        trailing_after_dxa: Option<i64>,
+        out: &mut String,
+    ) {
+        let mut constructs = solve_list_sequence_construct(
+            ListSequenceSource::Bullet { items },
+            tight,
+            level,
+            spacing_pt,
+            indent_pt,
+            hanging_pt,
+            trailing_after_dxa,
             None,
         );
         if collapse_before
@@ -96,14 +145,24 @@ impl<'a> DocxWriter<'a> {
         hanging_pt: f64,
         out: &mut String,
     ) {
-        self.render_enum_collapsed(
-            items, tight, level, spacing_pt, indent_pt, hanging_pt, false, out,
+        self.render_enum_collapsed_with_id(
+            NodeId::UNSET,
+            items,
+            tight,
+            level,
+            spacing_pt,
+            indent_pt,
+            hanging_pt,
+            false,
+            false,
+            out,
         );
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn render_enum_collapsed(
+    pub(crate) fn render_enum_collapsed_with_id(
         &mut self,
+        id: NodeId,
         items: &[EnumItemIr],
         tight: bool,
         level: usize,
@@ -111,6 +170,7 @@ impl<'a> DocxWriter<'a> {
         indent_pt: f64,
         hanging_pt: f64,
         collapse_before: bool,
+        after_table_block: bool,
         out: &mut String,
     ) {
         let ilvl = level.min(8);
@@ -128,6 +188,55 @@ impl<'a> DocxWriter<'a> {
             indent_pt,
             hanging_pt,
             None,
+            None,
+        );
+        if collapse_before {
+            if let Some(first) = constructs.first_mut() {
+                first.before_dxa = 0;
+            }
+        } else if !id.is_unset()
+            && let Some(&before_dxa) = self.doc.solved_block_before_dxa.get(&id)
+            && let Some(first) = constructs.first_mut()
+        {
+            first.before_dxa = first.before_dxa.max(before_dxa);
+        } else if after_table_block
+            && let Some(first) = constructs.first_mut()
+        {
+            first.before_dxa = first.before_dxa.max(first.item_gap_dxa.max(112));
+        }
+        for item_construct in &constructs {
+            self.render_list_or_enum_item_blocks(item_construct.blocks, item_construct, out);
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn render_enum_in_box(
+        &mut self,
+        items: &[EnumItemIr],
+        tight: bool,
+        level: usize,
+        spacing_pt: Option<f64>,
+        indent_pt: f64,
+        hanging_pt: f64,
+        collapse_before: bool,
+        trailing_after_dxa: Option<i64>,
+        out: &mut String,
+    ) {
+        let ilvl = level.min(8);
+        let start_val = items.first().and_then(|it| it.number).unwrap_or(1);
+        let num_id = self.alloc_enum_num_id(ilvl, start_val);
+        let mut constructs = solve_list_sequence_construct(
+            ListSequenceSource::DecimalEnum {
+                items,
+                num_id,
+                start_val,
+            },
+            tight,
+            level,
+            spacing_pt,
+            indent_pt,
+            hanging_pt,
+            trailing_after_dxa,
             None,
         );
         if collapse_before

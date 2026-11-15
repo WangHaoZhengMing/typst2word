@@ -33,22 +33,26 @@ impl<'a> DocxWriter<'a> {
                     Some(BlockNode::PageBreak | BlockNode::ColumnBreak)
                 );
             if let BlockNode::Heading {
+                id,
                 level,
                 numbering,
                 content,
                 bookmark,
                 align,
+                left_indent_pt,
                 box_style,
-                ..
             } = block
             {
-                let compact_after = matches!(blocks.get(idx + 1), Some(BlockNode::Paragraph { .. }));
+                let compact_after =
+                    matches!(blocks.get(idx + 1), Some(BlockNode::Paragraph { .. }));
                 self.render_heading_inner(
+                    *id,
                     *level,
                     numbering.as_deref(),
                     content,
                     bookmark.as_deref(),
                     *align,
+                    *left_indent_pt,
                     box_style.as_ref(),
                     collapse_before,
                     compact_after,
@@ -72,6 +76,7 @@ impl<'a> DocxWriter<'a> {
                 continue;
             }
             if let BlockNode::Figure {
+                id,
                 body,
                 caption,
                 caption_pos,
@@ -83,13 +88,28 @@ impl<'a> DocxWriter<'a> {
                     blocks.get(idx + 1),
                     Some(BlockNode::Paragraph { style, .. }) if style.sticky
                 );
+                if !collapse_before
+                    && !id.is_unset()
+                    && let Some(&before_dxa) = self.doc.solved_block_before_dxa.get(id)
+                    && before_dxa > 20
+                {
+                    let spacer_after = (before_dxa - 40).max(0);
+                    out.push_str(&format!(
+                        r#"<w:p><w:pPr><w:spacing w:before="0" w:after="{spacer_after}" w:line="40" w:lineRule="exact"/><w:rPr><w:sz w:val="2"/><w:szCs w:val="2"/></w:rPr></w:pPr></w:p>"#,
+                    ));
+                }
+                let after_dxa = if id.is_unset() {
+                    60
+                } else {
+                    self.doc.solved_block_after_dxa.get(id).copied().unwrap_or(60)
+                };
                 self.render_figure_with_layout_and_keep(
                     body,
                     caption.as_deref(),
                     *caption_pos,
                     bookmark.as_deref(),
                     0,
-                    60,
+                    after_dxa,
                     next_keep,
                     out,
                 );
@@ -97,15 +117,16 @@ impl<'a> DocxWriter<'a> {
             }
             match block {
                 BlockNode::List {
+                    id,
                     items,
                     tight,
                     level,
                     spacing_pt,
                     indent_pt,
                     hanging_pt,
-                    ..
                 } => {
-                    self.render_list_collapsed(
+                    self.render_list_collapsed_with_id(
+                        *id,
                         items,
                         *tight,
                         *level,
@@ -117,15 +138,18 @@ impl<'a> DocxWriter<'a> {
                     );
                 }
                 BlockNode::Enum {
+                    id,
                     items,
                     tight,
                     level,
                     spacing_pt,
                     indent_pt,
                     hanging_pt,
-                    ..
                 } => {
-                    self.render_enum_collapsed(
+                    let after_table_block =
+                        idx > 0 && Self::is_table_backed_block(&blocks[idx - 1]);
+                    self.render_enum_collapsed_with_id(
+                        *id,
                         items,
                         *tight,
                         *level,
@@ -133,6 +157,7 @@ impl<'a> DocxWriter<'a> {
                         *indent_pt,
                         *hanging_pt,
                         collapse_before,
+                        after_table_block,
                         out,
                     );
                 }
@@ -165,8 +190,16 @@ impl<'a> DocxWriter<'a> {
                     length_pt,
                     stroke,
                     align,
+                    left_indent_pt,
                 } => {
-                    self.render_horizontal_rule(*length_pt, stroke, *align, collapse_before, out);
+                    self.render_horizontal_rule(
+                        *length_pt,
+                        stroke,
+                        *align,
+                        *left_indent_pt,
+                        collapse_before,
+                        out,
+                    );
                 }
                 _ => self.render_block(block, out),
             }
@@ -176,9 +209,19 @@ impl<'a> DocxWriter<'a> {
             if Self::is_table_backed_block(block)
                 && blocks.get(idx + 1).is_some_and(Self::is_table_backed_block)
             {
-                out.push_str(
-                    r#"<w:p><w:pPr><w:spacing w:before="0" w:after="40" w:line="40" w:lineRule="exact"/><w:rPr><w:sz w:val="2"/><w:szCs w:val="2"/></w:rPr></w:pPr></w:p>"#,
-                );
+                let prev_id = block.node_id();
+                let sep_after = if prev_id.is_unset() {
+                    40
+                } else {
+                    self.doc
+                        .solved_block_after_dxa
+                        .get(&prev_id)
+                        .copied()
+                        .unwrap_or(40)
+                };
+                out.push_str(&format!(
+                    r#"<w:p><w:pPr><w:spacing w:before="0" w:after="{sep_after}" w:line="40" w:lineRule="exact"/><w:rPr><w:sz w:val="2"/><w:szCs w:val="2"/></w:rPr></w:pPr></w:p>"#,
+                ));
             }
         }
     }
@@ -193,20 +236,23 @@ impl<'a> DocxWriter<'a> {
                 self.render_title(content, *align, out);
             }
             BlockNode::Heading {
+                id,
                 level,
                 numbering,
                 content,
                 bookmark,
                 align,
+                left_indent_pt,
                 box_style,
-                ..
             } => {
                 self.render_heading(
+                    *id,
                     *level,
                     numbering.as_deref(),
                     content,
                     bookmark.as_deref(),
                     *align,
+                    *left_indent_pt,
                     box_style.as_ref(),
                     out,
                 );
@@ -272,6 +318,7 @@ impl<'a> DocxWriter<'a> {
                 self.render_quote(body, attribution.as_deref(), out);
             }
             BlockNode::CodeBlock {
+                id,
                 lang,
                 lines,
                 fill,
@@ -279,6 +326,7 @@ impl<'a> DocxWriter<'a> {
                 ..
             } => {
                 self.render_code_block(
+                    *id,
                     lang.as_deref(),
                     lines,
                     fill.as_deref(),
@@ -323,8 +371,16 @@ impl<'a> DocxWriter<'a> {
                 length_pt,
                 stroke,
                 align,
+                left_indent_pt,
             } => {
-                self.render_horizontal_rule(*length_pt, stroke, *align, false, out);
+                self.render_horizontal_rule(
+                    *length_pt,
+                    stroke,
+                    *align,
+                    *left_indent_pt,
+                    false,
+                    out,
+                );
             }
             BlockNode::PageBreak => {
                 out.push_str(
@@ -358,22 +414,25 @@ impl<'a> DocxWriter<'a> {
                 let prev_cols = self.active_columns;
                 self.active_columns = (*count, *gutter_pt);
                 if let Some(BlockNode::Heading {
+                    id,
                     level,
                     numbering,
                     content,
                     bookmark,
                     align,
+                    left_indent_pt,
                     box_style,
-                    ..
                 }) = body.first()
                 {
                     let compact_after = matches!(body.get(1), Some(BlockNode::Paragraph { .. }));
                     self.render_heading_inner(
+                        *id,
                         *level,
                         numbering.as_deref(),
                         content,
                         bookmark.as_deref(),
                         *align,
+                        *left_indent_pt,
                         box_style.as_ref(),
                         true,
                         compact_after,

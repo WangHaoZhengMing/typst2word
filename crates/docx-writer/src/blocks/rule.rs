@@ -13,6 +13,7 @@ impl<'a> DocxWriter<'a> {
         length_pt: f64,
         stroke: &StrokeIr,
         align: HAlignIr,
+        left_indent_pt: f64,
         collapse_before: bool,
         out: &mut String,
     ) {
@@ -31,9 +32,18 @@ impl<'a> DocxWriter<'a> {
                     format!(r#"<w:ind w:left="{half}" w:right="{half}"/>"#)
                 }
                 HAlignIr::Left | HAlignIr::Justify => {
-                    format!(r#"<w:ind w:right="{}"/>"#, pt_to_dxa(gap_pt))
+                    let left_dxa = pt_to_dxa(left_indent_pt);
+                    let right_gap_pt = (content_w_pt - left_indent_pt - length_pt).max(0.0);
+                    let right_dxa = pt_to_dxa(right_gap_pt);
+                    if left_dxa != 0 {
+                        format!(r#"<w:ind w:left="{left_dxa}" w:right="{right_dxa}"/>"#)
+                    } else {
+                        format!(r#"<w:ind w:right="{right_dxa}"/>"#)
+                    }
                 }
             }
+        } else if left_indent_pt.abs() > 0.5 {
+            format!(r#"<w:ind w:left="{}"/>"#, pt_to_dxa(left_indent_pt))
         } else {
             String::new()
         };

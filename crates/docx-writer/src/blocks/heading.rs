@@ -4,7 +4,8 @@ use std::fmt::Write as _;
 
 use word_construct::heading::HeadingConstruct;
 use crate::writer::DocxWriter;
-use word_construct::model::{ContainerStyleIr, HAlignIr, InlineNode, StrokeIr};
+use word_construct::model::{ContainerStyleIr, HAlignIr, InlineNode, NodeId, StrokeIr};
+use word_construct::units::pt_to_dxa;
 
 impl<'a> DocxWriter<'a> {
     /// `BlockNode::Title` -> `Title` styled paragraph.
@@ -25,33 +26,47 @@ impl<'a> DocxWriter<'a> {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn render_heading(
         &mut self,
+        id: NodeId,
         level: usize,
         numbering: Option<&str>,
         content: &[InlineNode],
         bookmark: Option<&str>,
         align: HAlignIr,
+        left_indent_pt: f64,
         box_style: Option<&ContainerStyleIr>,
         out: &mut String,
     ) {
         self.render_heading_inner(
-            level, numbering, content, bookmark, align, box_style, false, false, out,
+            id,
+            level,
+            numbering,
+            content,
+            bookmark,
+            align,
+            left_indent_pt,
+            box_style,
+            false,
+            false,
+            out,
         );
     }
 
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn render_heading_inner(
         &mut self,
+        id: NodeId,
         level: usize,
         numbering: Option<&str>,
         content: &[InlineNode],
         bookmark: Option<&str>,
         align: HAlignIr,
+        left_indent_pt: f64,
         box_style: Option<&ContainerStyleIr>,
         collapse_before: bool,
         compact_after: bool,
         out: &mut String,
     ) {
-        let construct = HeadingConstruct::solve(
+        let mut construct = HeadingConstruct::solve(
             level,
             numbering,
             content,
@@ -59,6 +74,17 @@ impl<'a> DocxWriter<'a> {
             collapse_before,
             compact_after,
         );
+        if !collapse_before
+            && !id.is_unset()
+            && let Some(&before_dxa) = self.doc.solved_block_before_dxa.get(&id)
+        {
+            construct.before_dxa = construct.before_dxa.max(before_dxa);
+        }
+        if !id.is_unset()
+            && let Some(&after_dxa) = self.doc.solved_block_after_dxa.get(&id)
+        {
+            construct.after_dxa = after_dxa;
+        }
 
         out.push_str("<w:p><w:pPr>");
         let _ = write!(out, r#"<w:pStyle w:val="{}"/>"#, construct.style_id);
@@ -83,6 +109,27 @@ impl<'a> DocxWriter<'a> {
             r#"<w:spacing w:before="{}" w:after="{}" w:line="{}" w:lineRule="auto"/>"#,
             construct.before_dxa, construct.after_dxa, construct.line_dxa
         );
+        if construct.align == HAlignIr::Left {
+            let base_left_dxa = if left_indent_pt.abs() > 0.5 {
+                pt_to_dxa(left_indent_pt)
+            } else {
+                0
+            };
+            let hang_dxa = if box_style.is_none() {
+                construct.hanging_dxa
+            } else {
+                0
+            };
+            if hang_dxa > 0 {
+                let _ = write!(
+                    out,
+                    r#"<w:ind w:left="{}" w:hanging="{hang_dxa}"/>"#,
+                    base_left_dxa + hang_dxa
+                );
+            } else if base_left_dxa != 0 {
+                let _ = write!(out, r#"<w:ind w:left="{base_left_dxa}"/>"#);
+            }
+        }
         if construct.align != HAlignIr::Left {
             Self::render_jc(construct.align, out);
         }

@@ -6,7 +6,7 @@ use word_construct::list::{ListItemConstruct, ListMarkerConstruct};
 use word_construct::paragraph::{is_only_inline_equation, paragraph_mark_rpr_sz_half_pt};
 use word_construct::table::solve_list_item_child_table;
 use crate::writer::DocxWriter;
-use word_construct::model::{BlockNode, InlineNode, NodeId, ParagraphStyleIr, TableIr, TableKindIr};
+use word_construct::model::{BlockNode, InlineNode, NodeId, ParagraphStyleIr, TableIr};
 use crate::xml::escape_xml;
 
 impl<'a> DocxWriter<'a> {
@@ -16,10 +16,6 @@ impl<'a> DocxWriter<'a> {
         ctx: &ListItemConstruct<'_>,
         out: &mut String,
     ) {
-        let followed_by_grid_table = matches!(
-            blocks.get(1),
-            Some(BlockNode::Table(t)) if t.kind != TableKindIr::SemanticTable
-        );
         let item_layout = ctx.solve_item_layout();
         let after_dxa = item_layout.first_after_dxa;
         let hanging_dxa = item_layout.hanging_dxa;
@@ -33,9 +29,6 @@ impl<'a> DocxWriter<'a> {
             );
             return;
         }
-
-        let keep_first_with_next = followed_by_grid_table
-            && matches!(blocks.get(1), Some(BlockNode::Table(t)) if t.rows.len() <= 4);
 
         for (idx, b) in blocks.iter().enumerate() {
             match b {
@@ -54,7 +47,6 @@ impl<'a> DocxWriter<'a> {
                         indent_left,
                         hanging_dxa,
                         after_dxa,
-                        keep_first_with_next,
                         out,
                     );
                 }
@@ -81,9 +73,8 @@ impl<'a> DocxWriter<'a> {
                             Some(BlockNode::List { .. } | BlockNode::Enum { .. })
                         );
                     if idx + 1 == blocks.len() && !ctx.tight {
-                        cont_style.space_after_pt = cont_style
-                            .space_after_pt
-                            .max(ctx.item_end_after_dxa as f64 / 20.0);
+                        let item_end_pt = ctx.item_end_after_dxa as f64 / 20.0;
+                        cont_style.space_after_pt = cont_style.space_after_pt.max(item_end_pt);
                     }
                     self.render_paragraph_with_keep_next(
                         *id,
@@ -95,34 +86,73 @@ impl<'a> DocxWriter<'a> {
                     );
                 }
                 BlockNode::CodeBlock {
+                    id,
                     lang,
                     lines,
                     fill,
                     stroke,
                     ..
                 } => {
-                    self.render_code_block_indented(
-                        lang.as_deref(),
-                        lines,
-                        fill.as_deref(),
-                        stroke.as_ref(),
-                        indent_left,
-                        out,
-                    );
+                    if idx == 0 {
+                        let mut body_xml = String::new();
+                        self.render_code_block(
+                            *id,
+                            lang.as_deref(),
+                            lines,
+                            fill.as_deref(),
+                            stroke.as_ref(),
+                            &mut body_xml,
+                        );
+                        self.render_list_item_marker_beside_block(
+                            ctx,
+                            indent_left,
+                            hanging_dxa,
+                            0,
+                            &body_xml,
+                            out,
+                        );
+                    } else {
+                        self.render_code_block_indented(
+                            *id,
+                            lang.as_deref(),
+                            lines,
+                            fill.as_deref(),
+                            stroke.as_ref(),
+                            indent_left,
+                            out,
+                        );
+                    }
                 }
                 BlockNode::ShapeBlock(shape) => {
-                    self.render_shape_block_indented(shape, indent_left, out);
+                    if idx == 0 {
+                        let top_pad_dxa =
+                            word_construct::units::pt_to_dxa(shape.inset.top * 0.5).clamp(0, 160);
+                        let mut body_xml = String::new();
+                        self.render_shape_block(shape, &mut body_xml);
+                        self.render_list_item_marker_beside_block(
+                            ctx,
+                            indent_left,
+                            hanging_dxa,
+                            top_pad_dxa,
+                            &body_xml,
+                            out,
+                        );
+                    } else {
+                        let shape_after_dxa = if idx + 1 == blocks.len() {
+                            (!ctx.tight).then_some(ctx.item_end_after_dxa)
+                        } else {
+                            Some(ctx.item_gap_dxa.max(180))
+                        };
+                        self.render_shape_block_indented_with_after(
+                            shape,
+                            indent_left,
+                            shape_after_dxa,
+                            out,
+                        );
+                    }
                 }
                 BlockNode::Table(tbl) => {
-                    let is_last_block = idx + 1 == blocks.len();
-                    let bottom_pad_pt = if is_last_block && ctx.item_gap_dxa > 0 && ctx.is_last_top
-                    {
-                        4.5
-                    } else if !is_last_block && tbl.kind != TableKindIr::SemanticTable {
-                        5.5
-                    } else {
-                        0.0
-                    };
+                    let bottom_pad_pt = ctx.solve_child_table_bottom_pad_pt(idx, tbl);
                     self.render_list_item_child_table(tbl, indent_left, bottom_pad_pt, out);
                 }
                 BlockNode::List {
@@ -195,7 +225,7 @@ impl<'a> DocxWriter<'a> {
                     ..
                 } => {
                     let caption_after_dxa = if idx + 1 == blocks.len() && !ctx.tight {
-                        180
+                        ctx.item_end_after_dxa
                     } else {
                         60
                     };
@@ -227,7 +257,6 @@ impl<'a> DocxWriter<'a> {
         indent_left: usize,
         hanging_dxa: i64,
         after_dxa: i64,
-        keep_with_next: bool,
         out: &mut String,
     ) {
         // Resolve calibrated `w:line` directly from `WordDocument` (`FontFaceMetricsIr` +
@@ -252,10 +281,13 @@ impl<'a> DocxWriter<'a> {
         } else {
             format!(r#"<w:tabs><w:tab w:val="num" w:pos="{indent_left}"/></w:tabs>"#)
         };
-        let keep_next_xml = if keep_with_next {
-            "<w:keepNext/><w:keepLines/>"
-        } else {
-            "<w:keepLines/>"
+        // Honor semantic `sticky` (`<w:keepNext/>`) and `!breakable` (`<w:keepLines/>`) instead of
+        // forcing multi-line items or parent stems of breakable child grids onto the next page.
+        let keep_next_xml = match (style.sticky, !style.breakable) {
+            (true, true) => "<w:keepNext/><w:keepLines/>",
+            (true, false) => "<w:keepNext/>",
+            (false, true) => "<w:keepLines/>",
+            (false, false) => "",
         };
         let before_dxa = ctx.before_dxa;
         let num_id = ctx.num_id;
@@ -316,6 +348,78 @@ impl<'a> DocxWriter<'a> {
                 out.push_str("</w:p>");
             }
         }
+    }
+
+    /// When a `List` / `Enum` item begins directly with a block object (`+ #coder(...)` or
+    /// `+ ```java ... ````) rather than a `Paragraph`, place the list marker (`<w:numPr>` or
+    /// custom prefix) in a top-aligned left column beside the block so Word renders `1.` / `•`
+    /// at the top of the block instead of dropping it or baseline-aligning it to the bottom.
+    fn render_list_item_marker_beside_block(
+        &self,
+        ctx: &ListItemConstruct<'_>,
+        indent_left: usize,
+        hanging_dxa: i64,
+        marker_top_pad_dxa: i64,
+        body_xml: &str,
+        out: &mut String,
+    ) {
+        let marker_col_dxa = (indent_left as i64).max(260);
+        let body_col_dxa = (self.content_width_dxa() - marker_col_dxa).max(400);
+        let total_w_dxa = marker_col_dxa + body_col_dxa;
+        let marker_left_dxa = (indent_left as i64 - hanging_dxa).max(0);
+        let tab_pos = (marker_col_dxa - 20).max(marker_left_dxa + 120);
+        let cell_hang = (tab_pos - marker_left_dxa).max(0);
+        let before_dxa = ctx.before_dxa;
+
+        let _ = write!(
+            out,
+            concat!(
+                r#"<w:tbl><w:tblPr><w:tblW w:w="{total_w_dxa}" w:type="dxa"/>"#,
+                r#"<w:tblBorders><w:top w:val="none" w:sz="0" w:space="0" w:color="auto"/>"#,
+                r#"<w:left w:val="none" w:sz="0" w:space="0" w:color="auto"/>"#,
+                r#"<w:bottom w:val="none" w:sz="0" w:space="0" w:color="auto"/>"#,
+                r#"<w:right w:val="none" w:sz="0" w:space="0" w:color="auto"/>"#,
+                r#"<w:insideH w:val="none" w:sz="0" w:space="0" w:color="auto"/>"#,
+                r#"<w:insideV w:val="none" w:sz="0" w:space="0" w:color="auto"/></w:tblBorders>"#,
+                r#"<w:tblLayout w:type="fixed"/>"#,
+                r#"<w:tblCellMar><w:top w:w="0" w:type="dxa"/><w:left w:w="0" w:type="dxa"/>"#,
+                r#"<w:bottom w:w="0" w:type="dxa"/><w:right w:w="0" w:type="dxa"/></w:tblCellMar></w:tblPr>"#,
+                r#"<w:tblGrid><w:gridCol w:w="{marker_col_dxa}"/><w:gridCol w:w="{body_col_dxa}"/></w:tblGrid>"#,
+                r#"<w:tr><w:tc><w:tcPr><w:tcW w:w="{marker_col_dxa}" w:type="dxa"/>"#,
+                r#"<w:tcMar><w:top w:w="{marker_top_pad_dxa}" w:type="dxa"/><w:left w:w="0" w:type="dxa"/>"#,
+                r#"<w:bottom w:w="0" w:type="dxa"/><w:right w:w="0" w:type="dxa"/></w:tcMar>"#,
+                r#"<w:vAlign w:val="top"/></w:tcPr><w:p><w:pPr>"#
+            ),
+            total_w_dxa = total_w_dxa,
+            marker_col_dxa = marker_col_dxa,
+            body_col_dxa = body_col_dxa,
+            marker_top_pad_dxa = marker_top_pad_dxa,
+        );
+        match ctx.marker {
+            ListMarkerConstruct::CustomPrefix(prefix) => {
+                let _ = write!(
+                    out,
+                    r#"<w:spacing w:before="{before_dxa}" w:after="0" w:line="220" w:lineRule="auto"/><w:ind w:left="{marker_left_dxa}"/></w:pPr><w:r><w:t>{}</w:t></w:r></w:p>"#,
+                    escape_xml(prefix)
+                );
+            }
+            ListMarkerConstruct::NumberedLevel(num_ilvl) => {
+                let num_id = ctx.num_id;
+                let _ = write!(
+                    out,
+                    r#"<w:numPr><w:ilvl w:val="{num_ilvl}"/><w:numId w:val="{num_id}"/></w:numPr><w:tabs><w:tab w:val="num" w:pos="{tab_pos}"/></w:tabs><w:spacing w:before="{before_dxa}" w:after="0" w:line="220" w:lineRule="auto"/><w:ind w:left="{tab_pos}" w:hanging="{cell_hang}"/></w:pPr></w:p>"#,
+                );
+            }
+        }
+        let trail_p = if !body_xml.contains("<w:p") || !body_xml.ends_with("</w:p>") {
+            r#"<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="20" w:lineRule="exact"/><w:rPr><w:sz w:val="2"/><w:szCs w:val="2"/></w:rPr></w:pPr></w:p>"#
+        } else {
+            ""
+        };
+        let _ = write!(
+            out,
+            r#"</w:tc><w:tc><w:tcPr><w:tcW w:w="{body_col_dxa}" w:type="dxa"/><w:vAlign w:val="top"/></w:tcPr>{body_xml}{trail_p}</w:tc></w:tr></w:tbl>"#
+        );
     }
 
     fn render_list_item_child_table(

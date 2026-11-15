@@ -117,6 +117,15 @@ fn main() -> ExitCode {
                 r.links_count,
                 r.unsupported_elements.len()
             );
+            let mut seen_compiler_warnings = std::collections::BTreeSet::new();
+            for w in &r.compiler_warnings {
+                if seen_compiler_warnings.insert(w.as_str()) {
+                    eprintln!("  ⚠️  {w}");
+                }
+            }
+            for w in &r.font_fallback_warnings {
+                eprintln!("  ⚠️  {w}");
+            }
             for unsup in &r.unsupported_elements {
                 println!("  ! {}", unsup.display_badge());
             }

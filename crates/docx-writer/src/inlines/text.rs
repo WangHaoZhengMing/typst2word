@@ -56,9 +56,12 @@ pub(crate) fn render_text_run_xml_with_spacing(
     }
     if let (Some(bdr), Some(sz)) = (&run.border, construct.border_sz_eighths_pt) {
         let val = DocxWriter::dash_to_w_border_val(&bdr.dash);
+        // `w:space="0"` places `<w:bdr>` on the font's OS/2/hhea cell (which already provides
+        // internal clearance above cap-height and below baseline, matching Word's native character
+        // border) without inflating `w:lineRule="auto"` line height.
         let _ = write!(
             out,
-            r#"<w:bdr w:val="{val}" w:sz="{sz}" w:space="2" w:color="{}"/>"#,
+            r#"<w:bdr w:val="{val}" w:sz="{sz}" w:space="0" w:color="{}"/>"#,
             bdr.color
         );
     }

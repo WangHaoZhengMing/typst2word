@@ -58,9 +58,14 @@ impl<'a> DocxWriter<'a> {
         if construct.rtl {
             out.push_str("<w:bidi/>");
         }
+        let line_rule = if construct.line_rule_exact {
+            "exact"
+        } else {
+            "auto"
+        };
         let _ = write!(
             out,
-            r#"<w:spacing w:before="{}" w:after="{}" w:line="{}" w:lineRule="auto"/>"#,
+            r#"<w:spacing w:before="{}" w:after="{}" w:line="{}" w:lineRule="{line_rule}"/>"#,
             construct.before_dxa, construct.after_dxa, construct.line_dxa
         );
         match construct.indentation {

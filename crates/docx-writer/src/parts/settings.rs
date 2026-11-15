@@ -27,12 +27,22 @@ impl<'a> DocxWriter<'a> {
         } else {
             ""
         };
+        let has_bg = self.doc.page_setup.fill.is_some()
+            || self.doc.sections.iter().any(|s| s.page_setup.fill.is_some());
+        let bg_pr = if has_bg {
+            "\n  <w:displayBackgroundShape/>"
+        } else {
+            ""
+        };
         if self.doc.has_cjk {
             format!(
                 r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math">
-  <w:zoom w:percent="100"/>
-  <w:defaultTabStop w:val="720"/>
+  <w:zoom w:percent="100"/>{bg_pr}
+  <w:defaultTabStop w:val="720"/>"#,
+            )
+            + &format!(
+                r#"
   <w:characterSpacingControl w:val="doNotCompress"/>
   <w:doNotExpandShiftReturn/>{mirror_pr}{even_odd_pr}{fn_pr}
   <w:compat>
@@ -61,7 +71,7 @@ impl<'a> DocxWriter<'a> {
             format!(
                 r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math">
-  <w:zoom w:percent="100"/>
+  <w:zoom w:percent="100"/>{bg_pr}
   <w:defaultTabStop w:val="720"/>
   <w:characterSpacingControl w:val="doNotCompress"/>
   <w:autoSpaceDE w:val="1"/>

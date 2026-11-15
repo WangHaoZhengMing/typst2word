@@ -3,9 +3,10 @@
 use crate::drawingml::geometry::build_cust_geom_xml;
 use crate::drawingml::line::build_ln_xml;
 use crate::drawingml::next_drawing_id;
-use crate::drawingml::textbox::render_textbox_blocks;
+use crate::drawingml::textbox::render_textbox_blocks_with_first_override;
 use crate::writer::DocxWriter;
-use word_construct::model::{BlockNode, CurveSegmentIr, ShapeIr, ShapeKindIr, SidesPtIr};
+use word_construct::model::{BlockNode, CurveSegmentIr, ShapeIr, ShapeKindIr};
+use word_construct::shape::SolvedShapeGeometry;
 use word_construct::units::pt_to_emu;
 
 /// Build a `<w:r><w:drawing>...</w:drawing></w:r>` XML fragment for a `BlockNode::ShapeBlock`.
@@ -54,7 +55,7 @@ fn shape_to_drawingml_run_inner(
         None,
         cx,
         cy,
-        Some(solved.body_inset_pt),
+        Some(solved),
     );
 
     if let Some((dx_pt, dy_pt)) = shape.placed_offset_pt {
@@ -156,7 +157,7 @@ pub(crate) fn build_wsp_xml(
     group_offset_emu: Option<(i64, i64)>,
     cx: i64,
     cy: i64,
-    solved_body_inset_pt: Option<SidesPtIr>,
+    solved_geom: Option<SolvedShapeGeometry>,
 ) -> String {
     let sp_id = next_drawing_id();
     let (off_x, off_y) = group_offset_emu.unwrap_or((0, 0));
@@ -267,7 +268,8 @@ pub(crate) fn build_wsp_xml(
             .body
             .iter()
             .any(|b| matches!(b, BlockNode::Table(_)));
-        let ins = solved_body_inset_pt.unwrap_or(shape.inset);
+        let ins = solved_geom.map_or(shape.inset, |g| g.body_inset_pt);
+        let first_para_exact = solved_geom.and_then(|g| g.first_para_exact);
         let l_ins = pt_to_emu(ins.left.max(0.0));
         let t_ins = pt_to_emu(ins.top.max(0.0));
         let r_ins = pt_to_emu(ins.right.max(0.0));
@@ -277,24 +279,32 @@ pub(crate) fn build_wsp_xml(
         } else {
             "ctr"
         };
+        let wrap_mode = if solved_geom.is_some_and(|g| g.no_text_wrap) {
+            "none"
+        } else {
+            "square"
+        };
         let autofit_xml = if has_nested_table {
             "<a:spAutoFit/>"
         } else {
             "<a:noAutofit/>"
         };
         let inner_paras = match writer {
-            Some(w) => render_textbox_blocks(w, &shape.body),
+            Some(w) => {
+                render_textbox_blocks_with_first_override(w, &shape.body, first_para_exact)
+            }
             None => r#"<w:p><w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr></w:p>"#.to_string(),
         };
         format!(
             concat!(
                 r#"<wps:txbx><w:txbxContent>{paras}</w:txbxContent></wps:txbx>"#,
-                r#"<wps:bodyPr rot="0" vert="horz" wrap="square" "#,
+                r#"<wps:bodyPr rot="0" vert="horz" wrap="{wrap}" "#,
                 r#"lIns="{l}" tIns="{t}" rIns="{r}" bIns="{b}" anchor="{anchor}">"#,
                 r#"{autofit}"#,
                 r#"</wps:bodyPr>"#
             ),
             paras = inner_paras,
+            wrap = wrap_mode,
             l = l_ins,
             t = t_ins,
             r = r_ins,

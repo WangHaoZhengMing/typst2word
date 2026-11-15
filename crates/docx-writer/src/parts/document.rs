@@ -2,9 +2,10 @@
 
 use std::fmt::Write as _;
 
+use crate::drawingml::next_drawing_id;
 use crate::writer::DocxWriter;
-use word_construct::model::{BlockNode, InlineNode, PageNumberFormatIr};
-use word_construct::units::pt_to_dxa;
+use word_construct::model::{BlockNode, InlineNode, PageNumberFormatIr, VAlignIr};
+use word_construct::units::{pt_to_dxa, pt_to_emu};
 
 impl<'a> DocxWriter<'a> {
     // =========================================================================
@@ -83,11 +84,68 @@ impl<'a> DocxWriter<'a> {
         out.push_str(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#);
         let _ = write!(out, "<w:{tag} {}>", Self::xml_namespaces());
         self.render_blocks(blocks, &mut out);
-        if blocks.is_empty() {
+
+        // When a section's page background fill differs from the document's `<w:background>`,
+        // anchor a full-page behind-text rectangle at `(0, 0)` in its header part so Word renders
+        // per-section slide/cover backgrounds accurately.
+        if tag == "hdr" && self.current_setup.fill != self.doc.page_setup.fill {
+            let bg_hex = self
+                .current_setup
+                .fill
+                .as_deref()
+                .unwrap_or("FFFFFF");
+            let bg_run = Self::build_full_page_background_run_xml(
+                self.current_setup.width_pt,
+                self.current_setup.height_pt,
+                bg_hex,
+            );
+            if out.ends_with("</w:p>") {
+                let insert_pos = out.len() - "</w:p>".len();
+                out.insert_str(insert_pos, &bg_run);
+            } else {
+                let _ = write!(
+                    out,
+                    r#"<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="20" w:lineRule="exact"/><w:rPr><w:sz w:val="2"/><w:szCs w:val="2"/></w:rPr></w:pPr>{bg_run}</w:p>"#
+                );
+            }
+        } else if blocks.is_empty() {
             out.push_str("<w:p/>");
         }
         let _ = write!(out, "</w:{tag}>");
         out
+    }
+
+    fn build_full_page_background_run_xml(width_pt: f64, height_pt: f64, fill_hex: &str) -> String {
+        let id = next_drawing_id();
+        let cx = pt_to_emu(width_pt.max(72.0));
+        let cy = pt_to_emu(height_pt.max(72.0));
+        format!(
+            concat!(
+                r#"<w:r><w:drawing>"#,
+                r#"<wp:anchor distT="0" distB="0" distL="0" distR="0" simplePos="0" relativeHeight="0" behindDoc="1" locked="1" layoutInCell="1" allowOverlap="1">"#,
+                r#"<wp:simplePos x="0" y="0"/>"#,
+                r#"<wp:positionH relativeFrom="page"><wp:posOffset>0</wp:posOffset></wp:positionH>"#,
+                r#"<wp:positionV relativeFrom="page"><wp:posOffset>0</wp:posOffset></wp:positionV>"#,
+                r#"<wp:extent cx="{cx}" cy="{cy}"/>"#,
+                r#"<wp:effectExtent l="0" t="0" r="0" b="0"/>"#,
+                r#"<wp:wrapNone/>"#,
+                r#"<wp:docPr id="{id}" name="SectionPageBg_{id}"/>"#,
+                r#"<wp:cNvGraphicFramePr/>"#,
+                r#"<a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">"#,
+                r#"<wps:wsp><wps:cNvPr id="{id}" name="SectionPageBg_{id}"/><wps:cNvSpPr/>"#,
+                r#"<wps:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm>"#,
+                r#"<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>"#,
+                r#"<a:solidFill><a:srgbClr val="{fill_hex}"/></a:solidFill>"#,
+                r#"<a:ln><a:noFill/></a:ln></wps:spPr>"#,
+                r#"<wps:bodyPr/></wps:wsp>"#,
+                r#"</a:graphicData></a:graphic></wp:anchor>"#,
+                r#"</w:drawing></w:r>"#
+            ),
+            cx = cx,
+            cy = cy,
+            id = id,
+            fill_hex = fill_hex,
+        )
     }
 
     pub(crate) fn render_sect_pr(&self, out: &mut String) {
@@ -189,17 +247,20 @@ impl<'a> DocxWriter<'a> {
             ""
         };
         let _ = write!(out, r#"<w:pgSz w:w="{w_dxa}" w:h="{h_dxa}"{orient}/>"#);
-        let (first_font, first_sz_pt, first_is_cjk) = self.first_block_first_line_metrics();
-        let (top_pt, bottom_pt) = self
-            .options
-            .page_margin_calibration
-            .margins_for_first_line(
-                ps.margin_top_pt,
-                ps.margin_bottom_pt,
-                first_font,
-                first_sz_pt,
-                first_is_cjk,
-            );
+        let (top_pt, bottom_pt) = if ps.v_align == VAlignIr::Top {
+            let (first_font, first_sz_pt, first_is_cjk) = self.first_block_first_line_metrics();
+            self.options
+                .page_margin_calibration
+                .margins_for_first_line(
+                    ps.margin_top_pt,
+                    ps.margin_bottom_pt,
+                    first_font,
+                    first_sz_pt,
+                    first_is_cjk,
+                )
+        } else {
+            (ps.margin_top_pt, ps.margin_bottom_pt)
+        };
         let top_dxa = pt_to_dxa(top_pt);
         let bottom_dxa = pt_to_dxa(bottom_pt);
         let _ = write!(
@@ -237,6 +298,14 @@ impl<'a> DocxWriter<'a> {
             let _ = write!(out, r#"<w:cols w:num="{cols}" w:space="{space_dxa}"/>"#);
         } else if self.has_scoped_columns {
             out.push_str(r#"<w:cols w:space="720"/>"#);
+        }
+        if !is_continuous && ps.v_align != VAlignIr::Top {
+            let valign_val = match ps.v_align {
+                VAlignIr::Top => "top",
+                VAlignIr::Center => "center",
+                VAlignIr::Bottom => "bottom",
+            };
+            let _ = write!(out, r#"<w:vAlign w:val="{valign_val}"/>"#);
         }
         if ps.different_first_page && !is_continuous {
             out.push_str("<w:titlePg/>");

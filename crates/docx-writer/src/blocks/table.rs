@@ -74,7 +74,12 @@ impl<'a> DocxWriter<'a> {
                 out.push_str("<w:tblHeader/>");
             }
             if let Some(h_dxa) = row_construct.min_height_dxa {
-                let _ = write!(out, r#"<w:trHeight w:val="{h_dxa}" w:hRule="atLeast"/>"#);
+                let h_rule = if row_construct.is_exact_height {
+                    "exact"
+                } else {
+                    "atLeast"
+                };
+                let _ = write!(out, r#"<w:trHeight w:val="{h_dxa}" w:hRule="{h_rule}"/>"#);
             }
             out.push_str("</w:trPr>");
 
@@ -164,7 +169,10 @@ impl<'a> DocxWriter<'a> {
                     inset.right,
                     cell_role,
                 );
-                if table_kind == TableKindIr::SemanticTable
+                if row_construct.is_exact_height {
+                    margins.top_dxa = 0;
+                    margins.bottom_dxa = 0;
+                } else if table_kind == TableKindIr::SemanticTable
                     && row_idx + 1 == table.rows.len()
                     && inset.bottom >= 2.5
                 {
@@ -193,10 +201,17 @@ impl<'a> DocxWriter<'a> {
                 };
                 let zero_vertical_inset = inset.top <= 0.5 && inset.bottom <= 0.5;
                 if blocks.is_empty() || vmerge == Some(VMergeState::Continue) {
-                    let _ = write!(
-                        out,
-                        r#"<w:p><w:pPr>{keep_next_xml}<w:spacing w:before="0" w:after="0" w:line="220" w:lineRule="auto"/></w:pPr></w:p>"#
-                    );
+                    if row_construct.is_exact_height {
+                        let _ = write!(
+                            out,
+                            r#"<w:p><w:pPr>{keep_next_xml}<w:spacing w:before="0" w:after="0" w:line="20" w:lineRule="exact"/><w:rPr><w:sz w:val="2"/><w:szCs w:val="2"/></w:rPr></w:pPr></w:p>"#
+                        );
+                    } else {
+                        let _ = write!(
+                            out,
+                            r#"<w:p><w:pPr>{keep_next_xml}<w:spacing w:before="0" w:after="0" w:line="220" w:lineRule="auto"/></w:pPr></w:p>"#
+                        );
+                    }
                 } else {
                     let mut cell_xml = String::new();
                     self.render_table_cell_blocks(
@@ -278,7 +293,7 @@ impl<'a> DocxWriter<'a> {
                 let after_dxa = if idx + 1 < len { 20 } else { 0 };
                 let _ = write!(
                     out,
-                    r#"<w:spacing w:before="0" w:after="{after_dxa}" w:line="240" w:lineRule="auto"/></w:pPr>"#
+                    r#"<w:spacing w:before="0" w:after="{after_dxa}" w:line="240" w:lineRule="auto"/><w:rPr><w:sz w:val="2"/><w:szCs w:val="2"/></w:rPr></w:pPr>"#
                 );
                 out.push_str(&run_xml);
                 out.push_str("</w:p>");
