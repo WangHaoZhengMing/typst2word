@@ -470,19 +470,16 @@ impl<'a> ExtractorContext<'a> {
 
                 // Guard `container_inset_pt` so inner paragraphs do not treat the box's own
                 // horizontal `inset` as an extra `left_indent_pt`.
-                let prev_inset = self.container_inset_pt;
-                let prev_gw = self.active_group_bounds_pt;
-                let prev_origin = self.group_origin_offset;
-                self.container_inset_pt += props.inset.left + props.inset.right + 3.0;
-                self.active_group_bounds_pt = Some((0.0, props.width_pt));
-                self.group_origin_offset += content_offset;
-                self.parent_node_stack.push(id);
-                let mut body_blocks =
-                    self.extract_blocks_from_nodes(content_children, 0, HAlignIr::Left);
-                self.parent_node_stack.pop();
-                self.group_origin_offset = prev_origin;
-                self.active_group_bounds_pt = prev_gw;
-                self.container_inset_pt = prev_inset;
+                let mut body_blocks = self.with_scope(|ctx| {
+                    ctx.scope.container_inset_pt += props.inset.left + props.inset.right + 3.0;
+                    ctx.scope.active_group_bounds_pt = Some((0.0, props.width_pt));
+                    ctx.scope.group_origin_offset += content_offset;
+                    ctx.parent_node_stack.push(id);
+                    let blocks =
+                        ctx.extract_blocks_from_nodes(content_children, 0, HAlignIr::Left);
+                    ctx.parent_node_stack.pop();
+                    blocks
+                });
 
                 if !body_blocks.is_empty() {
                     if let Some(BlockNode::Paragraph { style, .. }) = body_blocks.last_mut() {

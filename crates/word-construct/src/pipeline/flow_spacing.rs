@@ -1,32 +1,18 @@
-//! Pass 3 (`WordPipelinePassKind::InterBlockFlowAndSpacing`):
+//! Inter-block vertical spacing solver (`flow_spacing`):
 //! Resolves semantic `ParagraphStyleIr` fields and read-only `NodeReferenceLayout`
 //! (`BlockLayoutSpanIr` + `NextBlockLayoutMeasureIr`) into concrete `ParagraphStyleIr::space_after_pt`
-//! using [`crate::WordParagraphConstruct`].
+//! and [`crate::document::SolvedNodeLayout`] `before_dxa` / `after_dxa` overrides.
 
 use std::collections::BTreeMap;
 
 use ir::{
     BlockLayoutSpanIr, BlockNode, DocumentIr, NextBlockKindIr, NextBlockLayoutMeasureIr, NodeId,
-    NodeReferenceLayout, ParagraphStyleIr, TableKindIr, visit_document_block_lists_mut,
+    NodeReferenceLayout, ParagraphStyleIr, TableKindIr,
 };
 
+use crate::document::SolvedNodeLayout;
 use crate::units::pt_to_dxa;
 use crate::{InterBlockGapAction, NextBlockSpacingContext, WordParagraphConstruct};
-
-/// Run Pass 3 (`InterBlockFlowAndSpacing`) across all paragraphs in `doc`.
-pub fn run_flow_spacing_pass(doc: &mut DocumentIr) {
-    let ref_layout = doc.reference_layout.clone();
-    visit_document_block_lists_mut(doc, &mut |blocks| {
-        for block in blocks.iter_mut() {
-            if let BlockNode::Paragraph { id, style, .. } = block {
-                let node_layout = (!id.is_unset())
-                    .then(|| ref_layout.get(id))
-                    .flatten();
-                resolve_paragraph_style_spacing(style, node_layout);
-            }
-        }
-    });
-}
 
 /// Resolve a single paragraph's `space_after_pt` from its semantic `StyleChain` properties
 /// and optional read-only [`NodeReferenceLayout`].
@@ -160,8 +146,7 @@ pub fn resolve_paragraph_style_spacing(
 pub fn solve_container_and_figure_flow_spacing(
     blocks: &mut [BlockNode],
     ir: &DocumentIr,
-    solved_before_dxa: &mut BTreeMap<NodeId, i64>,
-    solved_after_dxa: &mut BTreeMap<NodeId, i64>,
+    solved_nodes: &mut BTreeMap<NodeId, SolvedNodeLayout>,
 ) {
     for idx in 0..blocks.len().saturating_sub(1) {
         let id_a = blocks[idx].node_id();
@@ -170,19 +155,23 @@ pub fn solve_container_and_figure_flow_spacing(
         }
         let id_b = blocks[idx + 1].node_id();
         let flow_opt = ir.layout(id_a).and_then(|l| l.flow.as_ref());
-        let (span_a, span_b, next_font_pt) = if matches!(blocks[idx], BlockNode::Figure { .. })
+        let involves_full_bbox_block = matches!(
+            blocks[idx],
+            BlockNode::Figure { .. } | BlockNode::EquationBlock(_)
+        ) || matches!(blocks[idx + 1], BlockNode::EquationBlock(_));
+        let (span_a, span_b, next_font_pt) = if involves_full_bbox_block
             && !id_b.is_unset()
             && let (Some(lay_a), Some(lay_b)) = (ir.layout(id_a), ir.layout(id_b))
         {
             let nf = flow_opt
                 .and_then(|f| f.next.map(|n| n.next_font_pt))
                 .unwrap_or(11.0)
-                .max(8.0);
+                .max(6.0);
             (lay_a.span, lay_b.span, nf)
         } else if let Some(flow) = flow_opt
             && let Some(next) = flow.next
         {
-            (flow.self_span, next.span, next.next_font_pt.max(8.0))
+            (flow.self_span, next.span, next.next_font_pt.max(6.0))
         } else if !id_b.is_unset()
             && let (Some(lay_a), Some(lay_b)) = (ir.layout(id_a), ir.layout(id_b))
         {
@@ -199,41 +188,37 @@ pub fn solve_container_and_figure_flow_spacing(
         };
 
         if pa != pb {
+            if !id_b.is_unset() && matches!(blocks[idx + 1], BlockNode::EquationBlock(_)) {
+                solved_nodes.entry(id_b).or_default().before_dxa = Some(0);
+            }
             match &blocks[idx] {
                 BlockNode::ShapeBlock(_) | BlockNode::Figure { .. } => {
-                    solved_after_dxa.insert(id_a, 0);
+                    solved_nodes.entry(id_a).or_default().after_dxa = Some(0);
+                }
+                BlockNode::EquationBlock(eq) => {
+                    solved_nodes.entry(id_a).or_default().after_dxa = Some(0);
+                    if eq.numbering_text.is_some() && pb == pa + 1 {
+                        apply_table_backed_post_gap(
+                            id_a,
+                            &mut blocks[idx + 1],
+                            next_font_pt,
+                            solved_nodes,
+                        );
+                    }
                 }
                 BlockNode::Container(_) if pb == pa + 1 => {
                     // `<w:tbl>` has 0pt intrinsic bottom margin in Word, whereas Typst still applies
                     // `par.spacing` (~`1.0 * font_size` beyond internal leading) when testing whether
                     // the next block fits on page `pa`; Word suppresses `w:before` after soft breaks.
-                    apply_table_backed_post_gap(
-                        id_a,
-                        &mut blocks[idx + 1],
-                        next_font_pt,
-                        solved_before_dxa,
-                        solved_after_dxa,
-                    );
+                    apply_table_backed_post_gap(id_a, &mut blocks[idx + 1], next_font_pt, solved_nodes);
                 }
                 BlockNode::CodeBlock { fill, stroke, .. }
                     if (fill.is_some() || stroke.is_some()) && pb == pa + 1 =>
                 {
-                    apply_table_backed_post_gap(
-                        id_a,
-                        &mut blocks[idx + 1],
-                        next_font_pt,
-                        solved_before_dxa,
-                        solved_after_dxa,
-                    );
+                    apply_table_backed_post_gap(id_a, &mut blocks[idx + 1], next_font_pt, solved_nodes);
                 }
                 BlockNode::Table(t) if t.kind != TableKindIr::LayoutGrid && pb == pa + 1 => {
-                    apply_table_backed_post_gap(
-                        id_a,
-                        &mut blocks[idx + 1],
-                        next_font_pt,
-                        solved_before_dxa,
-                        solved_after_dxa,
-                    );
+                    apply_table_backed_post_gap(id_a, &mut blocks[idx + 1], next_font_pt, solved_nodes);
                 }
                 _ => {}
             }
@@ -245,46 +230,85 @@ pub fn solve_container_and_figure_flow_spacing(
             continue;
         }
 
+        // Solve pre-gap onto `blocks[idx + 1]` when `blocks[idx + 1]` is an `EquationBlock`.
+        if let Some(eq_font_pt) = match &blocks[idx + 1] {
+            BlockNode::EquationBlock(eq_b) => Some((
+                eq_b.font_size_pt.unwrap_or(11.0).max(6.0),
+                eq_b.numbering_text.is_some(),
+            )),
+            _ => None,
+        } {
+            let (eq_sz_pt, is_numbered_b) = eq_font_pt;
+            let prev_bot_air_pt = match &blocks[idx] {
+                BlockNode::Container(_) | BlockNode::Table(_) => 0.0,
+                BlockNode::EquationBlock(eq_a) if eq_a.numbering_text.is_some() => 0.0,
+                BlockNode::CodeBlock { fill, stroke, .. }
+                    if fill.is_some() || stroke.is_some() =>
+                {
+                    0.0
+                }
+                BlockNode::ShapeBlock(_) => 0.02 * eq_sz_pt,
+                _ => 0.18 * eq_sz_pt,
+            };
+            let needed_before_pt = (gap_pt - prev_bot_air_pt - 0.18 * eq_sz_pt).max(0.0);
+            if !is_numbered_b && !id_b.is_unset() {
+                solved_nodes.entry(id_b).or_default().before_dxa =
+                    Some(pt_to_dxa(needed_before_pt));
+            }
+            if let BlockNode::Paragraph { style, .. } = &mut blocks[idx] {
+                if is_numbered_b {
+                    style.space_after_pt = needed_before_pt;
+                } else if style.space_after_pt > needed_before_pt {
+                    style.space_after_pt = needed_before_pt;
+                }
+            }
+        }
+
         match &blocks[idx] {
             BlockNode::ShapeBlock(_) => {
                 // Wrapper `<w:p>` uses a 1pt paragraph mark (`~0.02 * font` descent), leaving only
                 // the following block's `~0.20 * next_font` internal top leading to subtract.
                 let needed_after_pt = (gap_pt - 0.22 * next_font_pt).max(0.0);
-                solved_after_dxa.insert(id_a, pt_to_dxa(needed_after_pt));
+                solved_nodes.entry(id_a).or_default().after_dxa = Some(pt_to_dxa(needed_after_pt));
             }
             BlockNode::Figure { .. } => {
                 let needed_after_pt = (gap_pt - 0.44 * next_font_pt).max(0.0);
-                solved_after_dxa.insert(id_a, pt_to_dxa(needed_after_pt));
+                solved_nodes.entry(id_a).or_default().after_dxa = Some(pt_to_dxa(needed_after_pt));
+            }
+            BlockNode::EquationBlock(eq_a) => {
+                let eq_sz_pt = eq_a.font_size_pt.unwrap_or(11.0).max(6.0);
+                let next_top_air_pt = match &blocks[idx + 1] {
+                    BlockNode::Container(_) | BlockNode::Table(_) => 0.0,
+                    BlockNode::EquationBlock(eq_b) if eq_b.numbering_text.is_some() => {
+                        0.18 * next_font_pt
+                    }
+                    BlockNode::EquationBlock(_) => 0.18 * next_font_pt,
+                    _ => 0.20 * next_font_pt,
+                };
+                let needed_after_pt = (gap_pt - 0.18 * eq_sz_pt - next_top_air_pt).max(0.0);
+                if eq_a.numbering_text.is_some() {
+                    apply_table_backed_post_gap(
+                        id_a,
+                        &mut blocks[idx + 1],
+                        needed_after_pt,
+                        solved_nodes,
+                    );
+                } else {
+                    solved_nodes.entry(id_a).or_default().after_dxa =
+                        Some(pt_to_dxa(needed_after_pt));
+                }
             }
             BlockNode::Container(_) => {
                 let needed_before_pt = (gap_pt - 0.20 * next_font_pt).max(0.0);
-                apply_table_backed_post_gap(
-                    id_a,
-                    &mut blocks[idx + 1],
-                    needed_before_pt,
-                    solved_before_dxa,
-                    solved_after_dxa,
-                );
+                apply_table_backed_post_gap(id_a, &mut blocks[idx + 1], needed_before_pt, solved_nodes);
             }
             BlockNode::CodeBlock { fill, stroke, .. } if fill.is_some() || stroke.is_some() => {
                 let needed_before_pt = (gap_pt - 0.20 * next_font_pt).max(0.0);
-                apply_table_backed_post_gap(
-                    id_a,
-                    &mut blocks[idx + 1],
-                    needed_before_pt,
-                    solved_before_dxa,
-                    solved_after_dxa,
-                );
+                apply_table_backed_post_gap(id_a, &mut blocks[idx + 1], needed_before_pt, solved_nodes);
             }
             BlockNode::Table(t) if t.kind != TableKindIr::LayoutGrid => {
                 let needed_before_pt = (gap_pt - 0.20 * next_font_pt).max(0.0);
-                apply_table_backed_post_gap(
-                    id_a,
-                    &mut blocks[idx + 1],
-                    needed_before_pt,
-                    solved_before_dxa,
-                    solved_after_dxa,
-                );
+                apply_table_backed_post_gap(id_a, &mut blocks[idx + 1], needed_before_pt, solved_nodes);
             }
             _ => {}
         }
@@ -295,8 +319,7 @@ fn apply_table_backed_post_gap(
     prev_table_id: NodeId,
     next_block: &mut BlockNode,
     needed_before_pt: f64,
-    solved_before_dxa: &mut BTreeMap<NodeId, i64>,
-    solved_after_dxa: &mut BTreeMap<NodeId, i64>,
+    solved_nodes: &mut BTreeMap<NodeId, SolvedNodeLayout>,
 ) {
     let needed_dxa = pt_to_dxa(needed_before_pt);
     match next_block {
@@ -306,16 +329,16 @@ fn apply_table_backed_post_gap(
         BlockNode::Container(_) | BlockNode::Table(_) => {
             // Between two `<w:tbl>` blocks, `docx-writer` emits a `2pt` (`40 dxa`) exact separator `<w:p>`;
             // store `(needed_dxa - 40)` as its `w:after`.
-            solved_after_dxa.insert(prev_table_id, (needed_dxa - 40).max(0));
+            solved_nodes.entry(prev_table_id).or_default().after_dxa = Some((needed_dxa - 40).max(0));
         }
         BlockNode::CodeBlock { fill, stroke, .. } if fill.is_some() || stroke.is_some() => {
-            solved_after_dxa.insert(prev_table_id, (needed_dxa - 40).max(0));
+            solved_nodes.entry(prev_table_id).or_default().after_dxa = Some((needed_dxa - 40).max(0));
         }
         other => {
             let next_id = other.node_id();
             if !next_id.is_unset() {
-                let entry = solved_before_dxa.entry(next_id).or_insert(0);
-                *entry = (*entry).max(needed_dxa);
+                let slot = &mut solved_nodes.entry(next_id).or_default().before_dxa;
+                *slot = Some(slot.unwrap_or(0).max(needed_dxa));
             }
         }
     }

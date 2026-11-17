@@ -1,10 +1,9 @@
-//! Pass 2 (`WordPipelinePassKind::LanguageAndScriptRecognition`):
 //! Exhaustive script/character classification ([`TextScriptClassIr`]) for Word `<w:rFonts w:hint="eastAsia"/>`
 //! and Office Math `<m:nor/>` routing.
 
 use serde::{Deserialize, Serialize};
 
-use ir::{DocumentIr, is_cjk_char};
+use ir::is_cjk_char;
 
 /// Check if a character is a general punctuation / arrow / mathematical symbol (`U+2000..=U+2BFF`)
 /// that requires `w:hint="eastAsia"` when rendered with a CJK font in Word.
@@ -64,9 +63,3 @@ impl TextScriptClassIr {
         )
     }
 }
-
-/// Run Pass 2 (`LanguageAndScriptRecognition`).
-///
-/// Script classification is evaluated on-demand by [`TextScriptClassIr::classify`] without mutating
-/// `DocumentIr` in place.
-pub fn run_language_and_script_pass(_doc: &mut DocumentIr) {}

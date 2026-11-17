@@ -529,7 +529,11 @@ impl WordLineBox {
         let inline_profile = ParagraphInlineProfile::from_flags(has_inline_eq, only_inline_eq);
 
         let w_line_240 = match inline_profile {
-            ParagraphInlineProfile::OnlyInlineEquation => 276,
+            ParagraphInlineProfile::OnlyInlineEquation
+                if para_lines.is_none() && leading_pt.is_none() =>
+            {
+                276
+            }
             ParagraphInlineProfile::TextWithInlineEquation
                 if has_cjk_chars && s >= 14.0 && leading_pt.is_some_and(|ls| ls > 3.5) =>
             {
@@ -538,8 +542,18 @@ impl WordLineBox {
             _ => {
                 // Priority 1: Exact uniform baseline-to-baseline step measured from Typst's frame
                 // (`uniform_baseline_step_pt`, e.g. `16.61pt` for 11pt `PingFang SC` + `0.65em`).
+                // When `has_inline_eq` is true, inline math scripts (`x^2`, `x_i^2`) already expand
+                // Word's `<m:oMath>` line box directly under `w:lineRule="auto"`, so cap `step_pt`
+                // at the plain-text cap-height step (`S * cap_ratio + leading_pt`) to prevent
+                // multiplying Word's already-expanded math line box a second time.
                 if let Some(step_pt) = para_lines.and_then(|p| p.uniform_baseline_step_pt) {
-                    ((240.0 * step_pt / (s * word_ratio)).round() as i64).clamp(120, 720)
+                    let ls_pt = leading_pt.unwrap_or(0.65 * s);
+                    let eff_step_pt = if has_inline_eq && ls_pt > 3.5 {
+                        step_pt.min(s * cap_ratio + ls_pt + 0.25)
+                    } else {
+                        step_pt
+                    };
+                    ((240.0 * eff_step_pt / (s * word_ratio)).round() as i64).clamp(120, 720)
                 } else if let Some(ls_pt) = leading_pt
                     && ls_pt <= 3.5
                 {
@@ -694,6 +708,50 @@ impl WordFontMetricsProvider {
             .and_then(lookup_known_font)
             .is_some_and(FontParadigm::is_cjk)
     }
+
+    /// Estimate total horizontal advance width (`pt`) of `text`, consulting binary
+    /// [`FontFaceMetricsIr`] (`is_monospaced`) first and falling back to calibrated TrueType `hmtx`
+    /// tables / [`WordFontClass`].
+    pub fn text_advance_pt(
+        &self,
+        font_family: Option<&str>,
+        font_face: Option<&FontFaceMetricsIr>,
+        font_size_pt: f64,
+        bold: bool,
+        text: &str,
+    ) -> f64 {
+        let s = font_size_pt.max(1.0);
+        let is_mono = font_face.is_some_and(|f| f.is_monospaced);
+        let raw_pt: f64 = text
+            .chars()
+            .map(|ch| {
+                if is_cjk_or_fullwidth_char(ch) || ch == '…' {
+                    s
+                } else if is_mono {
+                    0.600 * s
+                } else {
+                    self.char_advance_pt(font_family, s, ch)
+                }
+            })
+            .sum();
+        if bold && !is_mono {
+            raw_pt * 1.04
+        } else {
+            raw_pt
+        }
+    }
+}
+
+/// Convenience helper for estimating horizontal advance width (`pt`) of a run of text.
+#[inline]
+pub fn estimate_text_advance_pt(
+    text: &str,
+    font_family: Option<&str>,
+    font_face: Option<&FontFaceMetricsIr>,
+    font_size_pt: f64,
+    bold: bool,
+) -> f64 {
+    WordFontMetricsProvider::new().text_advance_pt(font_family, font_face, font_size_pt, bold, text)
 }
 
 impl FontMetricsProvider for WordFontMetricsProvider {

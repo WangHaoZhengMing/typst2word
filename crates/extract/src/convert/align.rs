@@ -39,7 +39,7 @@ impl<'a> ExtractorContext<'a> {
 
         let col_w = self.current_column_width_pt();
         let (count, gutter_pt) = self.active_columns;
-        let (left_bound, right_bound) = if let Some((gl, gr)) = self.active_group_bounds_pt {
+        let (left_bound, right_bound) = if let Some((gl, gr)) = self.scope.active_group_bounds_pt {
             if count > 1 && width <= col_w + 12.0 {
                 let col_idx = (((min_x - gl + 4.0).max(0.0)) / (col_w + gutter_pt).max(1.0)).floor()
                     as usize;
@@ -116,7 +116,7 @@ impl<'a> ExtractorContext<'a> {
     /// Measure the visual left offset of `nodes` relative to the active column's left edge
     /// (captures `#pad(left: ...)` when not inside a bordered/inset table container).
     pub(crate) fn node_left_offset_in_column(&self, nodes: &[TreeNode]) -> Option<f64> {
-        if self.container_inset_pt > 0.1 {
+        if self.scope.container_inset_pt > 0.1 {
             return None;
         }
         let (min_x, _min_y, width, _height) = Self::estimate_nodes_bbox(nodes);
@@ -125,7 +125,7 @@ impl<'a> ExtractorContext<'a> {
         }
         let col_w = self.current_column_width_pt();
         let (count, gutter_pt) = self.active_columns;
-        let left_bound = if let Some((gl, _)) = self.active_group_bounds_pt {
+        let left_bound = if let Some((gl, _)) = self.scope.active_group_bounds_pt {
             if count > 1 && width <= col_w + 12.0 {
                 let col_idx = (((min_x - gl + 4.0).max(0.0)) / (col_w + gutter_pt).max(1.0)).floor()
                     as usize;

@@ -1,10 +1,7 @@
-//! Pass 1 (`WordPipelinePassKind::FontRecognition`):
-//! Classifies font families into [`FontFamilyClassIr`] without altering or substituting
+//! Font family classification ([`FontFamilyClassIr`]) without altering or substituting
 //! the original `font_family` string extracted from Typst.
 
 use serde::{Deserialize, Serialize};
-
-use ir::DocumentIr;
 
 use crate::{FontParadigm, lookup_known_font};
 
@@ -28,12 +25,6 @@ impl FontFamilyClassIr {
         matches!(self, Self::CjkUiSans | Self::CjkSerif)
     }
 }
-
-/// Run Pass 1 (`FontRecognition`).
-///
-/// Font classification is now evaluated on-demand by [`classify_font_family`] without mutating
-/// `DocumentIr` in place.
-pub fn run_font_recognition_pass(_doc: &mut DocumentIr) {}
 
 /// Resolve a font family alias solely for internal metric/classification lookup
 /// (never written back to `TextRunIr::font_family`).

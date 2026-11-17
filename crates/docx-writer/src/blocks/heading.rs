@@ -66,23 +66,21 @@ impl<'a> DocxWriter<'a> {
         compact_after: bool,
         out: &mut String,
     ) {
-        let mut construct = HeadingConstruct::solve(
+        let mut construct = HeadingConstruct::solve_with_metrics(
             level,
             numbering,
             content,
             align,
             collapse_before,
             compact_after,
+            &self.doc.font_metrics,
         );
         if !collapse_before
-            && !id.is_unset()
-            && let Some(&before_dxa) = self.doc.solved_block_before_dxa.get(&id)
+            && let Some(before_dxa) = self.doc.solved_before_dxa(id)
         {
             construct.before_dxa = construct.before_dxa.max(before_dxa);
         }
-        if !id.is_unset()
-            && let Some(&after_dxa) = self.doc.solved_block_after_dxa.get(&id)
-        {
+        if let Some(after_dxa) = self.doc.solved_after_dxa(id) {
             construct.after_dxa = after_dxa;
         }
 
@@ -104,10 +102,12 @@ impl<'a> DocxWriter<'a> {
                 );
             }
         }
-        let _ = write!(
+        crate::xml_helpers::write_w_spacing(
+            construct.before_dxa,
+            construct.after_dxa,
+            construct.line_dxa,
+            false,
             out,
-            r#"<w:spacing w:before="{}" w:after="{}" w:line="{}" w:lineRule="auto"/>"#,
-            construct.before_dxa, construct.after_dxa, construct.line_dxa
         );
         if construct.align == HAlignIr::Left {
             let base_left_dxa = if left_indent_pt.abs() > 0.5 {

@@ -95,3 +95,104 @@ impl WordBlockObjectKind {
         )
     }
 }
+
+/// Pre-solved neighbor relationship context for `blocks[idx]` within a sequential block list,
+/// centralizing inter-block Word rules so `docx-writer` remains a pure XML serializer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BlockSequenceNeighborContext {
+    /// Suppress `w:before` at the start of a section/cell/container or immediately after an
+    /// explicit `PageBreak` / `ColumnBreak`.
+    pub collapse_before: bool,
+    /// Use compact post-heading `w:after` when followed directly by a body `Paragraph`
+    /// (whose own line-box internal top leading supplies the rest of Typst's gap).
+    pub heading_compact_after: bool,
+    /// Propagate `<w:keepNext/>` onto a `Figure` when followed by a `sticky` paragraph.
+    pub figure_keep_with_next: bool,
+    /// Optional `w:after` (`dxa`) for a `2pt` (`40 dxa`) pre-`Figure` spacer paragraph
+    /// when following a `<w:tbl>` container/table.
+    pub figure_pre_spacer_after_dxa: Option<i64>,
+    /// Solved `w:after` (`dxa`) for a `Figure` wrapper/caption paragraph.
+    pub figure_after_dxa: i64,
+    /// Solved `w:before` (`dxa`) for a `BlockNode::EquationBlock`.
+    pub equation_before_dxa: i64,
+    /// Solved `w:after` (`dxa`) for a `BlockNode::EquationBlock`.
+    pub equation_after_dxa: i64,
+    /// Whether an `Enum` immediately follows a `<w:tbl>`-backed block (which has `0pt` bottom margin).
+    pub enum_after_table_block: bool,
+    /// Optional `w:after` (`dxa`) for a minimal `2pt` (`40 dxa`) separator paragraph emitted
+    /// between two adjacent `<w:tbl>`-backed blocks so Word does not merge them into one table.
+    pub table_to_table_separator_after_dxa: Option<i64>,
+}
+
+impl BlockSequenceNeighborContext {
+    /// Solve neighbor rules for `blocks[idx]` against `doc.solved_nodes`.
+    pub fn for_index(blocks: &[BlockNode], idx: usize, doc: &crate::WordDocument) -> Self {
+        let block = &blocks[idx];
+        let prev = idx.checked_sub(1).and_then(|p| blocks.get(p));
+        let next = blocks.get(idx + 1);
+
+        let collapse_before = prev.is_none_or(|b| {
+            matches!(b, BlockNode::PageBreak | BlockNode::ColumnBreak)
+        });
+        let heading_compact_after = matches!(next, Some(BlockNode::Paragraph { .. }));
+        let figure_keep_with_next = matches!(
+            next,
+            Some(BlockNode::Paragraph { style, .. }) if style.sticky
+        );
+
+        let id = block.node_id();
+        let figure_pre_spacer_after_dxa = if !collapse_before
+            && matches!(block, BlockNode::Figure { .. })
+            && let Some(before_dxa) = doc.solved_before_dxa(id)
+            && before_dxa > 20
+        {
+            Some((before_dxa - 40).max(0))
+        } else {
+            None
+        };
+        let figure_after_dxa = doc.solved_after_dxa(id).unwrap_or(60);
+
+        let (equation_before_dxa, equation_after_dxa) =
+            if let BlockNode::EquationBlock(eq) = block {
+                let (def_before, def_after) =
+                    equation::EquationBlockConstruct::default_flow_spacing_dxa(eq);
+                let before = if collapse_before || eq.numbering_text.is_some() {
+                    0
+                } else {
+                    doc.solved_before_dxa(id).unwrap_or(def_before)
+                };
+                let after = if next.is_none() || eq.numbering_text.is_some() {
+                    0
+                } else {
+                    doc.solved_after_dxa(id).unwrap_or(def_after)
+                };
+                (before, after)
+            } else {
+                (0, 0)
+            };
+
+        let enum_after_table_block =
+            prev.is_some_and(|b| WordBlockObjectKind::classify(b).is_table_backed());
+
+        let cur_is_table = WordBlockObjectKind::classify(block).is_table_backed();
+        let next_is_table =
+            next.is_some_and(|b| WordBlockObjectKind::classify(b).is_table_backed());
+        let table_to_table_separator_after_dxa = if cur_is_table && next_is_table {
+            Some(doc.solved_after_dxa(id).unwrap_or(40))
+        } else {
+            None
+        };
+
+        Self {
+            collapse_before,
+            heading_compact_after,
+            figure_keep_with_next,
+            figure_pre_spacer_after_dxa,
+            figure_after_dxa,
+            equation_before_dxa,
+            equation_after_dxa,
+            enum_after_table_block,
+            table_to_table_separator_after_dxa,
+        }
+    }
+}

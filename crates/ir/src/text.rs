@@ -1,8 +1,10 @@
 //! Styled text runs (`TextRunIr`) and script positioning.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
-use super::{ColorHex, LocaleIr, StrokeIr};
+use super::{ColorHex, InlineNode, LocaleIr, StrokeIr};
 
 /// Check if a character is a CJK ideograph, CJK punctuation, Hiragana/Katakana, or fullwidth glyph.
 #[inline]
@@ -136,4 +138,67 @@ impl FontFaceMetricsIr {
         let desc = self.us_win_descent? as u32;
         Some((asc + desc) as f64 / self.upem.max(1) as f64)
     }
+}
+
+/// Resolve the dominant baseline font size (`pt`) across a paragraph's inline content.
+///
+/// Both Typst and Microsoft Word govern each visual line's vertical box by its tallest normal
+/// run rather than by smaller inline prefix badges (e.g. a `7pt` `[001]` label inside a `9.5pt`
+/// paragraph), while isolated `< 20%` outliers (such as a 1-character dropcap) should not hijack
+/// multi-line paragraph metrics. Weights baseline `Text` runs by character count and `EquationInline`
+/// nodes by source length, returning the largest half-point bucket carrying `>= 20%` of total weight
+/// (falling back to the modal bucket or `default_font_pt`).
+pub fn dominant_inline_font_size_pt(content: &[InlineNode], default_font_pt: f64) -> f64 {
+    fn collect_buckets(
+        nodes: &[InlineNode],
+        default_font_pt: f64,
+        buckets: &mut BTreeMap<u32, (f64, f64)>,
+    ) {
+        for inl in nodes {
+            match inl {
+                InlineNode::Text(r) => {
+                    if r.script != ScriptKindIr::Normal || r.text.is_empty() {
+                        continue;
+                    }
+                    let sz = r.font_size_pt.unwrap_or(default_font_pt);
+                    let half_pt = (sz.clamp(2.0, 400.0) * 2.0).round() as u32;
+                    let w = r.text.chars().count().max(1) as f64;
+                    let entry = buckets.entry(half_pt).or_insert((0.0, sz));
+                    entry.0 += w;
+                }
+                InlineNode::EquationInline(eq) => {
+                    let sz = eq.font_size_pt.unwrap_or(default_font_pt);
+                    let half_pt = (sz.clamp(2.0, 400.0) * 2.0).round() as u32;
+                    let w = eq.source_text.chars().count().clamp(4, 24) as f64;
+                    let entry = buckets.entry(half_pt).or_insert((0.0, sz));
+                    entry.0 += w;
+                }
+                InlineNode::Field { content: inner, .. }
+                | InlineNode::Link { content: inner, .. }
+                | InlineNode::Ref { content: inner, .. }
+                | InlineNode::Citation { content: inner, .. } => {
+                    collect_buckets(inner, default_font_pt, buckets);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let mut buckets: BTreeMap<u32, (f64, f64)> = BTreeMap::new();
+    collect_buckets(content, default_font_pt, &mut buckets);
+    let total_weight: f64 = buckets.values().map(|(w, _)| *w).sum();
+    if total_weight <= 0.0 {
+        return default_font_pt;
+    }
+
+    let threshold = total_weight * 0.20;
+    if let Some((_, &(_, exact_sz))) = buckets.iter().rev().find(|(_, (w, _))| *w >= threshold) {
+        return exact_sz;
+    }
+
+    buckets
+        .values()
+        .max_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|&(_, sz)| sz)
+        .unwrap_or(default_font_pt)
 }

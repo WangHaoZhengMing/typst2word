@@ -12,7 +12,7 @@ use ir::{BlockLayoutSpanIr, BlockNode, NextBlockKindIr, NextBlockLayoutMeasureIr
 
 impl<'a> ExtractorContext<'a> {
     pub(crate) fn nodes_first_page_top_y(&self, nodes: &[TreeNode]) -> Option<(usize, f64, f64)> {
-        Self::nodes_first_page_top_y_at(nodes, self.group_origin_offset)
+        Self::nodes_first_page_top_y_at(nodes, self.scope.group_origin_offset)
     }
 
     fn nodes_first_page_top_y_at(
@@ -61,7 +61,7 @@ impl<'a> ExtractorContext<'a> {
     }
 
     pub(crate) fn nodes_last_page_bottom_y(&self, nodes: &[TreeNode]) -> Option<(usize, f64, f64)> {
-        Self::nodes_last_page_bottom_y_at(nodes, self.group_origin_offset)
+        Self::nodes_last_page_bottom_y_at(nodes, self.scope.group_origin_offset)
     }
 
     fn nodes_last_page_bottom_y_at(
@@ -255,14 +255,11 @@ impl<'a> ExtractorContext<'a> {
 
     fn block_primary_font_size_pt(block: &BlockNode) -> f64 {
         match block {
-            BlockNode::Paragraph { content, .. } | BlockNode::Heading { content, .. } => content
-                .iter()
-                .find_map(|inl| match inl {
-                    ir::InlineNode::Text(r) => r.font_size_pt,
-                    ir::InlineNode::EquationInline(eq) => eq.font_size_pt,
-                    _ => None,
-                })
-                .unwrap_or(11.0),
+            BlockNode::Paragraph { content, style, .. } => ir::dominant_inline_font_size_pt(
+                content,
+                style.resolved_default_font_size_pt.unwrap_or(11.0),
+            ),
+            BlockNode::Heading { content, .. } => ir::dominant_inline_font_size_pt(content, 11.0),
             BlockNode::EquationBlock(eq) => eq.font_size_pt.unwrap_or(11.0),
             _ => 11.0,
         }

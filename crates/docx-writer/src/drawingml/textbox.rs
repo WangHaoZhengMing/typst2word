@@ -196,9 +196,7 @@ pub(crate) fn render_textbox_blocks_with_first_override(
     if out.is_empty() {
         out.push_str(r#"<w:p><w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr></w:p>"#);
     } else if !out.ends_with("</w:p>") {
-        out.push_str(
-            r#"<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="20" w:lineRule="exact"/><w:rPr><w:sz w:val="2"/><w:szCs w:val="2"/></w:rPr></w:pPr></w:p>"#,
-        );
+        crate::xml_helpers::write_exact_spacer_p(0, 20, false, &mut out);
     }
     out
 }
@@ -247,7 +245,7 @@ pub(crate) fn render_inline_nodes_as_txbx_para_with_spacing(
     // Size the `<w:pPr><w:rPr>` paragraph mark to match the line's font size so Word never
     // inflates sub-11pt code/label lines inside `<w:txbxContent>` to the 11pt Normal mark.
     let mark_rpr = word_construct::paragraph::paragraph_mark_rpr_sz_half_pt(inlines)
-        .map(|hp| format!(r#"<w:rPr><w:sz w:val="{hp}"/><w:szCs w:val="{hp}"/></w:rPr>"#))
+        .map(crate::xml_helpers::format_mark_rpr_half_pt)
         .unwrap_or_default();
     let mut runs_xml = String::new();
     render_inline_nodes_to_wml(inlines, &mut runs_xml);

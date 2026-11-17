@@ -243,18 +243,17 @@ impl<'a> ExtractorContext<'a> {
             Some(SemanticRoleIr::Container),
             children,
         );
-        let prev_inset = self.container_inset_pt;
-        let prev_gw = self.active_group_bounds_pt;
-        if !has_full_width_child_group && has_box_sides {
-            self.container_inset_pt += 2.0 * inferred_pad + 3.0;
-        }
-        self.active_group_bounds_pt = Some((0.0, width_pt));
-        self.parent_node_stack.push(id);
-        let mut body_blocks =
-            self.extract_blocks_from_nodes(&content_nodes, list_level, inherited_align);
-        self.parent_node_stack.pop();
-        self.active_group_bounds_pt = prev_gw;
-        self.container_inset_pt = prev_inset;
+        let mut body_blocks = self.with_scope(|ctx| {
+            if !has_full_width_child_group && has_box_sides {
+                ctx.scope.container_inset_pt += 2.0 * inferred_pad + 3.0;
+            }
+            ctx.scope.active_group_bounds_pt = Some((0.0, width_pt));
+            ctx.parent_node_stack.push(id);
+            let blocks =
+                ctx.extract_blocks_from_nodes(&content_nodes, list_level, inherited_align);
+            ctx.parent_node_stack.pop();
+            blocks
+        });
 
         if body_blocks.is_empty() {
             return None;

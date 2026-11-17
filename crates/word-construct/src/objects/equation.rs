@@ -106,6 +106,7 @@ pub enum EquationBlockConstruct<'a> {
         indent_left_dxa: usize,
         before_dxa: i64,
         after_dxa: i64,
+        mark_sz_half_pt: u32,
     },
     /// Numbered display equation rendered as Word's standard 3-column borderless layout row (`[12% | 76% | 12%]`).
     NumberedThreeColumnRow {
@@ -120,6 +121,15 @@ pub enum EquationBlockConstruct<'a> {
 }
 
 impl<'a> EquationBlockConstruct<'a> {
+    /// Fallback `(before_dxa, after_dxa)` for a standalone block equation when reference flow spans are unavailable.
+    pub fn default_flow_spacing_dxa(eq: &EquationIr) -> (i64, i64) {
+        if eq.numbering_text.is_some() {
+            return (0, 0);
+        }
+        let eq_box = solve_word_equation_box(eq);
+        (eq_box.block_before_dxa, eq_box.block_after_dxa)
+    }
+
     pub fn solve(
         eq: &'a EquationIr,
         page_content_width_pt: f64,
@@ -127,27 +137,28 @@ impl<'a> EquationBlockConstruct<'a> {
         after_dxa: i64,
         indent_left_dxa: usize,
     ) -> Self {
+        let mark_sz_half_pt =
+            ((eq.font_size_pt.unwrap_or(11.0) * 2.0).round() as u32).clamp(8, 144);
         if let Some(num) = eq.numbering_text.as_deref() {
             let content_w_pt = page_content_width_pt.max(144.0);
             let total_dxa = pt_to_dxa(content_w_pt);
             let side_dxa = (total_dxa * 12 / 100).max(480);
             let center_dxa = (total_dxa - 2 * side_dxa).max(960);
-            let num_half_pts =
-                ((eq.font_size_pt.unwrap_or(11.0) * 2.0).round() as u32).clamp(8, 144);
             Self::NumberedThreeColumnRow {
                 total_dxa,
                 side_dxa,
                 center_dxa,
                 before_dxa: before_dxa.max(0),
                 after_dxa: after_dxa.max(0),
-                num_half_pts,
+                num_half_pts: mark_sz_half_pt,
                 number_text: num,
             }
         } else {
             Self::CenteredDisplayParagraph {
                 indent_left_dxa,
-                before_dxa,
-                after_dxa,
+                before_dxa: before_dxa.max(0),
+                after_dxa: after_dxa.max(0),
+                mark_sz_half_pt,
             }
         }
     }

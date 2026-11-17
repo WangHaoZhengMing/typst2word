@@ -363,3 +363,59 @@ fn sys_inputs_are_visible_to_typst() {
         .iter()
         .any(|b| paragraph_text(b).contains("templated")));
 }
+
+/// 9. Deterministic bookmark canonicalization: compiling identical Typst source from
+///    different file paths (different `FileId` / `Location` hashes) produces sequential
+///    `_typst_loc_0001` anchors and byte-identical `word/document.xml`.
+#[test]
+fn deterministic_bookmark_canonicalization_across_paths() {
+    let src = r##"
+#set heading(numbering: "1.")
+#outline()
+= Introduction <intro>
+See @methods and #link(<methods>)[Methods] on page #context counter(page).at(<methods>).first().
+
+= Methods <methods>
+Body text with inline numbered equation:
+#set math.equation(numbering: "(1)")
+$ E = m c^2 $ <eq-emc>
+Referencing @eq-emc.
+"##;
+
+    let tmp_base = std::env::temp_dir().join(format!("typst2word_det_bm_{}", std::process::id()));
+    let dir_a = tmp_base.join("alpha");
+    let dir_b = tmp_base.join("beta_nested");
+    std::fs::create_dir_all(&dir_a).unwrap();
+    std::fs::create_dir_all(&dir_b).unwrap();
+
+    let file_a = dir_a.join("doc_one.typ");
+    let file_b = dir_b.join("doc_two.typ");
+    std::fs::write(&file_a, src).unwrap();
+    std::fs::write(&file_b, src).unwrap();
+
+    let ir_a = typst2word::compile_file_to_ir(&file_a).expect("compile path A");
+    let ir_b = typst2word::compile_file_to_ir(&file_b).expect("compile path B");
+
+    let bytes_a = typst2word::docx_writer::write_docx_to_bytes(
+        &typst2word::word_construct::build_word_document(&ir_a),
+    )
+    .unwrap();
+    let bytes_b = typst2word::docx_writer::write_docx_to_bytes(
+        &typst2word::word_construct::build_word_document(&ir_b),
+    )
+    .unwrap();
+
+    let _ = std::fs::remove_dir_all(&tmp_base);
+
+    let xml_a = zip_entry(&bytes_a, "word/document.xml");
+    let xml_b = zip_entry(&bytes_b, "word/document.xml");
+
+    assert!(
+        xml_a.contains("_typst_loc_0001"),
+        "expected sequential canonical bookmark _typst_loc_0001 in document.xml"
+    );
+    assert_eq!(
+        xml_a, xml_b,
+        "identical Typst source at different file paths must emit byte-identical word/document.xml"
+    );
+}

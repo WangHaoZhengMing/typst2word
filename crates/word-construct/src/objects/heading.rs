@@ -3,9 +3,12 @@
 //! Solves heading style ID, `w:before`, `w:after`, `w:line`, alignment, and optional
 //! bold numbering prefix run.
 
-use crate::objects::paragraph::compute_line_spacing_dxa;
+use std::collections::BTreeMap;
+
+use crate::font_metrics::estimate_text_advance_pt;
+use crate::objects::paragraph::compute_line_spacing_dxa_with_metrics;
 use crate::units::pt_to_dxa;
-use ir::{HAlignIr, InlineNode, TextRunIr};
+use ir::{FontFaceMetricsIr, HAlignIr, InlineNode, TextRunIr};
 
 /// Solved Word construct for a `Heading` (`Heading1`..`Heading6`) paragraph.
 #[derive(Debug, Clone)]
@@ -30,6 +33,26 @@ impl HeadingConstruct {
         collapse_before: bool,
         compact_after: bool,
     ) -> Self {
+        Self::solve_with_metrics(
+            level,
+            numbering,
+            content,
+            align,
+            collapse_before,
+            compact_after,
+            &BTreeMap::new(),
+        )
+    }
+
+    pub fn solve_with_metrics(
+        level: usize,
+        numbering: Option<&str>,
+        content: &[InlineNode],
+        align: HAlignIr,
+        collapse_before: bool,
+        compact_after: bool,
+        font_metrics: &BTreeMap<String, FontFaceMetricsIr>,
+    ) -> Self {
         let style_id = format!("Heading{}", level.clamp(1, 6));
         let default_sz = match level {
             1 => 15.4,
@@ -48,7 +71,12 @@ impl HeadingConstruct {
             .unwrap_or(default_sz);
 
         let (before_dxa, after_dxa, line_dxa) = if level >= 2 && sz_pt <= 13.0 {
-            let line_dxa = compute_line_spacing_dxa(content, Some(0.65 * sz_pt));
+            let line_dxa = compute_line_spacing_dxa_with_metrics(
+                content,
+                Some(0.65 * sz_pt),
+                font_metrics,
+                None,
+            );
             let before_dxa = if collapse_before {
                 0
             } else {
@@ -64,7 +92,8 @@ impl HeadingConstruct {
             };
             (before_dxa, after_dxa, line_dxa)
         } else {
-            let line_dxa = compute_line_spacing_dxa(content, None);
+            let line_dxa =
+                compute_line_spacing_dxa_with_metrics(content, None, font_metrics, None);
             let before_dxa = if collapse_before {
                 0
             } else if level == 1 {
@@ -111,20 +140,18 @@ impl HeadingConstruct {
 
         let hanging_dxa = match (&prefix_run, align) {
             (Some(pref), HAlignIr::Left) => {
-                let em_w: f64 = pref
-                    .text
-                    .chars()
-                    .map(|ch| {
-                        if crate::is_cjk_or_fullwidth_char(ch) {
-                            1.0
-                        } else if matches!(ch, 'I' | 'i' | 'l' | '.' | ',' | ':' | ' ') {
-                            0.33
-                        } else {
-                            0.54
-                        }
-                    })
-                    .sum();
-                pt_to_dxa(em_w * sz_pt).max(0)
+                let face = pref
+                    .font_family
+                    .as_deref()
+                    .and_then(|fam| font_metrics.get(fam));
+                let adv_pt = estimate_text_advance_pt(
+                    &pref.text,
+                    pref.font_family.as_deref(),
+                    face,
+                    sz_pt,
+                    pref.bold,
+                );
+                pt_to_dxa(adv_pt).max(0)
             }
             _ => 0,
         };

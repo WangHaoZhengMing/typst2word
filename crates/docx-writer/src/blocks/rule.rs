@@ -50,8 +50,9 @@ impl<'a> DocxWriter<'a> {
         let before_dxa = if collapse_before { 0 } else { 60 };
         let _ = write!(
             out,
-            r#"<w:p><w:pPr><w:pBdr><w:bottom w:val="{val}" w:sz="{sz}" w:space="0" w:color="{}"/></w:pBdr>{ind_xml}<w:spacing w:before="{before_dxa}" w:after="80" w:line="20" w:lineRule="exact"/><w:rPr><w:sz w:val="2"/><w:szCs w:val="2"/></w:rPr></w:pPr></w:p>"#,
-            stroke.color
+            r#"<w:p><w:pPr><w:pBdr><w:bottom w:val="{val}" w:sz="{sz}" w:space="0" w:color="{}"/></w:pBdr>{ind_xml}<w:spacing w:before="{before_dxa}" w:after="80" w:line="20" w:lineRule="exact"/>{}</w:pPr></w:p>"#,
+            stroke.color,
+            crate::xml_helpers::TINY_MARK_RPR_XML,
         );
     }
 }

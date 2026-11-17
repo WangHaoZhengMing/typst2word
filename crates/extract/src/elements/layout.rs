@@ -21,14 +21,14 @@ impl<'a> ExtractorContext<'a> {
         list_level: usize,
         blocks: &mut [BlockNode],
     ) {
-        if self.container_inset_pt > 0.1 || list_level > 0 {
+        if self.scope.container_inset_pt > 0.1 || list_level > 0 {
             return;
         }
         let gx = pos.x.to_pt();
         let gw = group.frame.size().x.to_pt();
         let col_w = self.current_column_width_pt();
         let (count, gutter_pt) = self.active_columns;
-        let left_bound = if let Some((gl, gr)) = self.active_group_bounds_pt {
+        let left_bound = if let Some((gl, gr)) = self.scope.active_group_bounds_pt {
             // When an enclosing `BlockElem(inset: ...)` or `PadElem` already narrowed `(gl, gr)`
             // inside `group`'s own unpadded outer frame `[gx, gx + gw]`, `apply_padding_to_child_blocks`
             // applies that inset once when leaving the outer element; skip here to avoid double-counting.
@@ -164,6 +164,7 @@ impl<'a> ExtractorContext<'a> {
         let chain = self.scoped_style_chain(Some(loc));
         let base_font_pt = Self::resolve_length_pt(chain.get(TextElem::size).0, 11.0);
         let (cur_l, cur_r) = self
+            .scope
             .active_group_bounds_pt
             .unwrap_or((self.content_left_pt, self.content_right_pt));
         let avail_w = (cur_r - cur_l).max(20.0);
@@ -183,15 +184,14 @@ impl<'a> ExtractorContext<'a> {
 
         // Narrow `active_group_bounds_pt` while extracting children so nested bounding-box
         // indentation and `1fr` table column sizing measure relative to the padded content box.
-        let prev_bounds = self.active_group_bounds_pt;
-        if pad_left_pt.abs() > 0.1 || pad_right_pt.abs() > 0.1 {
-            let nl = cur_l + pad_left_pt;
-            let nr = (cur_r - pad_right_pt).max(nl + 20.0);
-            self.active_group_bounds_pt = Some((nl, nr));
-        }
-        let mut child_blocks =
-            self.extract_blocks_from_nodes(children, list_level, inherited_align);
-        self.active_group_bounds_pt = prev_bounds;
+        let mut child_blocks = self.with_scope(|ctx| {
+            if pad_left_pt.abs() > 0.1 || pad_right_pt.abs() > 0.1 {
+                let nl = cur_l + pad_left_pt;
+                let nr = (cur_r - pad_right_pt).max(nl + 20.0);
+                ctx.scope.active_group_bounds_pt = Some((nl, nr));
+            }
+            ctx.extract_blocks_from_nodes(children, list_level, inherited_align)
+        });
 
         Self::apply_padding_to_child_blocks(
             &mut child_blocks,

@@ -485,18 +485,22 @@ impl<'a> ExtractorContext<'a> {
                 if let Some(artifact) = elem.to_packed::<ArtifactElem>() {
                     match artifact.kind.get(StyleChain::default()) {
                         ArtifactKind::Header => {
-                            let prev_h = self.active_region_height_pt.replace(header_region_h_pt);
-                            let align = self.infer_node_halign(children).unwrap_or(HAlignIr::Left);
-                            let blocks = self.extract_blocks_from_nodes(children, 0, align);
-                            self.active_region_height_pt = prev_h;
+                            let blocks = self.with_scope(|ctx| {
+                                ctx.scope.active_region_height_pt = Some(header_region_h_pt);
+                                let align =
+                                    ctx.infer_node_halign(children).unwrap_or(HAlignIr::Left);
+                                ctx.extract_blocks_from_nodes(children, 0, align)
+                            });
                             header.extend(blocks);
                             return;
                         }
                         ArtifactKind::Footer => {
-                            let prev_h = self.active_region_height_pt.replace(footer_region_h_pt);
-                            let align = self.infer_node_halign(children).unwrap_or(HAlignIr::Left);
-                            let blocks = self.extract_blocks_from_nodes(children, 0, align);
-                            self.active_region_height_pt = prev_h;
+                            let blocks = self.with_scope(|ctx| {
+                                ctx.scope.active_region_height_pt = Some(footer_region_h_pt);
+                                let align =
+                                    ctx.infer_node_halign(children).unwrap_or(HAlignIr::Left);
+                                ctx.extract_blocks_from_nodes(children, 0, align)
+                            });
                             footer.extend(blocks);
                             return;
                         }

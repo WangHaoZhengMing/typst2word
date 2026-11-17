@@ -320,7 +320,7 @@ impl<'a> ExtractorContext<'a> {
         code_font_pt: f64,
     ) -> Option<ParagraphLineMetricsIr> {
         let mut raw_lines: Vec<(usize, f64, f64)> = Vec::new();
-        Self::walk_code_baselines(nodes, self.group_origin_offset, &mut raw_lines);
+        Self::walk_code_baselines(nodes, self.scope.group_origin_offset, &mut raw_lines);
         if raw_lines.is_empty() {
             return None;
         }

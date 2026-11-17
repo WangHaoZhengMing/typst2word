@@ -43,9 +43,10 @@ pub use image::{ImageFormatIr, ImageIr};
 pub use list::{EnumItemIr, ListItemIr, TermItemIr};
 pub use locale::{LocaleIr, TextDirIr};
 pub use normalize::{
-    clean_redundant_pagebreaks, coalesce_adjacent_text_runs, merge_split_containers,
-    merge_split_styled_containers, normalize_document_ir, visit_block_list_mut,
-    visit_document_block_lists_mut, visit_document_inline_lists_mut, visit_page_setup_blocks_mut,
+    canonicalize_bookmark_anchors, clean_redundant_pagebreaks, coalesce_adjacent_text_runs,
+    merge_split_containers, merge_split_styled_containers, normalize_document_ir,
+    visit_block_list_mut, visit_document_block_lists_mut, visit_document_inline_lists_mut,
+    visit_page_setup_blocks_mut,
 };
 pub use origin::{NodeId, NodeOrigin, SemanticRoleIr};
 pub use outline::OutlineEntryIr;
@@ -61,7 +62,9 @@ pub use style::{
     SidesPtIr, StrokeIr, VAlignIr,
 };
 pub use table::{TableCellIr, TableIr, TableKindIr, TableRowIr};
-pub use text::{FontFaceMetricsIr, ScriptKindIr, TextRunIr, is_cjk_char};
+pub use text::{
+    FontFaceMetricsIr, ScriptKindIr, TextRunIr, dominant_inline_font_size_pt, is_cjk_char,
+};
 pub use units::Pt;
 pub use unsupported::UnsupportedIr;
 

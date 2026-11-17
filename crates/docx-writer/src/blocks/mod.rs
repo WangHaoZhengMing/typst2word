@@ -19,19 +19,17 @@ mod shape;
 mod table;
 mod unsupported;
 
-use word_construct::WordBlockObjectKind;
-use word_construct::paragraph::ParagraphConstruct;
-use crate::writer::DocxWriter;
+use word_construct::BlockSequenceNeighborContext;
 use word_construct::model::BlockNode;
+use word_construct::paragraph::ParagraphConstruct;
+
+use crate::writer::DocxWriter;
+use crate::xml_helpers::{open_tiny_sect_carrier_p, write_exact_spacer_p, write_tiny_break_p};
 
 impl<'a> DocxWriter<'a> {
     pub(crate) fn render_blocks(&mut self, blocks: &[BlockNode], out: &mut String) {
         for (idx, block) in blocks.iter().enumerate() {
-            let collapse_before = idx == 0
-                || matches!(
-                    blocks.get(idx.wrapping_sub(1)),
-                    Some(BlockNode::PageBreak | BlockNode::ColumnBreak)
-                );
+            let nb = BlockSequenceNeighborContext::for_index(blocks, idx, self.doc);
             if let BlockNode::Heading {
                 id,
                 level,
@@ -43,8 +41,6 @@ impl<'a> DocxWriter<'a> {
                 box_style,
             } = block
             {
-                let compact_after =
-                    matches!(blocks.get(idx + 1), Some(BlockNode::Paragraph { .. }));
                 self.render_heading_inner(
                     *id,
                     *level,
@@ -54,8 +50,8 @@ impl<'a> DocxWriter<'a> {
                     *align,
                     *left_indent_pt,
                     box_style.as_ref(),
-                    collapse_before,
-                    compact_after,
+                    nb.collapse_before,
+                    nb.heading_compact_after,
                     out,
                 );
                 continue;
@@ -76,7 +72,6 @@ impl<'a> DocxWriter<'a> {
                 continue;
             }
             if let BlockNode::Figure {
-                id,
                 body,
                 caption,
                 caption_pos,
@@ -84,33 +79,17 @@ impl<'a> DocxWriter<'a> {
                 ..
             } = block
             {
-                let next_keep = matches!(
-                    blocks.get(idx + 1),
-                    Some(BlockNode::Paragraph { style, .. }) if style.sticky
-                );
-                if !collapse_before
-                    && !id.is_unset()
-                    && let Some(&before_dxa) = self.doc.solved_block_before_dxa.get(id)
-                    && before_dxa > 20
-                {
-                    let spacer_after = (before_dxa - 40).max(0);
-                    out.push_str(&format!(
-                        r#"<w:p><w:pPr><w:spacing w:before="0" w:after="{spacer_after}" w:line="40" w:lineRule="exact"/><w:rPr><w:sz w:val="2"/><w:szCs w:val="2"/></w:rPr></w:pPr></w:p>"#,
-                    ));
+                if let Some(spacer_after) = nb.figure_pre_spacer_after_dxa {
+                    write_exact_spacer_p(spacer_after, 40, false, out);
                 }
-                let after_dxa = if id.is_unset() {
-                    60
-                } else {
-                    self.doc.solved_block_after_dxa.get(id).copied().unwrap_or(60)
-                };
                 self.render_figure_with_layout_and_keep(
                     body,
                     caption.as_deref(),
                     *caption_pos,
                     bookmark.as_deref(),
                     0,
-                    after_dxa,
-                    next_keep,
+                    nb.figure_after_dxa,
+                    nb.figure_keep_with_next,
                     out,
                 );
                 continue;
@@ -133,7 +112,7 @@ impl<'a> DocxWriter<'a> {
                         *spacing_pt,
                         *indent_pt,
                         *hanging_pt,
-                        collapse_before,
+                        nb.collapse_before,
                         out,
                     );
                 }
@@ -146,8 +125,6 @@ impl<'a> DocxWriter<'a> {
                     indent_pt,
                     hanging_pt,
                 } => {
-                    let after_table_block =
-                        idx > 0 && Self::is_table_backed_block(&blocks[idx - 1]);
                     self.render_enum_collapsed_with_id(
                         *id,
                         items,
@@ -156,8 +133,8 @@ impl<'a> DocxWriter<'a> {
                         *spacing_pt,
                         *indent_pt,
                         *hanging_pt,
-                        collapse_before,
-                        after_table_block,
+                        nb.collapse_before,
+                        nb.enum_after_table_block,
                         out,
                     );
                 }
@@ -167,24 +144,30 @@ impl<'a> DocxWriter<'a> {
                     self.render_quote_collapsed(
                         body,
                         attribution.as_deref(),
-                        collapse_before,
+                        nb.collapse_before,
                         out,
                     );
                 }
                 BlockNode::EquationBlock(eq) => {
-                    self.render_equation_block_collapsed(eq, collapse_before, out);
+                    self.render_equation_block_with_layout(
+                        eq,
+                        nb.equation_before_dxa,
+                        nb.equation_after_dxa,
+                        0,
+                        out,
+                    );
                 }
                 BlockNode::ShapeBlock(shape) => {
-                    self.render_shape_block_collapsed(shape, collapse_before, out);
+                    self.render_shape_block_collapsed(shape, nb.collapse_before, out);
                 }
                 BlockNode::ImageBlock(img) => {
-                    self.render_image_block_collapsed(img, collapse_before, out);
+                    self.render_image_block_collapsed(img, nb.collapse_before, out);
                 }
                 BlockNode::Outline { title, entries } => {
-                    self.render_outline(title.as_deref(), entries, collapse_before, out);
+                    self.render_outline(title.as_deref(), entries, nb.collapse_before, out);
                 }
                 BlockNode::Bibliography { title, entries } => {
-                    self.render_bibliography(title.as_deref(), entries, collapse_before, out);
+                    self.render_bibliography(title.as_deref(), entries, nb.collapse_before, out);
                 }
                 BlockNode::HorizontalRule {
                     length_pt,
@@ -197,37 +180,16 @@ impl<'a> DocxWriter<'a> {
                         stroke,
                         *align,
                         *left_indent_pt,
-                        collapse_before,
+                        nb.collapse_before,
                         out,
                     );
                 }
                 _ => self.render_block(block, out),
             }
-            // If two Word `<w:tbl>` blocks (e.g. two tables or numbered equations) are directly
-            // adjacent without an intervening `<w:p>`, Word merges them into a single table!
-            // Emit a minimal 2pt separator paragraph only between adjacent table-backed blocks.
-            if Self::is_table_backed_block(block)
-                && blocks.get(idx + 1).is_some_and(Self::is_table_backed_block)
-            {
-                let prev_id = block.node_id();
-                let sep_after = if prev_id.is_unset() {
-                    40
-                } else {
-                    self.doc
-                        .solved_block_after_dxa
-                        .get(&prev_id)
-                        .copied()
-                        .unwrap_or(40)
-                };
-                out.push_str(&format!(
-                    r#"<w:p><w:pPr><w:spacing w:before="0" w:after="{sep_after}" w:line="40" w:lineRule="exact"/><w:rPr><w:sz w:val="2"/><w:szCs w:val="2"/></w:rPr></w:pPr></w:p>"#,
-                ));
+            if let Some(sep_after) = nb.table_to_table_separator_after_dxa {
+                write_exact_spacer_p(sep_after, 40, false, out);
             }
         }
-    }
-
-    pub(crate) fn is_table_backed_block(block: &BlockNode) -> bool {
-        WordBlockObjectKind::classify(block).is_table_backed()
     }
 
     pub(crate) fn render_block(&mut self, block: &BlockNode, out: &mut String) {
@@ -383,14 +345,10 @@ impl<'a> DocxWriter<'a> {
                 );
             }
             BlockNode::PageBreak => {
-                out.push_str(
-                    r#"<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="20" w:lineRule="exact"/><w:rPr><w:sz w:val="2"/><w:szCs w:val="2"/></w:rPr></w:pPr><w:r><w:rPr><w:sz w:val="2"/><w:szCs w:val="2"/></w:rPr><w:br w:type="page"/></w:r></w:p>"#,
-                );
+                write_tiny_break_p("page", out);
             }
             BlockNode::ColumnBreak => {
-                out.push_str(
-                    r#"<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="20" w:lineRule="exact"/><w:rPr><w:sz w:val="2"/><w:szCs w:val="2"/></w:rPr></w:pPr><w:r><w:rPr><w:sz w:val="2"/><w:szCs w:val="2"/></w:rPr><w:br w:type="column"/></w:r></w:p>"#,
-                );
+                write_tiny_break_p("column", out);
             }
             BlockNode::Columns {
                 count,
@@ -399,9 +357,7 @@ impl<'a> DocxWriter<'a> {
                 ..
             } => {
                 // 1. End the preceding 1-column section with a section-break paragraph.
-                out.push_str(
-                    r#"<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="20" w:lineRule="exact"/><w:rPr><w:sz w:val="2"/><w:szCs w:val="2"/></w:rPr>"#,
-                );
+                open_tiny_sect_carrier_p(out);
                 self.render_sect_pr_inner(
                     self.current_setup.columns.max(1),
                     36.0,
@@ -413,42 +369,12 @@ impl<'a> DocxWriter<'a> {
                 // 2. Render the multi-column body with active column width.
                 let prev_cols = self.active_columns;
                 self.active_columns = (*count, *gutter_pt);
-                if let Some(BlockNode::Heading {
-                    id,
-                    level,
-                    numbering,
-                    content,
-                    bookmark,
-                    align,
-                    left_indent_pt,
-                    box_style,
-                }) = body.first()
-                {
-                    let compact_after = matches!(body.get(1), Some(BlockNode::Paragraph { .. }));
-                    self.render_heading_inner(
-                        *id,
-                        *level,
-                        numbering.as_deref(),
-                        content,
-                        bookmark.as_deref(),
-                        *align,
-                        *left_indent_pt,
-                        box_style.as_ref(),
-                        true,
-                        compact_after,
-                        out,
-                    );
-                    self.render_blocks(&body[1..], out);
-                } else {
-                    self.render_blocks(body, out);
-                }
+                self.render_blocks(body, out);
                 self.active_columns = prev_cols;
 
                 // 3. End the multi-column section with a continuous section break.
                 self.has_scoped_columns = true;
-                out.push_str(
-                    r#"<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="20" w:lineRule="exact"/><w:rPr><w:sz w:val="2"/><w:szCs w:val="2"/></w:rPr>"#,
-                );
+                open_tiny_sect_carrier_p(out);
                 self.render_sect_pr_inner(*count, *gutter_pt, true, out);
                 out.push_str("</w:pPr></w:p>");
             }

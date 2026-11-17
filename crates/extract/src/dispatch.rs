@@ -40,10 +40,10 @@ impl<'a> ExtractorContext<'a> {
                 pos,
                 children,
             } => {
-                let prev_origin = self.group_origin_offset;
-                self.group_origin_offset += *pos;
-                self.extract_group_block(group, *pos, children, blocks, list_level, inherited_align);
-                self.group_origin_offset = prev_origin;
+                self.with_scope(|ctx| {
+                    ctx.scope.group_origin_offset += *pos;
+                    ctx.extract_group_block(group, *pos, children, blocks, list_level, inherited_align);
+                });
             }
             TreeNode::Shape { shape, span, pos } => {
                 if let Some(shape_ir) =
@@ -89,20 +89,20 @@ impl<'a> ExtractorContext<'a> {
                 pos,
                 children,
             } => {
-                let prev_scope = self.active_scope_loc;
-                if self.compiled.semantics.get(*loc).is_some() {
-                    self.active_scope_loc = Some(*loc);
-                }
-                self.extract_element_block(
-                    elem,
-                    *loc,
-                    *pos,
-                    children,
-                    blocks,
-                    list_level,
-                    inherited_align,
-                );
-                self.active_scope_loc = prev_scope;
+                self.with_scope(|ctx| {
+                    if ctx.compiled.semantics.get(*loc).is_some() {
+                        ctx.scope.active_scope_loc = Some(*loc);
+                    }
+                    ctx.extract_element_block(
+                        elem,
+                        *loc,
+                        *pos,
+                        children,
+                        blocks,
+                        list_level,
+                        inherited_align,
+                    );
+                });
             }
             TreeNode::Text { .. } | TreeNode::Link { .. } => {}
         }
@@ -157,25 +157,25 @@ impl<'a> ExtractorContext<'a> {
         //    Transform any enclosing narrowed bounds (e.g. from `BlockElem(inset: ...)` or
         //    `PadElem`) into `group`'s local coordinate frame `(0.0 .. gw)` so child tables and
         //    paragraphs do not double-count or lose outer horizontal insets.
-        let prev_group_bounds = self.active_group_bounds_pt;
         let gw = group.frame.size().x.to_pt();
-        if gw > 20.0 {
-            let gx = pos.x.to_pt();
-            self.active_group_bounds_pt = match prev_group_bounds {
-                Some((cur_l, cur_r)) => {
-                    let ll = (cur_l - gx).clamp(0.0, gw);
-                    let lr = (cur_r - gx).clamp(ll, gw);
-                    if lr - ll >= 20.0 {
-                        Some((ll, lr))
-                    } else {
-                        Some((0.0, gw))
+        let mut inner = self.with_scope(|ctx| {
+            if gw > 20.0 {
+                let gx = pos.x.to_pt();
+                ctx.scope.active_group_bounds_pt = match ctx.scope.active_group_bounds_pt {
+                    Some((cur_l, cur_r)) => {
+                        let ll = (cur_l - gx).clamp(0.0, gw);
+                        let lr = (cur_r - gx).clamp(ll, gw);
+                        if lr - ll >= 20.0 {
+                            Some((ll, lr))
+                        } else {
+                            Some((0.0, gw))
+                        }
                     }
-                }
-                None => Some((0.0, gw)),
-            };
-        }
-        let mut inner = self.extract_blocks_from_nodes(children, list_level, inherited_align);
-        self.active_group_bounds_pt = prev_group_bounds;
+                    None => Some((0.0, gw)),
+                };
+            }
+            ctx.extract_blocks_from_nodes(children, list_level, inherited_align)
+        });
         if inner.len() == 1
             && let Some(BlockNode::CodeBlock { fill, stroke, .. }) = inner.first_mut()
             && fill.is_none()
@@ -406,17 +406,18 @@ impl<'a> ExtractorContext<'a> {
         {
             if shape_ir.placed_offset_pt.is_none()
                 && !elem.is::<MoveElem>()
-                && self.container_inset_pt <= 0.1
+                && self.scope.container_inset_pt <= 0.1
                 && matches!(inherited_align, HAlignIr::Left | HAlignIr::Justify)
             {
                 let left_bound = self
+                    .scope
                     .active_group_bounds_pt
                     .map(|(l, _)| l)
                     .unwrap_or(self.content_left_pt);
                 let dx = pos.x.to_pt() - left_bound;
                 let (_, local_y, _) =
                     crate::frame_tree::decode_page_and_local_y(pos.y.to_pt(), pos.x.to_pt());
-                let dy = if blocks.is_empty() && self.active_group_bounds_pt.is_none() {
+                let dy = if blocks.is_empty() && self.scope.active_group_bounds_pt.is_none() {
                     (local_y - self.content_top_pt).max(0.0)
                 } else {
                     0.0
@@ -524,6 +525,7 @@ impl<'a> ExtractorContext<'a> {
                 Self::resolve_length_pt(ch.get(typst::text::TextElem::size).0, 11.0);
             let avail_h = self.current_page_content_height_pt();
             let (cur_l, cur_r) = self
+                .scope
                 .active_group_bounds_pt
                 .unwrap_or((self.content_left_pt, self.content_right_pt));
             let avail_w = (cur_r - cur_l).max(20.0);
@@ -589,19 +591,20 @@ impl<'a> ExtractorContext<'a> {
             blocks.push(styled_box);
             return;
         }
-        let prev_bounds = self.active_group_bounds_pt;
-        if let Some((_, _, _, _, (in_l, in_r, _, _))) = blk_props
-            && (in_l.abs() > 0.1 || in_r.abs() > 0.1)
-        {
-            let (cur_l, cur_r) =
-                prev_bounds.unwrap_or((self.content_left_pt, self.content_right_pt));
-            let nl = cur_l + in_l;
-            let nr = (cur_r - in_r).max(nl + 20.0);
-            self.active_group_bounds_pt = Some((nl, nr));
-        }
-        let mut child_blocks =
-            self.extract_blocks_from_nodes(children, list_level, inherited_align);
-        self.active_group_bounds_pt = prev_bounds;
+        let mut child_blocks = self.with_scope(|ctx| {
+            if let Some((_, _, _, _, (in_l, in_r, _, _))) = blk_props
+                && (in_l.abs() > 0.1 || in_r.abs() > 0.1)
+            {
+                let (cur_l, cur_r) = ctx
+                    .scope
+                    .active_group_bounds_pt
+                    .unwrap_or((ctx.content_left_pt, ctx.content_right_pt));
+                let nl = cur_l + in_l;
+                let nr = (cur_r - in_r).max(nl + 20.0);
+                ctx.scope.active_group_bounds_pt = Some((nl, nr));
+            }
+            ctx.extract_blocks_from_nodes(children, list_level, inherited_align)
+        });
         // Preserve unstyled empty spacer blocks with explicit height (`#block(height: H)[ ]`)
         // as exact-height empty paragraphs. Moderate or unbreakable spacers store `H` directly
         // in `line_spacing_pt` (`w:lineRule="exact"`) so Word's `compatibilityMode=15` margin
@@ -822,11 +825,10 @@ impl<'a> ExtractorContext<'a> {
                 } => {
                     let cw_pt = cg.frame.size().x.to_pt();
                     let ch_pt = cg.frame.size().y.to_pt();
-                    let prev_gw = self.active_group_bounds_pt;
-                    self.active_group_bounds_pt = Some((0.0, cw_pt));
-                    let sub_blocks =
-                        self.extract_blocks_from_nodes(cchildren, list_level, inherited_align);
-                    self.active_group_bounds_pt = prev_gw;
+                    let sub_blocks = self.with_scope(|ctx| {
+                        ctx.scope.active_group_bounds_pt = Some((0.0, cw_pt));
+                        ctx.extract_blocks_from_nodes(cchildren, list_level, inherited_align)
+                    });
                     self.report.shapes_count += 1;
                     inlines.push(ir::InlineNode::ShapeInline(ir::ShapeIr {
                         id: NodeId::UNSET,

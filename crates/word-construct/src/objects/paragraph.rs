@@ -169,25 +169,28 @@ impl ParagraphConstruct {
                         if (par_spacing_pt - par_leading_pt).abs() < 0.1
                 )
             {
+                let def_sz = style
+                    .resolved_default_font_size_pt
+                    .unwrap_or(cur_sz)
+                    .max(6.0);
+                let sp_em = style
+                    .resolved_par_spacing_pt
+                    .map_or(1.20, |sp| sp / def_sz);
+                let ld_em = style
+                    .resolved_par_leading_pt
+                    .map_or(0.65, |ld| ld / def_sz);
                 let max_sz = cur_sz.max(next_sz);
                 adj_style.space_after_pt =
-                    (1.20 * max_sz - 0.65 * cur_sz - 0.229 * (next_sz - cur_sz)).max(1.5);
+                    (sp_em * max_sz - ld_em * cur_sz - 0.229 * (next_sz - cur_sz)).max(0.0);
             }
         }
         adj_style
     }
 }
 
-/// Primary font size (`pt`) of the first text or inline equation in `content`.
+/// Dominant baseline font size (`pt`) across `content`.
 pub fn primary_font_size_pt(content: &[InlineNode]) -> f64 {
-    content
-        .iter()
-        .find_map(|inl| match inl {
-            InlineNode::Text(r) => r.font_size_pt,
-            InlineNode::EquationInline(eq) => eq.font_size_pt,
-            _ => None,
-        })
-        .unwrap_or(11.0)
+    ir::dominant_inline_font_size_pt(content, 11.0)
 }
 
 /// Estimate inline width (`pt`) of `content` for distinguishing `#h(1fr)` flush-right tabs from fixed `#h(36pt)`.
@@ -259,14 +262,88 @@ pub fn is_only_inline_equation(content: &[InlineNode]) -> bool {
             .any(|inl| matches!(inl, InlineNode::Text(r) if !r.text.is_empty()))
 }
 
-/// Optional `<w:rPr><w:sz/></w:rPr>` on `<w:pPr>` when the paragraph's text size differs from 11pt (`22` half-pts).
+/// Optional `<w:rPr><w:sz/></w:rPr>` on `<w:pPr>` when the paragraph's dominant font size differs from 11pt (`22` half-pts).
 pub fn paragraph_mark_rpr_sz_half_pt(content: &[InlineNode]) -> Option<u32> {
-    let sz_pt = content.iter().find_map(|inl| match inl {
-        InlineNode::Text(r) => r.font_size_pt,
-        _ => None,
-    })?;
+    let has_sized_inline = content.iter().any(|inl| {
+        matches!(
+            inl,
+            InlineNode::Text(r) if r.font_size_pt.is_some()
+        ) || matches!(
+            inl,
+            InlineNode::EquationInline(eq) if eq.font_size_pt.is_some()
+        )
+    });
+    if !has_sized_inline {
+        return None;
+    }
+    let sz_pt = ir::dominant_inline_font_size_pt(content, 11.0);
     let sz_val = (sz_pt.clamp(2.0, 200.0) * 2.0).round() as u32;
     (sz_val != 22).then_some(sz_val)
+}
+
+fn dominant_inline_font_family<'a>(
+    content: &'a [InlineNode],
+    base_font_pt: f64,
+    font_metrics: &BTreeMap<String, FontFaceMetricsIr>,
+) -> Option<&'a str> {
+    fn collect_fonts<'a>(
+        nodes: &'a [InlineNode],
+        base_font_pt: f64,
+        match_base_size: bool,
+        weights: &mut Vec<(&'a str, usize)>,
+    ) {
+        for inl in nodes {
+            match inl {
+                InlineNode::Text(r) => {
+                    if r.script != ir::ScriptKindIr::Normal || r.text.is_empty() {
+                        continue;
+                    }
+                    let sz = r.font_size_pt.unwrap_or(11.0);
+                    if match_base_size && (sz - base_font_pt).abs() > 1.0 {
+                        continue;
+                    }
+                    if let Some(fam) = r.font_family.as_deref() {
+                        let w = r.text.chars().count().max(1);
+                        if let Some(entry) = weights.iter_mut().find(|(f, _)| *f == fam) {
+                            entry.1 += w;
+                        } else {
+                            weights.push((fam, w));
+                        }
+                    }
+                }
+                InlineNode::Field { content: inner, .. }
+                | InlineNode::Link { content: inner, .. }
+                | InlineNode::Ref { content: inner, .. }
+                | InlineNode::Citation { content: inner, .. } => {
+                    collect_fonts(inner, base_font_pt, match_base_size, weights);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let mut weights: Vec<(&'a str, usize)> = Vec::new();
+    collect_fonts(content, base_font_pt, true, &mut weights);
+    if weights.is_empty() {
+        collect_fonts(content, base_font_pt, false, &mut weights);
+    }
+    if weights.is_empty() {
+        return None;
+    }
+
+    let is_cjk_font = |f: &str| {
+        font_metrics.get(f).is_some_and(|m| m.has_cjk_codepage)
+            || crate::WordFontMetricsProvider::is_cjk_codepage_font(Some(f))
+    };
+    if let Some((cjk_fam, _)) = weights
+        .iter()
+        .filter(|(f, _)| is_cjk_font(f))
+        .max_by_key(|(_, w)| *w)
+    {
+        return Some(*cjk_fam);
+    }
+
+    weights.into_iter().max_by_key(|(_, w)| *w).map(|(f, _)| f)
 }
 
 /// Solve Word `w:line` (`1/240` line units) for `content` via [`crate::WordLineBox`].
@@ -282,28 +359,8 @@ pub fn compute_line_spacing_dxa_with_metrics(
     font_metrics: &BTreeMap<String, FontFaceMetricsIr>,
     para_lines: Option<&ParagraphLineMetricsIr>,
 ) -> i64 {
-    let base_font_pt = content
-        .iter()
-        .find_map(|inl| match inl {
-            InlineNode::Text(r) => r.font_size_pt,
-            InlineNode::EquationInline(eq) => eq.font_size_pt,
-            _ => None,
-        })
-        .unwrap_or(11.0)
-        .max(6.0);
-    let cjk_font = content.iter().find_map(|inl| match inl {
-        InlineNode::Text(r) => r.font_family.as_deref().filter(|f| {
-            font_metrics.get(*f).is_some_and(|m| m.has_cjk_codepage)
-                || crate::WordFontMetricsProvider::is_cjk_codepage_font(Some(f))
-        }),
-        _ => None,
-    });
-    let first_font = cjk_font.or_else(|| {
-        content.iter().find_map(|inl| match inl {
-            InlineNode::Text(r) => r.font_family.as_deref(),
-            _ => None,
-        })
-    });
+    let base_font_pt = primary_font_size_pt(content).max(6.0);
+    let first_font = dominant_inline_font_family(content, base_font_pt, font_metrics);
     let has_cjk_chars = content_has_cjk_chars(content);
     let is_cjk = content_has_cjk(content);
     let has_inline_eq = content

@@ -456,6 +456,7 @@ impl<'a> ExtractorContext<'a> {
                     && non_final.iter().all(|(_, _, rx)| (*rx - r0).abs() <= 1.2)
                     && (r0 - non_final[0].1) >= min_flush_span;
                 let expected_right = self
+                    .scope
                     .active_group_bounds_pt
                     .map(|(_, gr)| gr)
                     .unwrap_or(self.content_right_pt);
@@ -471,7 +472,7 @@ impl<'a> ExtractorContext<'a> {
                 } else if vis_hang > 2.0 {
                     hanging_indent_pt = vis_hang;
                 }
-                if self.container_inset_pt <= 0.1 {
+                if self.scope.container_inset_pt <= 0.1 {
                     let base_l = if vis_first > 2.0 {
                         line_spans[1].1
                     } else {
@@ -479,7 +480,7 @@ impl<'a> ExtractorContext<'a> {
                     };
                     let col_w = self.current_column_width_pt();
                     let (left_bound, right_bound) =
-                        if let Some((gl, gr)) = self.active_group_bounds_pt {
+                        if let Some((gl, gr)) = self.scope.active_group_bounds_pt {
                             (gl, gr)
                         } else if base_l >= self.content_left_pt - 4.0 {
                             (self.content_left_pt, self.content_right_pt)
@@ -502,7 +503,7 @@ impl<'a> ExtractorContext<'a> {
 
         let mut inlines = Vec::new();
         let mut state = ActiveInlineState {
-            scope_loc: self.active_scope_loc,
+            scope_loc: self.scope.active_scope_loc,
             ..Default::default()
         };
         let mut last_y: Option<f64> = None;

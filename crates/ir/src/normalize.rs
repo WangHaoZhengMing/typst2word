@@ -5,16 +5,19 @@
 //! 2. Identity-first merging of [`BlockNode::Container`] / [`BlockNode::CodeBlock`] nodes split across
 //!    Typst columns/pages (preserving 1-to-N `LayoutFragmentIr` slices in `DocumentIr::reference_layout`).
 //! 3. Cleaning leading, trailing, or duplicate consecutive [`BlockNode::PageBreak`] markers.
+//! 4. Canonicalizing `_typst_loc_<hash>` bookmark anchors into deterministic sequential IDs.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::{
-    BlockLayoutSpanIr, BlockNode, DocumentIr, InlineNode, LinkTargetIr, NodeId, NodeOrigin,
-    NodeReferenceLayout, PageSetupIr, ParagraphStyleIr, TableKindIr, TableRowIr,
+    BlockLayoutSpanIr, BlockNode, DocumentIr, FieldKindIr, InlineNode, LinkTargetIr, NodeId,
+    NodeOrigin, NodeReferenceLayout, PageSetupIr, ParagraphStyleIr, SemanticRoleIr, TableKindIr,
+    TableRowIr,
 };
 
 /// Normalize `DocumentIr` structure (coalesce adjacent text runs, collapse `#show heading: none`
-/// zero-fragment headings, merge split containers, and clean redundant page breaks).
+/// zero-fragment headings, merge split containers, clean redundant page breaks, and canonicalize
+/// intra-document bookmark anchors).
 pub fn normalize_document_ir(doc: &mut DocumentIr) {
     visit_document_inline_lists_mut(doc, &mut coalesce_adjacent_text_runs);
     collapse_hidden_empty_headings(doc);
@@ -23,6 +26,251 @@ pub fn normalize_document_ir(doc: &mut DocumentIr) {
     clean_redundant_pagebreaks(&mut doc.blocks);
     for section in &mut doc.sections {
         clean_redundant_pagebreaks(&mut section.blocks);
+    }
+    canonicalize_bookmark_anchors(doc);
+}
+
+/// Canonicalize Typst location-hash bookmark names (`_typst_loc_<hash>`) into deterministic
+/// sequential document-order anchors (`_typst_loc_0001`, `_typst_loc_0002`, ...) so generated
+/// OOXML is byte-reproducible regardless of source file path or `Span` hashes.
+pub fn canonicalize_bookmark_anchors(doc: &mut DocumentIr) {
+    struct AnchorTable {
+        map: HashMap<String, String>,
+        next_idx: usize,
+    }
+
+    impl AnchorTable {
+        fn new() -> Self {
+            Self {
+                map: HashMap::new(),
+                next_idx: 0,
+            }
+        }
+
+        fn intern(&mut self, anchor: &str) -> String {
+            if !anchor.starts_with("_typst_loc_") {
+                return anchor.to_string();
+            }
+            if let Some(existing) = self.map.get(anchor) {
+                return existing.clone();
+            }
+            self.next_idx += 1;
+            let canonical = format!("_typst_loc_{:04}", self.next_idx);
+            self.map.insert(anchor.to_string(), canonical.clone());
+            canonical
+        }
+
+        fn rewrite_opt(&mut self, slot: &mut Option<String>) {
+            if let Some(val) = slot.as_deref() {
+                let mapped = self.intern(val);
+                *slot = Some(mapped);
+            }
+        }
+    }
+
+    fn collect_defs_in_inlines(inlines: &[InlineNode], table: &mut AnchorTable) {
+        for inline in inlines {
+            match inline {
+                InlineNode::EquationInline(eq) => {
+                    if let Some(bm) = &eq.bookmark {
+                        table.intern(bm);
+                    }
+                }
+                InlineNode::Field { content, .. }
+                | InlineNode::Link { content, .. }
+                | InlineNode::Ref { content, .. }
+                | InlineNode::Citation { content, .. } => collect_defs_in_inlines(content, table),
+                InlineNode::Footnote { content, .. } => collect_defs_in_blocks(content, table),
+                InlineNode::ShapeInline(shape) => collect_defs_in_blocks(&shape.body, table),
+                InlineNode::CetzInline(canvas) => {
+                    for lbl in &canvas.labels {
+                        collect_defs_in_inlines(&lbl.content, table);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn collect_defs_in_blocks(blocks: &[BlockNode], table: &mut AnchorTable) {
+        for block in blocks {
+            match block {
+                BlockNode::Heading {
+                    bookmark, content, ..
+                }
+                | BlockNode::Paragraph {
+                    bookmark, content, ..
+                } => {
+                    if let Some(bm) = bookmark {
+                        table.intern(bm);
+                    }
+                    collect_defs_in_inlines(content, table);
+                }
+                BlockNode::Title { content, .. } => collect_defs_in_inlines(content, table),
+                BlockNode::Figure {
+                    bookmark,
+                    body,
+                    caption,
+                    ..
+                } => {
+                    if let Some(bm) = bookmark {
+                        table.intern(bm);
+                    }
+                    collect_defs_in_blocks(body, table);
+                    if let Some(cap) = caption {
+                        collect_defs_in_inlines(cap, table);
+                    }
+                }
+                BlockNode::EquationBlock(eq) => {
+                    if let Some(bm) = &eq.bookmark {
+                        table.intern(bm);
+                    }
+                }
+                BlockNode::Bibliography { title, entries } => {
+                    if let Some(t) = title {
+                        collect_defs_in_inlines(t, table);
+                    }
+                    for entry in entries {
+                        if let Some(bm) = &entry.bookmark {
+                            table.intern(bm);
+                        }
+                        collect_defs_in_inlines(&entry.content, table);
+                    }
+                }
+                BlockNode::List { items, .. } => {
+                    for item in items {
+                        collect_defs_in_blocks(&item.blocks, table);
+                    }
+                }
+                BlockNode::Enum { items, .. } => {
+                    for item in items {
+                        collect_defs_in_blocks(&item.blocks, table);
+                    }
+                }
+                BlockNode::Terms { items, .. } => {
+                    for item in items {
+                        collect_defs_in_inlines(&item.term, table);
+                        collect_defs_in_blocks(&item.description, table);
+                    }
+                }
+                BlockNode::Container(c) => collect_defs_in_blocks(&c.body, table),
+                BlockNode::Table(t) => {
+                    for row in &t.rows {
+                        for cell in &row.cells {
+                            collect_defs_in_blocks(&cell.blocks, table);
+                        }
+                    }
+                }
+                BlockNode::Quote {
+                    body, attribution, ..
+                } => {
+                    collect_defs_in_blocks(body, table);
+                    if let Some(attr) = attribution {
+                        collect_defs_in_inlines(attr, table);
+                    }
+                }
+                BlockNode::ShapeBlock(shape) => collect_defs_in_blocks(&shape.body, table),
+                BlockNode::CetzCanvas(canvas) => {
+                    for lbl in &canvas.labels {
+                        collect_defs_in_inlines(&lbl.content, table);
+                    }
+                }
+                BlockNode::Outline { title, entries } => {
+                    if let Some(t) = title {
+                        collect_defs_in_inlines(t, table);
+                    }
+                    for entry in entries {
+                        collect_defs_in_inlines(&entry.title, table);
+                        collect_defs_in_inlines(&entry.page_inlines, table);
+                    }
+                }
+                BlockNode::Columns { body, .. } => collect_defs_in_blocks(body, table),
+                _ => {}
+            }
+        }
+    }
+
+    fn collect_defs_in_setup(setup: &PageSetupIr, table: &mut AnchorTable) {
+        collect_defs_in_blocks(&setup.header, table);
+        collect_defs_in_blocks(&setup.footer, table);
+        if let Some(fh) = &setup.first_page_header {
+            collect_defs_in_blocks(fh, table);
+        }
+        if let Some(ff) = &setup.first_page_footer {
+            collect_defs_in_blocks(ff, table);
+        }
+        if let Some(eh) = &setup.even_page_header {
+            collect_defs_in_blocks(eh, table);
+        }
+        if let Some(ef) = &setup.even_page_footer {
+            collect_defs_in_blocks(ef, table);
+        }
+    }
+
+    let mut table = AnchorTable::new();
+    // 1. Intern all bookmark definitions in strict pre-order across sections.
+    collect_defs_in_setup(&doc.page_setup, &mut table);
+    collect_defs_in_blocks(&doc.blocks, &mut table);
+    for section in &doc.sections {
+        collect_defs_in_setup(&section.page_setup, &mut table);
+        collect_defs_in_blocks(&section.blocks, &mut table);
+    }
+
+    // 2. Rewrite all block-level bookmark definitions and outline/bibliography entries.
+    visit_document_block_lists_mut(doc, &mut |blocks| {
+        for block in blocks.iter_mut() {
+            match block {
+                BlockNode::Heading { bookmark, .. }
+                | BlockNode::Paragraph { bookmark, .. }
+                | BlockNode::Figure { bookmark, .. } => table.rewrite_opt(bookmark),
+                BlockNode::EquationBlock(eq) => table.rewrite_opt(&mut eq.bookmark),
+                BlockNode::Outline { entries, .. } => {
+                    for entry in entries {
+                        table.rewrite_opt(&mut entry.target_bookmark);
+                    }
+                }
+                BlockNode::Bibliography { entries, .. } => {
+                    for entry in entries {
+                        table.rewrite_opt(&mut entry.bookmark);
+                    }
+                }
+                _ => {}
+            }
+        }
+    });
+
+    // 3. Rewrite all inline bookmark targets (`Link`, `Ref`, `PageRef`, inline `Equation`).
+    visit_document_inline_lists_mut(doc, &mut |inlines| {
+        for inline in inlines.iter_mut() {
+            match inline {
+                InlineNode::Field {
+                    kind: FieldKindIr::PageRef { bookmark },
+                    ..
+                } => {
+                    *bookmark = table.intern(bookmark);
+                }
+                InlineNode::EquationInline(eq) => table.rewrite_opt(&mut eq.bookmark),
+                InlineNode::Link {
+                    target: Some(LinkTargetIr::Anchor(anchor)),
+                    ..
+                } => {
+                    *anchor = table.intern(anchor);
+                }
+                InlineNode::Ref { target, .. } => {
+                    *target = table.intern(target);
+                }
+                _ => {}
+            }
+        }
+    });
+
+    // 4. Keep `NodeOrigin.role` bookmark metadata synchronized.
+    for origin in doc.origins.values_mut() {
+        match &mut origin.role {
+            Some(SemanticRoleIr::Heading { bookmark, .. })
+            | Some(SemanticRoleIr::Figure { bookmark, .. }) => table.rewrite_opt(bookmark),
+            _ => {}
+        }
     }
 }
 

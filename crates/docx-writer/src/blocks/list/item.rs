@@ -264,7 +264,9 @@ impl<'a> DocxWriter<'a> {
         // paragraph carried neither pre-solved metrics nor an explicit `line_spacing_pt`.
         let line_dxa = ctx
             .line_dxa_override
-            .filter(|_| style.line_spacing_pt.is_none() && !self.doc.solved_line_dxa.contains_key(&id))
+            .filter(|_| {
+                style.line_spacing_pt.is_none() && !self.doc.has_solved_paragraph_line(id)
+            })
             .unwrap_or_else(|| {
                 self.doc
                     .resolve_paragraph_line_dxa(id, content, style.line_spacing_pt)

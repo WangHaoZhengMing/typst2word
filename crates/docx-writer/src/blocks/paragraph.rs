@@ -126,7 +126,14 @@ impl<'a> DocxWriter<'a> {
         if construct.needs_zwsp_for_inline_eq {
             // Prevent Microsoft Word from promoting a `<w:p>` containing only `<m:oMath>`
             // into centered Display Math Mode (`oMathPara` with +8pt vertical margin).
-            out.push_str("<w:r><w:t>&#8203;</w:t></w:r>");
+            if let Some(sz_val) = construct.mark_rpr_sz_half_pt {
+                let _ = write!(
+                    out,
+                    r#"<w:r><w:rPr><w:sz w:val="{sz_val}"/><w:szCs w:val="{sz_val}"/></w:rPr><w:t>&#8203;</w:t></w:r>"#
+                );
+            } else {
+                out.push_str("<w:r><w:t>&#8203;</w:t></w:r>");
+            }
         }
         if let Some(id) = bm_id {
             Self::emit_bookmark_end(id, out);

@@ -102,4 +102,35 @@ impl WordCellMarginsDxa {
             right_dxa: pt_to_dxa(right_pt),
         }
     }
+
+    /// Solve `<w:tcMar>` in row context, zeroing vertical padding on exact-height rows and
+    /// restoring Word's visual bottom breathing room (`+70 dxa`) on the final row of semantic tables.
+    #[inline]
+    pub fn solve_for_row(
+        inset_top_pt: f64,
+        inset_bottom_pt: f64,
+        inset_left_pt: f64,
+        inset_right_pt: f64,
+        role: TableCellRole,
+        is_exact_height: bool,
+        is_last_row: bool,
+    ) -> Self {
+        let mut margins = Self::solve(
+            inset_top_pt,
+            inset_bottom_pt,
+            inset_left_pt,
+            inset_right_pt,
+            role,
+        );
+        if is_exact_height {
+            margins.top_dxa = 0;
+            margins.bottom_dxa = 0;
+        } else if matches!(role, TableCellRole::SemanticTable { .. })
+            && is_last_row
+            && inset_bottom_pt >= 2.5
+        {
+            margins.bottom_dxa += 70;
+        }
+        margins
+    }
 }

@@ -160,11 +160,11 @@ impl<'a> ExtractorContext<'a> {
                 let col_w = self.current_column_width_pt();
                 let (col_count, col_gutter) = self.active_columns;
                 let mut inside_inset_container = false;
-                let right_bound = if let Some((gl, gr)) = self.active_group_bounds_pt {
+                let right_bound = if let Some((gl, gr)) = self.scope.active_group_bounds_pt {
                     if col_min_x[0] < 4.0 && avail_w_pt < gr - 2.0 {
                         inside_inset_container = true;
                         avail_w_pt
-                    } else if self.container_inset_pt > 0.1
+                    } else if self.scope.container_inset_pt > 0.1
                         && (gl + 2.0..=gl + 30.0).contains(&col_min_x[0])
                     {
                         inside_inset_container = true;
@@ -219,7 +219,7 @@ impl<'a> ExtractorContext<'a> {
         let inferred_center_align = !is_semantic_table
             && total_fr == 0.0
             && col_min_x.first().is_some_and(|&x0| {
-                if let Some((gl, gr)) = self.active_group_bounds_pt {
+                if let Some((gl, gr)) = self.scope.active_group_bounds_pt {
                     let left_gap = x0 - gl;
                     let right_gap = gr - (x0 + total_table_w);
                     left_gap > 20.0

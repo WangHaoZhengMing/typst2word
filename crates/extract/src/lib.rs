@@ -13,10 +13,12 @@ mod dispatch;
 mod document;
 mod elements;
 mod flow;
+mod font_metrics;
 mod frame_tree;
 mod inline;
 mod math;
 mod prescan;
+mod sections;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
@@ -29,10 +31,11 @@ use typst::{World, WorldExt};
 use compiler::compile::CompiledTypstDocument;
 use compiler::world::TypstWorld;
 use ir::{
-    BlockLayoutSpanIr, BlockNode, ConversionReport, DocumentIr, FontFaceMetricsIr, HAlignIr,
-    LayoutFragmentIr, NodeId, NodeOrigin, NodeReferenceLayout, PageSetupIr, SemanticRoleIr,
-    normalize_document_ir,
+    BlockLayoutSpanIr, BlockNode, ConversionReport, DocumentIr, HAlignIr, LayoutFragmentIr, NodeId,
+    NodeOrigin, NodeReferenceLayout, PageSetupIr, SemanticRoleIr, normalize_document_ir,
 };
+
+use self::sections::consolidate_page_sections;
 
 /// Extract a complete, structurally normalized `DocumentIr` from a `CompiledTypstDocument` and `TypstWorld`.
 pub fn extract_document_ir(compiled: &CompiledTypstDocument, world: &TypstWorld) -> DocumentIr {
@@ -40,6 +43,25 @@ pub fn extract_document_ir(compiled: &CompiledTypstDocument, world: &TypstWorld)
     let mut doc = ctx.extract();
     normalize_document_ir(&mut doc);
     doc
+}
+
+/// Scoped geometric and style-realization cursor updated while descending into nested frames,
+/// containers, cells, and furniture regions. Mutate inside [`ExtractorContext::with_scope`] so
+/// child scopes are atomically restored on exit (including early returns).
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct TraversalScope {
+    /// Nearest enclosing realized `Location` for scoped `StyleChain` lookups.
+    pub(crate) active_scope_loc: Option<Location>,
+    /// Accumulated horizontal inset (in pt) when inside bordered/padded container blocks.
+    pub(crate) container_inset_pt: f64,
+    /// Horizontal bounds `(left_pt, right_pt)` of the currently active local `Group` or cell frame.
+    pub(crate) active_group_bounds_pt: Option<(f64, f64)>,
+    /// Active vertical container height override (`pt`), set while extracting header/footer furniture
+    /// so `#block(height: 100%)` resolves against the header/footer margin rather than body height.
+    pub(crate) active_region_height_pt: Option<f64>,
+    /// Accumulated page-global origin offset (`Point`) when descending into unwrapped `TreeNode::Group`
+    /// children, used strictly for `reference_layout` page fragments, line baselines, and flow spans.
+    pub(crate) group_origin_offset: Point,
 }
 
 pub(crate) struct ExtractorContext<'a> {
@@ -56,8 +78,8 @@ pub(crate) struct ExtractorContext<'a> {
     pub(crate) reference_layout: BTreeMap<NodeId, NodeReferenceLayout>,
     /// Stack of active semantic parent `NodeId`s during recursive block extraction.
     pub(crate) parent_node_stack: Vec<NodeId>,
-    /// Nearest enclosing realized `Location` for scoped `StyleChain` lookups.
-    pub(crate) active_scope_loc: Option<Location>,
+    /// Scoped cursor state restored across nested elements, groups, cells, and furniture regions.
+    pub(crate) scope: TraversalScope,
     /// Active `(tracking_pt, baseline_shift_pt)` from `__typst2word_scope` during `frame_tree` build.
     pub(crate) active_text_style: (Option<f64>, Option<f64>),
     /// Active configured `TextElem::font` list from `__typst2word_scope` during `frame_tree` build.
@@ -97,22 +119,12 @@ pub(crate) struct ExtractorContext<'a> {
     pub(crate) page_columns: usize,
     /// Active column layout `(column_count, gutter_pt)` during extraction.
     pub(crate) active_columns: (usize, f64),
-    /// Accumulated horizontal inset (in pt) when inside bordered/padded container blocks.
-    pub(crate) container_inset_pt: f64,
     /// Pending list/enum marker text from an orphaned `PdfMarkerTag(ListItemLabel)`.
     pub(crate) pending_list_marker: Option<String>,
     /// Open `FrameItem::Group` that split across a page/column boundary with unclosed tags.
     pub(crate) pending_split_group: Option<frame_tree::PendingSplitGroup>,
     /// Recursion depth inside `FrameItem::Group` frames during `build_frame_tree`.
     pub(crate) group_tree_depth: usize,
-    /// Horizontal bounds `(left_pt, right_pt)` of the currently active local `Group` or cell frame.
-    pub(crate) active_group_bounds_pt: Option<(f64, f64)>,
-    /// Active vertical container height override (`pt`), set while extracting header/footer furniture
-    /// so `#block(height: 100%)` resolves against the header/footer margin rather than body height.
-    pub(crate) active_region_height_pt: Option<f64>,
-    /// Accumulated page-global origin offset (`Point`) when descending into unwrapped `TreeNode::Group` children,
-    /// used strictly for `reference_layout` page fragments, line baselines, and flow spans.
-    pub(crate) group_origin_offset: Point,
 }
 
 impl<'a> ExtractorContext<'a> {
@@ -134,7 +146,7 @@ impl<'a> ExtractorContext<'a> {
             origins: BTreeMap::new(),
             reference_layout: BTreeMap::new(),
             parent_node_stack: Vec::new(),
-            active_scope_loc: None,
+            scope: TraversalScope::default(),
             active_text_style: (None, None),
             active_configured_fonts: initial_fonts,
             seen_font_fallbacks: BTreeSet::new(),
@@ -155,14 +167,19 @@ impl<'a> ExtractorContext<'a> {
             mirror_margins: false,
             page_columns: 1,
             active_columns: (1, 0.0),
-            container_inset_pt: 0.0,
             pending_list_marker: None,
             pending_split_group: None,
             group_tree_depth: 0,
-            active_group_bounds_pt: None,
-            active_region_height_pt: None,
-            group_origin_offset: Point::zero(),
         }
+    }
+
+    /// Execute `f` with a snapshotted copy of [`Self::scope`], restoring the outer scope on exit.
+    #[inline]
+    pub(crate) fn with_scope<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
+        let saved = self.scope;
+        let out = f(self);
+        self.scope = saved;
+        out
     }
 
     pub(crate) fn current_column_width_pt(&self) -> f64 {
@@ -176,7 +193,7 @@ impl<'a> ExtractorContext<'a> {
     }
 
     pub(crate) fn current_page_content_height_pt(&self) -> f64 {
-        if let Some(region_h) = self.active_region_height_pt {
+        if let Some(region_h) = self.scope.active_region_height_pt {
             return region_h.max(1.0);
         }
         (self.content_bottom_pt - self.content_top_pt).max(120.0)
@@ -189,7 +206,7 @@ impl<'a> ExtractorContext<'a> {
 
     /// Realized scoped `StyleChain` active at `loc` (or the nearest enclosing element scope).
     pub(crate) fn scoped_style_chain(&self, loc: Option<Location>) -> StyleChain<'_> {
-        let target = loc.or(self.active_scope_loc);
+        let target = loc.or(self.scope.active_scope_loc);
         if target.is_some_and(|l| self.compiled.semantics.get(l).is_some()) {
             self.compiled.semantics.style_chain(target)
         } else if !self.doc_styles.is_empty() {
@@ -266,9 +283,12 @@ impl<'a> ExtractorContext<'a> {
     }
 
     /// Group laid-out leaf items in `nodes` by 0-based `page_idx` into 1-to-N `LayoutFragmentIr`s.
-    pub(crate) fn collect_page_fragments(&self, nodes: &[frame_tree::TreeNode]) -> Vec<LayoutFragmentIr> {
+    pub(crate) fn collect_page_fragments(
+        &self,
+        nodes: &[frame_tree::TreeNode],
+    ) -> Vec<LayoutFragmentIr> {
         let mut by_page: BTreeMap<usize, (f64, f64, f64, f64)> = BTreeMap::new();
-        Self::accumulate_page_fragments(nodes, self.group_origin_offset, &mut by_page);
+        Self::accumulate_page_fragments(nodes, self.scope.group_origin_offset, &mut by_page);
         by_page
             .into_iter()
             .filter_map(|(page_idx, (min_x, min_y, max_x, max_y))| {
@@ -451,8 +471,7 @@ impl<'a> ExtractorContext<'a> {
         self.logical_child_groups = saved_groups;
         self.pending_split_group = None;
 
-        // Consolidate consecutive pages into Word sections (handling identical furniture,
-        // `different_first_page` `<w:titlePg/>`, and `different_odd_even` `<w:evenAndOddHeaders/>`).
+        // Consolidate consecutive pages into Word sections.
         let section_plans = consolidate_page_sections(&page_setups, &page_styles);
 
         let mut sections = Vec::new();
@@ -513,354 +532,4 @@ impl<'a> ExtractorContext<'a> {
         doc.anchors = anchors;
         doc
     }
-
-    /// Scan all laid-out `FrameItem::Text` items across the compiled document and extract exact
-    /// OpenType/TrueType binary metrics (`head`, `hhea`, `OS/2`, `GSUB`, `post`) for every realized
-    /// font family. When multiple faces of a family appear (e.g. Bold + Regular), prefers the
-    /// Regular upright face so paragraph line-box metrics reflect body text.
-    fn collect_document_font_metrics(&self) -> BTreeMap<String, FontFaceMetricsIr> {
-        let mut chosen_fonts: BTreeMap<String, (bool, typst::text::Font)> = BTreeMap::new();
-        for page in self.compiled.document.pages() {
-            Self::scan_frame_fonts(&page.frame, &mut chosen_fonts);
-        }
-
-        let global_res = compiler::world::GlobalTypstResources::get();
-        let mut out = BTreeMap::new();
-        for (family, (_, font)) in chosen_fonts {
-            if let Some(metrics) =
-                Self::parse_font_face_metrics(&font, global_res.is_system_font_family(&family))
-            {
-                out.insert(family, metrics);
-            }
-        }
-        out
-    }
-
-    fn scan_frame_fonts(
-        frame: &typst::layout::Frame,
-        chosen: &mut BTreeMap<String, (bool, typst::text::Font)>,
-    ) {
-        for (_, item) in frame.items() {
-            match item {
-                typst::layout::FrameItem::Text(text) => {
-                    let info = text.font.info();
-                    let family = info.family.clone();
-                    let is_regular_upright = info.variant.weight == typst::text::FontWeight::REGULAR
-                        && info.variant.style == typst::text::FontStyle::Normal;
-                    match chosen.get(&family) {
-                        None => {
-                            chosen.insert(family, (is_regular_upright, text.font.font().clone()));
-                        }
-                        Some((already_regular, _)) if !*already_regular && is_regular_upright => {
-                            chosen.insert(family, (true, text.font.font().clone()));
-                        }
-                        _ => {}
-                    }
-                }
-                typst::layout::FrameItem::Group(grp) => {
-                    Self::scan_frame_fonts(&grp.frame, chosen);
-                }
-                _ => {}
-            }
-        }
-    }
-
-    /// Parse OpenType/TrueType binary tables (`head`, `hhea`, `OS/2`, `GSUB`, `post`) from `font`.
-    fn parse_font_face_metrics(
-        font: &typst::text::Font,
-        is_system_installed: bool,
-    ) -> Option<FontFaceMetricsIr> {
-        let face = ttf_parser::Face::parse(font.data().as_slice(), font.index()).ok()?;
-        let upem = face.units_per_em().max(1);
-        let hhea_ascender = face.ascender();
-        let hhea_descender = face.descender();
-        let hhea_line_gap = face.line_gap();
-        // When `OS/2` (or `sCapHeight` in `OS/2` v0/v1) is absent, fall back to `'H'`'s glyph
-        // bounding box top (`y_max`), matching Typst's own `FontMetrics::from_ttf` definition.
-        let s_cap_height = face.capital_height().or_else(|| {
-            face.glyph_index('H')
-                .and_then(|gid| face.glyph_bounding_box(gid))
-                .map(|bbox| bbox.y_max)
-                .filter(|&h| h > 0)
-        });
-        let s_typo_ascender = face.tables().os2.map(|t| t.typographic_ascender());
-        let s_typo_descender = face.tables().os2.map(|t| t.typographic_descender());
-
-        // Read unsigned `usWinAscent`, `usWinDescent`, and `ulCodePageRange1` directly from raw
-        // `OS/2` bytes (`ttf-parser` 0.25's `windows_descender()` negates `usWinDescent` as `i16`
-        // and does not expose `ulCodePageRange1` bits `17..=20` for CJK codepages).
-        let mut us_win_ascent = None;
-        let mut us_win_descent = None;
-        let mut has_cjk_codepage = false;
-        let mut has_os2_codepage_field = false;
-        if let Some(os2) = face.raw_face().table(ttf_parser::Tag::from_bytes(b"OS/2")) {
-            if os2.len() >= 78 {
-                us_win_ascent = Some(u16::from_be_bytes([os2[74], os2[75]]));
-                us_win_descent = Some(u16::from_be_bytes([os2[76], os2[77]]));
-            }
-            if os2.len() >= 86 {
-                let version = u16::from_be_bytes([os2[0], os2[1]]);
-                if version >= 1 {
-                    has_os2_codepage_field = true;
-                    let cp1 = u32::from_be_bytes([os2[78], os2[79], os2[80], os2[81]]);
-                    // Bits 17..=20: JIS/Japan (CP932), Chinese Simplified (CP936),
-                    // Korean Wansung (CP949), Chinese Traditional (CP950).
-                    has_cjk_codepage = (cp1 & 0x001E_0000) != 0;
-                }
-            }
-        }
-        // Apple AAT / legacy TrueType CJK fonts (such as macOS `Hei.ttf` / `Kai.ttf`) omit the
-        // `OS/2` table (or use version 0 without `ulCodePageRange1`), yet Word's `<w:useFELayout/>`
-        // still applies East Asian CJK line-box expansion (`1.3x`). Detect CJK coverage directly
-        // from `cmap` when `ulCodePageRange1` is absent.
-        if !has_os2_codepage_field {
-            has_cjk_codepage = ['中', '文', '国', '字']
-                .into_iter()
-                .all(|c| face.glyph_index(c).is_some());
-        }
-
-        let has_gsub_hani = face
-            .tables()
-            .gsub
-            .is_some_and(|g| g.scripts.find(ttf_parser::Tag::from_bytes(b"hani")).is_some());
-
-        Some(FontFaceMetricsIr {
-            upem,
-            hhea_ascender,
-            hhea_descender,
-            hhea_line_gap,
-            s_cap_height,
-            s_typo_ascender,
-            s_typo_descender,
-            us_win_ascent,
-            us_win_descent,
-            has_cjk_codepage,
-            has_gsub_hani,
-            is_monospaced: face.is_monospaced(),
-            is_system_installed,
-        })
-    }
-}
-
-/// Compare two `PageSetupIr` headers/footers after stripping `NodeId`s so dynamic
-/// page fields and per-page node IDs do not cause spurious section breaks.
-fn canonical_furniture_value(blocks: &[BlockNode]) -> Option<serde_json::Value> {
-    let mut cloned = blocks.to_vec();
-    strip_node_ids_recursive(&mut cloned);
-    serde_json::to_value(&cloned).ok()
-}
-
-fn furniture_eq(a: &[BlockNode], b: &[BlockNode]) -> bool {
-    canonical_furniture_value(a) == canonical_furniture_value(b)
-}
-
-fn strip_node_ids_recursive(blocks: &mut [BlockNode]) {
-    for b in blocks {
-        b.set_node_id(NodeId::UNSET);
-        match b {
-            BlockNode::List { items, .. } => {
-                for item in items {
-                    strip_node_ids_recursive(&mut item.blocks);
-                }
-            }
-            BlockNode::Enum { items, .. } => {
-                for item in items {
-                    strip_node_ids_recursive(&mut item.blocks);
-                }
-            }
-            BlockNode::Terms { items, .. } => {
-                for item in items {
-                    strip_node_ids_recursive(&mut item.description);
-                }
-            }
-            BlockNode::Container(c) => strip_node_ids_recursive(&mut c.body),
-            BlockNode::Table(t) => {
-                for row in &mut t.rows {
-                    for cell in &mut row.cells {
-                        strip_node_ids_recursive(&mut cell.blocks);
-                    }
-                }
-            }
-            BlockNode::Quote { body, .. }
-            | BlockNode::Figure { body, .. }
-            | BlockNode::Columns { body, .. } => strip_node_ids_recursive(body),
-            BlockNode::ShapeBlock(s) => strip_node_ids_recursive(&mut s.body),
-            _ => {}
-        }
-    }
-}
-
-fn setups_identical(a: &PageSetupIr, b: &PageSetupIr) -> bool {
-    a.has_same_geometry(b)
-        && a.page_number_format == b.page_number_format
-        && furniture_eq(&a.header, &b.header)
-        && furniture_eq(&a.footer, &b.footer)
-}
-
-/// Consolidate per-page `PageSetupIr`s into `(page_range, consolidated_setup)` sections.
-///
-/// When consecutive pages share the exact same geometry AND page `#set` styles
-/// (`page_styles[p] == page_styles[start]`, e.g. dynamic `context` headers/footers),
-/// detects:
-/// 1. Identical furniture across all pages -> single standard section.
-/// 2. Distinct first page (`different_first_page = true`, `<w:titlePg/>`) + uniform remaining pages.
-/// 3. Alternating odd/even pages (`different_odd_even = true`, `<w:evenAndOddHeaders/>`), optionally
-///    combined with a distinct first page.
-/// Compare only `PageElem` `#set page(...)` rules so non-page liftable styles (such as
-/// `#set enum(...)` or `#set par(...)`) do not split consecutive pages into separate Word sections.
-fn page_elem_styles_eq(a: Option<&Styles>, b: Option<&Styles>) -> bool {
-    use typst::foundations::NativeElement as _;
-    match (a, b) {
-        (Some(sa), Some(sb)) => sa
-            .as_slice()
-            .iter()
-            .filter(|s| s.element() == Some(typst::layout::PageElem::ELEM))
-            .eq(sb
-                .as_slice()
-                .iter()
-                .filter(|s| s.element() == Some(typst::layout::PageElem::ELEM))),
-        (None, None) => true,
-        _ => false,
-    }
-}
-
-fn consolidate_page_sections(
-    page_setups: &[PageSetupIr],
-    page_styles: &[Styles],
-) -> Vec<(std::ops::Range<usize>, PageSetupIr)> {
-    if page_setups.is_empty() {
-        return vec![(0..0, PageSetupIr::default())];
-    }
-
-    // First partition into maximal runs sharing geometry, numbering format, and `#set page` styles
-    // (or identical static setups).
-    let mut raw: Vec<(std::ops::Range<usize>, PageSetupIr)> = Vec::new();
-    let n = page_setups.len();
-    let mut i = 0;
-
-    while i < n {
-        // Try dynamic consolidation across maximal run `i..end` sharing the page box & `#set page` styles.
-        // Identical `#set page` styles guarantee identical source header/footer distances, so the
-        // measured `header_margin_pt` (which varies with furniture presence) is not compared here.
-        let mut dyn_end = i + 1;
-        while dyn_end < n
-            && page_setups[dyn_end].has_same_page_box(&page_setups[i])
-            && page_elem_styles_eq(page_styles.get(dyn_end), page_styles.get(i))
-        {
-            dyn_end += 1;
-        }
-
-        if dyn_end - i >= 2
-            && let Some(consolidated) = try_consolidate_dynamic_run(&page_setups[i..dyn_end], i)
-        {
-            raw.push((i..dyn_end, consolidated));
-            i = dyn_end;
-            continue;
-        }
-
-        // Standard run: group pages whose resolved `PageSetupIr` (ignoring `NodeId`s) is equal.
-        let mut std_end = i + 1;
-        while std_end < n && setups_identical(&page_setups[std_end], &page_setups[i]) {
-            std_end += 1;
-        }
-        raw.push((i..std_end, page_setups[i].clone()));
-        i = std_end;
-    }
-
-    // Coalesce adjacent static sections whose resolved `PageSetupIr` is identical.
-    let mut out: Vec<(std::ops::Range<usize>, PageSetupIr)> = Vec::with_capacity(raw.len());
-    for (range, setup) in raw {
-        if let Some((prev_range, prev_setup)) = out.last_mut()
-            && prev_range.end == range.start
-            && !prev_setup.different_first_page
-            && !prev_setup.different_odd_even
-            && !setup.different_first_page
-            && !setup.different_odd_even
-            && setups_identical(prev_setup, &setup)
-        {
-            prev_range.end = range.end;
-        } else {
-            out.push((range, setup));
-        }
-    }
-
-    out
-}
-
-fn try_consolidate_dynamic_run(run: &[PageSetupIr], start_page_idx: usize) -> Option<PageSetupIr> {
-    if run.len() < 2 {
-        return None;
-    }
-
-    // 1. All pages already identical.
-    if run.iter().skip(1).all(|p| {
-        furniture_eq(&p.header, &run[0].header) && furniture_eq(&p.footer, &run[0].footer)
-    }) {
-        return Some(run[0].clone());
-    }
-
-    // 2. First page differs (`different_first_page = true`), pages `1..` all share `(H_rest, F_rest)`.
-    let rest_uniform = run.iter().skip(2).all(|p| {
-        furniture_eq(&p.header, &run[1].header) && furniture_eq(&p.footer, &run[1].footer)
-    });
-    if rest_uniform {
-        let mut merged = run[1].clone();
-        merged.different_first_page = true;
-        merged.first_page_header = Some(run[0].header.clone());
-        merged.first_page_footer = Some(run[0].footer.clone());
-        if merged.header.is_empty() && !run[0].header.is_empty() {
-            merged.header_margin_pt = run[0].header_margin_pt;
-        }
-        if merged.footer.is_empty() && !run[0].footer.is_empty() {
-            merged.footer_margin_pt = run[0].footer_margin_pt;
-        }
-        return Some(merged);
-    }
-
-    // 3. Odd/even alternation (`different_odd_even = true`), optionally with distinct first page.
-    if run.len() >= 3 {
-        // In 1-based document page numbers, `page_num = start_page_idx + offset + 1`.
-        let odd_ref = (0..run.len())
-            .skip(1)
-            .find(|&off| (start_page_idx + off + 1) % 2 == 1)
-            .or_else(|| (0..run.len()).find(|&off| (start_page_idx + off + 1) % 2 == 1));
-        let even_ref = (0..run.len())
-            .skip(1)
-            .find(|&off| (start_page_idx + off + 1) % 2 == 0)
-            .or_else(|| (0..run.len()).find(|&off| (start_page_idx + off + 1) % 2 == 0));
-
-        if let (Some(oi), Some(ei)) = (odd_ref, even_ref) {
-            let tail_matches = (1..run.len()).all(|off| {
-                let target = if (start_page_idx + off + 1) % 2 == 1 {
-                    &run[oi]
-                } else {
-                    &run[ei]
-                };
-                furniture_eq(&run[off].header, &target.header)
-                    && furniture_eq(&run[off].footer, &target.footer)
-            });
-            if tail_matches {
-                let first_target = if (start_page_idx + 1) % 2 == 1 {
-                    &run[oi]
-                } else {
-                    &run[ei]
-                };
-                let first_matches = furniture_eq(&run[0].header, &first_target.header)
-                    && furniture_eq(&run[0].footer, &first_target.footer);
-
-                let mut merged = run[oi].clone();
-                merged.different_odd_even = true;
-                merged.even_page_header = Some(run[ei].header.clone());
-                merged.even_page_footer = Some(run[ei].footer.clone());
-                if !first_matches {
-                    merged.different_first_page = true;
-                    merged.first_page_header = Some(run[0].header.clone());
-                    merged.first_page_footer = Some(run[0].footer.clone());
-                }
-                return Some(merged);
-            }
-        }
-    }
-
-    None
 }

@@ -165,7 +165,7 @@ impl<'a> ExtractorContext<'a> {
 
         let id = self.alloc_node_with_fragments(
             typst::syntax::Span::detached(),
-            self.active_scope_loc,
+            self.scope.active_scope_loc,
             Some(SemanticRoleIr::CetzCanvas),
             nodes,
         );

@@ -101,15 +101,7 @@ impl<'a> ExtractorContext<'a> {
         let chain = self.scoped_style_chain(Some(loc));
         let default_font_pt =
             Self::resolve_length_pt(chain.get(typst::text::TextElem::size).0, 11.0);
-        let base_font_pt = content
-            .iter()
-            .find_map(|inl| match inl {
-                InlineNode::Text(r) => r.font_size_pt,
-                InlineNode::EquationInline(eq) => eq.font_size_pt,
-                _ => None,
-            })
-            .unwrap_or(default_font_pt)
-            .max(6.0);
+        let base_font_pt = ir::dominant_inline_font_size_pt(&content, default_font_pt).max(6.0);
 
         let par_em_pt = if base_font_pt >= 15.0 {
             default_font_pt
@@ -551,7 +543,7 @@ impl<'a> ExtractorContext<'a> {
         let mut has_tall_inline_object = false;
         Self::walk_paragraph_baselines(
             nodes,
-            self.group_origin_offset,
+            self.scope.group_origin_offset,
             base_font_pt,
             &mut raw_lines,
             &mut has_tall_inline_object,

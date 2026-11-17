@@ -298,9 +298,13 @@ pub fn solve_table_cell_paragraph_style(
         TableKindIr::StyledContainer => {}
         TableKindIr::SemanticTable => {
             if content_has_cjk_chars(content) {
-                cell_style.line_spacing_pt = Some(4.5);
-            } else if cell_style.line_spacing_pt.is_some() {
-                cell_style.line_spacing_pt = Some(6.5);
+                cell_style.line_spacing_pt = Some(
+                    cell_style
+                        .line_spacing_pt
+                        .map_or(4.5, |ls| ls.min(4.5)),
+                );
+            } else if let Some(ls) = cell_style.line_spacing_pt {
+                cell_style.line_spacing_pt = Some(ls.min(6.5));
             } else {
                 cell_style.line_spacing_pt = Some(6.0);
             }

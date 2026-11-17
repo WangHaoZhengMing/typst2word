@@ -62,8 +62,7 @@ impl<'a> DocxWriter<'a> {
             if let Some(first) = constructs.first_mut() {
                 first.before_dxa = 0;
             }
-        } else if !id.is_unset()
-            && let Some(&before_dxa) = self.doc.solved_block_before_dxa.get(&id)
+        } else if let Some(before_dxa) = self.doc.solved_before_dxa(id)
             && let Some(first) = constructs.first_mut()
         {
             first.before_dxa = first.before_dxa.max(before_dxa);
@@ -194,8 +193,7 @@ impl<'a> DocxWriter<'a> {
             if let Some(first) = constructs.first_mut() {
                 first.before_dxa = 0;
             }
-        } else if !id.is_unset()
-            && let Some(&before_dxa) = self.doc.solved_block_before_dxa.get(&id)
+        } else if let Some(before_dxa) = self.doc.solved_before_dxa(id)
             && let Some(first) = constructs.first_mut()
         {
             first.before_dxa = first.before_dxa.max(before_dxa);

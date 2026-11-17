@@ -162,27 +162,16 @@ impl<'a> DocxWriter<'a> {
 
                 // Cell padding / margins
                 let cell_role = resolve_table_cell_role(table_kind, blocks);
-                let mut margins = word_construct::WordCellMarginsDxa::solve(
+                let margins = word_construct::WordCellMarginsDxa::solve_for_row(
                     inset.top,
                     inset.bottom,
                     inset.left,
                     inset.right,
                     cell_role,
+                    row_construct.is_exact_height,
+                    row_idx + 1 == table.rows.len(),
                 );
-                if row_construct.is_exact_height {
-                    margins.top_dxa = 0;
-                    margins.bottom_dxa = 0;
-                } else if table_kind == TableKindIr::SemanticTable
-                    && row_idx + 1 == table.rows.len()
-                    && inset.bottom >= 2.5
-                {
-                    margins.bottom_dxa += 70;
-                }
-                let _ = write!(
-                    out,
-                    r#"<w:tcMar><w:top w:w="{}" w:type="dxa"/><w:left w:w="{}" w:type="dxa"/><w:bottom w:w="{}" w:type="dxa"/><w:right w:w="{}" w:type="dxa"/></w:tcMar>"#,
-                    margins.top_dxa, margins.left_dxa, margins.bottom_dxa, margins.right_dxa,
-                );
+                crate::xml_helpers::write_tc_mar(margins, out);
 
                 // Vertical alignment
                 let valign_str = match valign {
@@ -202,10 +191,7 @@ impl<'a> DocxWriter<'a> {
                 let zero_vertical_inset = inset.top <= 0.5 && inset.bottom <= 0.5;
                 if blocks.is_empty() || vmerge == Some(VMergeState::Continue) {
                     if row_construct.is_exact_height {
-                        let _ = write!(
-                            out,
-                            r#"<w:p><w:pPr>{keep_next_xml}<w:spacing w:before="0" w:after="0" w:line="20" w:lineRule="exact"/><w:rPr><w:sz w:val="2"/><w:szCs w:val="2"/></w:rPr></w:pPr></w:p>"#
-                        );
+                        crate::xml_helpers::write_exact_spacer_p(0, 20, keep_rows_together, out);
                     } else {
                         let _ = write!(
                             out,
@@ -222,9 +208,11 @@ impl<'a> DocxWriter<'a> {
                         &mut cell_xml,
                     );
                     if !cell_xml.contains("<w:p") || !cell_xml.ends_with("</w:p>") {
-                        let _ = write!(
-                            cell_xml,
-                            r#"<w:p><w:pPr>{keep_next_xml}<w:spacing w:before="0" w:after="0" w:line="20" w:lineRule="exact"/><w:rPr><w:sz w:val="2"/><w:szCs w:val="2"/></w:rPr></w:pPr></w:p>"#
+                        crate::xml_helpers::write_exact_spacer_p(
+                            0,
+                            20,
+                            keep_rows_together,
+                            &mut cell_xml,
                         );
                     }
                     out.push_str(&cell_xml);
@@ -281,6 +269,36 @@ impl<'a> DocxWriter<'a> {
                     keep_next,
                     out,
                 );
+            } else if let BlockNode::EquationBlock(eq) = block {
+                let (def_before, def_after) =
+                    word_construct::equation::EquationBlockConstruct::default_flow_spacing_dxa(eq);
+                let before_dxa = if idx == 0 || eq.numbering_text.is_some() {
+                    0
+                } else if table_kind != TableKindIr::StyledContainer {
+                    if matches!(blocks.get(idx - 1), Some(BlockNode::Paragraph { .. })) {
+                        0
+                    } else {
+                        20
+                    }
+                } else {
+                    self.doc.solved_before_dxa(eq.id).unwrap_or(def_before)
+                };
+                let after_dxa = if idx + 1 == len || eq.numbering_text.is_some() {
+                    0
+                } else if table_kind != TableKindIr::StyledContainer {
+                    20
+                } else {
+                    self.doc.solved_after_dxa(eq.id).unwrap_or(def_after)
+                };
+                self.render_equation_block_with_layout(eq, before_dxa, after_dxa, 0, out);
+                if eq.numbering_text.is_some()
+                    && idx + 1 < len
+                    && word_construct::WordBlockObjectKind::classify(&blocks[idx + 1])
+                        .is_table_backed()
+                {
+                    let sep_after = self.doc.solved_after_dxa(eq.id).unwrap_or(0);
+                    crate::xml_helpers::write_exact_spacer_p(sep_after, 40, false, out);
+                }
             } else if table_kind != TableKindIr::StyledContainer
                 && let BlockNode::ShapeBlock(shape) = block
             {

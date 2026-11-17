@@ -61,6 +61,8 @@ impl<'a> DocxWriter<'a> {
     <m:lMargin m:val="0"/>
     <m:rMargin m:val="0"/>
     <m:defJc m:val="centerGroup"/>
+    <m:preSp m:val="0"/>
+    <m:postSp m:val="0"/>
     <m:wrapIndent m:val="1440"/>
     <m:intLim m:val="subSup"/>
     <m:naryLim m:val="undOvr"/>
@@ -91,6 +93,8 @@ impl<'a> DocxWriter<'a> {
     <m:lMargin m:val="0"/>
     <m:rMargin m:val="0"/>
     <m:defJc m:val="centerGroup"/>
+    <m:preSp m:val="0"/>
+    <m:postSp m:val="0"/>
     <m:wrapIndent m:val="1440"/>
     <m:intLim m:val="subSup"/>
     <m:naryLim m:val="undOvr"/>

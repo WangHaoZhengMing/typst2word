@@ -22,7 +22,8 @@ impl<'a> DocxWriter<'a> {
         let sep_right_ind_dxa = pt_to_dxa(content_w_pt * 0.70);
         let _ = write!(
             out,
-            r#"<w:footnote w:type="separator" w:id="-1"><w:p><w:pPr><w:pBdr><w:bottom w:val="single" w:sz="4" w:space="0" w:color="000000"/></w:pBdr><w:ind w:right="{sep_right_ind_dxa}"/><w:spacing w:before="0" w:after="40" w:line="40" w:lineRule="exact"/><w:rPr><w:sz w:val="2"/><w:szCs w:val="2"/></w:rPr></w:pPr></w:p></w:footnote>"#,
+            r#"<w:footnote w:type="separator" w:id="-1"><w:p><w:pPr><w:pBdr><w:bottom w:val="single" w:sz="4" w:space="0" w:color="000000"/></w:pBdr><w:ind w:right="{sep_right_ind_dxa}"/><w:spacing w:before="0" w:after="40" w:line="40" w:lineRule="exact"/>{}</w:pPr></w:p></w:footnote>"#,
+            crate::xml_helpers::TINY_MARK_RPR_XML,
         );
         out.push_str(
             r#"<w:footnote w:type="continuationSeparator" w:id="0"><w:p><w:pPr><w:spacing w:before="0" w:after="40" w:line="40" w:lineRule="exact"/></w:pPr><w:r><w:continuationSeparator/></w:r></w:p></w:footnote>"#,

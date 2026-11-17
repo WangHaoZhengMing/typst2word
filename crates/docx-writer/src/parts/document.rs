@@ -61,9 +61,7 @@ impl<'a> DocxWriter<'a> {
             self.has_scoped_columns = false;
             self.render_blocks(blocks, &mut out);
             if index + 1 < sections.len() {
-                out.push_str(
-                    r#"<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="20" w:lineRule="exact"/><w:rPr><w:sz w:val="2"/><w:szCs w:val="2"/></w:rPr>"#,
-                );
+                crate::xml_helpers::open_tiny_sect_carrier_p(&mut out);
                 self.render_sect_pr(&mut out);
                 out.push_str("</w:pPr></w:p>");
             } else {
@@ -103,10 +101,10 @@ impl<'a> DocxWriter<'a> {
                 let insert_pos = out.len() - "</w:p>".len();
                 out.insert_str(insert_pos, &bg_run);
             } else {
-                let _ = write!(
-                    out,
-                    r#"<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="20" w:lineRule="exact"/><w:rPr><w:sz w:val="2"/><w:szCs w:val="2"/></w:rPr></w:pPr>{bg_run}</w:p>"#
-                );
+                crate::xml_helpers::open_tiny_sect_carrier_p(&mut out);
+                out.push_str("</w:pPr>");
+                out.push_str(&bg_run);
+                out.push_str("</w:p>");
             }
         } else if blocks.is_empty() {
             out.push_str("<w:p/>");

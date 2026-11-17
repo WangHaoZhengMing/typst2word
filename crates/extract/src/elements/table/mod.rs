@@ -73,7 +73,7 @@ impl<'a> ExtractorContext<'a> {
         } else {
             table_origin_x
         };
-        let (left_bound, right_bound) = if let Some((gl, gr)) = self.active_group_bounds_pt {
+        let (left_bound, right_bound) = if let Some((gl, gr)) = self.scope.active_group_bounds_pt {
             if col_count > 1 && ref_x >= gl - 4.0 && bbox_w <= col_w + 12.0 {
                 let col_idx = (((ref_x - gl + 4.0).max(0.0)) / (col_w + col_gutter).max(1.0))
                     .floor() as usize;
@@ -96,7 +96,7 @@ impl<'a> ExtractorContext<'a> {
         // Capture untagged soft `#pad(...)` horizontal offsets (e.g. full-bleed `#pad(x: -36pt)`
         // slide header/footer grids or `#pad(left: ...)` inside `#show` / `context`).
         let untagged_pad_offset_pt =
-            if self.container_inset_pt <= 0.1 && list_level == 0 && !in_quote {
+            if self.scope.container_inset_pt <= 0.1 && list_level == 0 && !in_quote {
                 let raw_off = table_origin_x - left_bound;
                 if (-144.0..=-1.5).contains(&raw_off) || (2.0..=48.0).contains(&raw_off) {
                     raw_off
@@ -112,12 +112,12 @@ impl<'a> ExtractorContext<'a> {
         } else {
             untagged_pad_offset_pt
         };
-        let base_avail_w = if self.container_inset_pt <= 0.1
-            && let Some((l, r)) = self.active_group_bounds_pt
+        let base_avail_w = if self.scope.container_inset_pt <= 0.1
+            && let Some((l, r)) = self.scope.active_group_bounds_pt
         {
             (r - l).max(40.0)
         } else {
-            self.current_column_width_pt() - self.container_inset_pt
+            self.current_column_width_pt() - self.scope.container_inset_pt
         };
         let content_avail_w = (base_avail_w - left_indent_pt.max(0.0)).max(120.0);
         let single_outer_group_w = match children {
@@ -329,38 +329,39 @@ impl<'a> ExtractorContext<'a> {
                         if let Some((cell_elem, cnodes, _)) = cell_nodes_map.get(&(x, y)) {
                             let (mut ins, ha, va, ih) =
                                 Self::extract_cell_props(cell_elem, is_header, is_semantic_table);
-                            let prev_inset = self.container_inset_pt;
-                            let prev_group_bounds = self.active_group_bounds_pt;
-                            self.container_inset_pt += ins.left + ins.right + 1.0;
-                            let table_base_x = prev_group_bounds
-                                .map(|(l, _)| l)
-                                .unwrap_or(self.content_left_pt);
-                            let col_left: f64 =
-                                table_base_x + col_widths_pt.iter().take(x).sum::<f64>();
-                            let gutter_pt = if grid.has_gutter && x + 1 < num_cols {
-                                match grid.cols.get(x * 2 + 1) {
-                                    Some(Sizing::Rel(rel)) => {
-                                        (Self::resolve_length_pt(rel.abs, 11.0)
-                                            + rel.rel.get() * avail_w_pt)
-                                            .max(0.0)
+                            let mut blks = self.with_scope(|ctx| {
+                                let table_base_x = ctx
+                                    .scope
+                                    .active_group_bounds_pt
+                                    .map(|(l, _)| l)
+                                    .unwrap_or(ctx.content_left_pt);
+                                ctx.scope.container_inset_pt += ins.left + ins.right + 1.0;
+                                let col_left: f64 =
+                                    table_base_x + col_widths_pt.iter().take(x).sum::<f64>();
+                                let gutter_pt = if grid.has_gutter && x + 1 < num_cols {
+                                    match grid.cols.get(x * 2 + 1) {
+                                        Some(Sizing::Rel(rel)) => {
+                                            (Self::resolve_length_pt(rel.abs, 11.0)
+                                                + rel.rel.get() * avail_w_pt)
+                                                .max(0.0)
+                                        }
+                                        _ => 0.0,
                                     }
-                                    _ => 0.0,
+                                } else {
+                                    0.0
+                                };
+                                let span_w: f64 = col_widths_pt
+                                    .iter()
+                                    .skip(x)
+                                    .take(colspan.max(1))
+                                    .sum::<f64>()
+                                    - gutter_pt;
+                                if span_w > 12.0 {
+                                    ctx.scope.active_group_bounds_pt =
+                                        Some((col_left, col_left + span_w));
                                 }
-                            } else {
-                                0.0
-                            };
-                            let span_w: f64 = col_widths_pt
-                                .iter()
-                                .skip(x)
-                                .take(colspan.max(1))
-                                .sum::<f64>()
-                                - gutter_pt;
-                            if span_w > 12.0 {
-                                self.active_group_bounds_pt = Some((col_left, col_left + span_w));
-                            }
-                            let mut blks = self.extract_blocks_from_nodes(cnodes, 0, ha);
-                            self.active_group_bounds_pt = prev_group_bounds;
-                            self.container_inset_pt = prev_inset;
+                                ctx.extract_blocks_from_nodes(cnodes, 0, ha)
+                            });
                             if !is_semantic_table
                                 && fill.is_none()
                                 && !borders.has_any()

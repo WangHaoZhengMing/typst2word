@@ -29,18 +29,19 @@ pub mod page_calibration;
 pub mod paragraph_box;
 pub mod pipeline;
 pub mod table_box;
+mod table_lowering;
 
 pub use anchor::{
     AnchorDiffEntry, AnchorDiffReport, AnchorLineIr, AnchorMismatchKind, compare_line_anchors,
 };
-pub use document::{WordDocument, build_word_document};
+pub use document::{SolvedNodeLayout, SolvedParagraphLineDxa, WordDocument, build_word_document};
 pub use equation_box::{
     EquationBoxInput, EquationVerticalProfile, FractionScaleMode, WordEquationBox,
 };
 pub use font_metrics::{
     FontMetricsProvider, FontParadigm, ParagraphInlineProfile, RawFontMetrics, ShapingWorkaround,
     WORD_CJK_FACTOR, WordFontClass, WordFontMetricsProvider, WordLineBox, WordLineBoxSpec,
-    is_cjk_or_fullwidth_char, lookup_known_font, str_has_cjk_chars,
+    estimate_text_advance_pt, is_cjk_or_fullwidth_char, lookup_known_font, str_has_cjk_chars,
 };
 pub use linebreak::{
     BrokenLine, FirstFitBreaker, InlineSpan, InlineToken, KnuthPlassBreaker, LineBreakCause,
@@ -52,8 +53,8 @@ pub use list_box::{
     EnumMarkerWidthKind, FollowingBlockKind, ListItemLayoutInput, WordListItemLayout,
 };
 pub use objects::{
-    WordBlockObjectKind, cetz, code, equation, figure, heading, list, paragraph, shape, table,
-    text_run,
+    BlockSequenceNeighborContext, WordBlockObjectKind, cetz, code, equation, figure, heading, list,
+    paragraph, shape, table, text_run,
 };
 pub use paginator::{
     LayoutBlock, LayoutParagraph, LayoutTableRow, PageConstraint, PaginatedLine, PaginatedPage,
@@ -63,7 +64,6 @@ pub use paragraph_box::{
     InterBlockGapAction, NextBlockSpacingContext, ParagraphScaleProfile, WordJc,
     WordParagraphConstruct,
 };
-pub use pipeline::{WordPipelinePassKind, run_word_construct_pipeline};
 pub use policy::{
     ContextualSpacingPolicy, DEFAULT_KINSOKU_LINE_END_FORBIDDEN,
     DEFAULT_KINSOKU_LINE_START_FORBIDDEN, KeepLinesPolicy, KeepWithNextPolicy, KinsokuSet,
@@ -630,6 +630,91 @@ mod tests {
                 300 * 20
             )
             .is_none()
+        );
+    }
+
+    #[test]
+    fn test_inline_and_block_equation_single_line_height_calibration() {
+        use std::collections::BTreeMap;
+        use crate::equation::EquationBlockConstruct;
+        use crate::paragraph::{compute_line_spacing_dxa_with_metrics, primary_font_size_pt};
+        use ir::{EquationIr, EquationLayoutMetricsIr, InlineNode, ParagraphLineMetricsIr, TextRunIr};
+
+        // 9.5pt Times New Roman inline-math paragraph prefixed by 7pt Menlo `[001]` badges:
+        // Dominant size must resolve to 9.5pt (not 7.0pt), dominant font to `Times New Roman`,
+        // and script-expanded `uniform_baseline_step_pt = 13.41pt` must NOT be double-counted.
+        let badge = InlineNode::Text(TextRunIr {
+            text: "[001]".to_string(),
+            font_family: Some("Menlo".to_string()),
+            font_size_pt: Some(7.0),
+            ..Default::default()
+        });
+        let sep = InlineNode::Text(TextRunIr {
+            text: " · ".to_string(),
+            font_family: Some("Times New Roman".to_string()),
+            font_size_pt: Some(9.5),
+            ..Default::default()
+        });
+        let inline_eq = InlineNode::EquationInline(EquationIr {
+            id: ir::NodeId::UNSET,
+            is_block: false,
+            body: Vec::new(),
+            source_text: "$x_i^2 + y_i^2$".to_string(),
+            numbering_text: None,
+            bookmark: None,
+            font_size_pt: Some(9.5),
+            layout_metrics: EquationLayoutMetricsIr::Unmeasured {
+                context_font_size_pt: 9.5,
+                max_glyph_pt: Some(9.5),
+                min_glyph_pt: Some(6.7),
+                max_available_width_pt: None,
+            },
+        });
+        let content = vec![badge, inline_eq, sep];
+        assert!((primary_font_size_pt(&content) - 9.5).abs() < 1e-6);
+
+        let para_lines = ParagraphLineMetricsIr {
+            line_count: 4,
+            first_baseline_y_pt: 20.0,
+            last_baseline_y_pt: 60.23,
+            uniform_baseline_step_pt: Some(13.41),
+            has_tall_inline_object: false,
+        };
+        let w_line = compute_line_spacing_dxa_with_metrics(
+            &content,
+            Some(0.52 * 9.5),
+            &BTreeMap::new(),
+            Some(&para_lines),
+        );
+        assert!(
+            (244..=258).contains(&w_line),
+            "Expected calibrated single-line inline-math w:line ~247..255, got {w_line}"
+        );
+
+        let block_eq = EquationIr {
+            id: ir::NodeId::UNSET,
+            is_block: true,
+            body: Vec::new(),
+            source_text: "$ a + b = c $".to_string(),
+            numbering_text: None,
+            bookmark: None,
+            font_size_pt: Some(9.5),
+            layout_metrics: EquationLayoutMetricsIr::Unmeasured {
+                context_font_size_pt: 9.5,
+                max_glyph_pt: Some(9.5),
+                min_glyph_pt: None,
+                max_available_width_pt: None,
+            },
+        };
+        let solved_eq = EquationBlockConstruct::solve(&block_eq, 450.0, 0, 0, 0);
+        assert_eq!(
+            solved_eq,
+            EquationBlockConstruct::CenteredDisplayParagraph {
+                indent_left_dxa: 0,
+                before_dxa: 0,
+                after_dxa: 0,
+                mark_sz_half_pt: 19,
+            }
         );
     }
 }

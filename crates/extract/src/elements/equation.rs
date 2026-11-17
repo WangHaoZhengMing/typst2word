@@ -46,7 +46,7 @@ impl<'a> ExtractorContext<'a> {
             typo.cjk_font.as_deref(),
         );
         let max_available_width_pt =
-            Some((self.current_column_width_pt() - self.container_inset_pt).max(60.0));
+            Some((self.current_column_width_pt() - self.scope.container_inset_pt).max(60.0));
 
         let layout_metrics = EquationLayoutMetricsIr::from_bbox(
             measured_bbox,

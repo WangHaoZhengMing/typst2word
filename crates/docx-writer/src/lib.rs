@@ -25,6 +25,7 @@ mod package;
 mod parts;
 mod writer;
 pub mod xml;
+pub(crate) mod xml_helpers;
 
 use std::fs::File;
 use std::io::Write;

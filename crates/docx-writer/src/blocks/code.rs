@@ -79,7 +79,7 @@ impl<'a> DocxWriter<'a> {
                         .and_then(|r| r.font_size_pt)
                         .map(|sz| {
                             let hp = ((sz * 2.0).round() as u32).clamp(8, 72);
-                            format!(r#"<w:rPr><w:sz w:val="{hp}"/><w:szCs w:val="{hp}"/></w:rPr>"#)
+                            crate::xml_helpers::format_mark_rpr_half_pt(hp)
                         })
                         .unwrap_or_default();
                     let _ = write!(

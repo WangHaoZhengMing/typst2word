@@ -78,16 +78,13 @@ impl<'a> DocxWriter<'a> {
         let mut construct =
             ShapeBlockConstruct::solve_with_collapse(shape, left_indent_dxa, collapse_before);
         if !collapse_before
-            && shape.id.is_set()
-            && let Some(&before_dxa) = self.doc.solved_block_before_dxa.get(&shape.id)
+            && let Some(before_dxa) = self.doc.solved_before_dxa(shape.id)
         {
             construct.before_dxa = construct.before_dxa.max(before_dxa);
         }
         if let Some(after_dxa) = after_dxa_override {
             construct.after_dxa = construct.after_dxa.max(after_dxa);
-        } else if shape.id.is_set()
-            && let Some(&solved_after) = self.doc.solved_block_after_dxa.get(&shape.id)
-        {
+        } else if let Some(solved_after) = self.doc.solved_after_dxa(shape.id) {
             construct.after_dxa = solved_after;
         }
         let run_xml = shape_to_drawingml_run(self, shape);
@@ -99,11 +96,15 @@ impl<'a> DocxWriter<'a> {
         if construct.left_indent_dxa > 0 {
             let _ = write!(out, r#"<w:ind w:left="{}"/>"#, construct.left_indent_dxa);
         }
-        let _ = write!(
+        crate::xml_helpers::write_w_spacing(
+            construct.before_dxa,
+            construct.after_dxa,
+            construct.line_dxa,
+            false,
             out,
-            r#"<w:spacing w:before="{}" w:after="{}" w:line="{}" w:lineRule="auto"/><w:rPr><w:sz w:val="2"/><w:szCs w:val="2"/></w:rPr></w:pPr>"#,
-            construct.before_dxa, construct.after_dxa, construct.line_dxa
         );
+        out.push_str(crate::xml_helpers::TINY_MARK_RPR_XML);
+        out.push_str("</w:pPr>");
         if let Some((_, dy_pt)) = shape.placed_offset_pt {
             let spacer = ShapeIr {
                 id: Default::default(),

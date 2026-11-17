@@ -10,17 +10,10 @@ use crate::xml::escape_xml;
 
 impl<'a> DocxWriter<'a> {
     pub(crate) fn render_equation_block(&mut self, eq: &EquationIr, out: &mut String) {
-        self.render_equation_block_with_layout(eq, 115, 155, 0, out);
-    }
-
-    pub(crate) fn render_equation_block_collapsed(
-        &mut self,
-        eq: &EquationIr,
-        collapse_before: bool,
-        out: &mut String,
-    ) {
-        let before_dxa = if collapse_before { 0 } else { 115 };
-        self.render_equation_block_with_layout(eq, before_dxa, 155, 0, out);
+        let (def_before, def_after) = EquationBlockConstruct::default_flow_spacing_dxa(eq);
+        let before_dxa = self.doc.solved_before_dxa(eq.id).unwrap_or(def_before);
+        let after_dxa = self.doc.solved_after_dxa(eq.id).unwrap_or(def_after);
+        self.render_equation_block_with_layout(eq, before_dxa, after_dxa, 0, out);
     }
 
     pub(crate) fn render_equation_block_with_layout(
@@ -78,15 +71,16 @@ impl<'a> DocxWriter<'a> {
                         r#"<w:tblGrid><w:gridCol w:w="{side_dxa}"/><w:gridCol w:w="{center_dxa}"/><w:gridCol w:w="{side_dxa}"/></w:tblGrid>"#,
                         r#"<w:tr><w:trPr><w:cantSplit/></w:trPr>"#,
                         r#"<w:tc><w:tcPr><w:tcW w:w="{side_dxa}" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr>"#,
-                        r#"<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/></w:pPr></w:p></w:tc>"#,
+                        r#"<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/><w:rPr><w:sz w:val="{num_half_pts}"/><w:szCs w:val="{num_half_pts}"/></w:rPr></w:pPr></w:p></w:tc>"#,
                         r#"<w:tc><w:tcPr><w:tcW w:w="{center_dxa}" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr>"#,
-                        r#"<w:p><w:pPr><w:jc w:val="center"/><w:spacing w:before="{before_dxa}" w:after="{after_dxa}" w:line="240" w:lineRule="auto"/></w:pPr>"#,
+                        r#"<w:p><w:pPr><w:jc w:val="center"/><w:spacing w:before="{before_dxa}" w:after="{after_dxa}" w:line="240" w:lineRule="auto"/><w:rPr><w:sz w:val="{num_half_pts}"/><w:szCs w:val="{num_half_pts}"/></w:rPr></w:pPr>"#,
                     ),
                     total_dxa = total_dxa,
                     side_dxa = side_dxa,
                     center_dxa = center_dxa,
                     before_dxa = before_dxa,
                     after_dxa = after_dxa,
+                    num_half_pts = num_half_pts,
                 );
                 let bm_id = eq
                     .bookmark
@@ -105,7 +99,7 @@ impl<'a> DocxWriter<'a> {
                     concat!(
                         r#"</w:p></w:tc>"#,
                         r#"<w:tc><w:tcPr><w:tcW w:w="{side_dxa}" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr>"#,
-                        r#"<w:p><w:pPr><w:jc w:val="right"/><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/></w:pPr>"#,
+                        r#"<w:p><w:pPr><w:jc w:val="right"/><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/><w:rPr><w:sz w:val="{num_half_pts}"/><w:szCs w:val="{num_half_pts}"/></w:rPr></w:pPr>"#,
                         r#"<w:r><w:rPr><w:rFonts w:ascii="Libertinus Serif" w:hAnsi="Libertinus Serif" w:eastAsia="Heiti SC" w:cs="Libertinus Serif"/><w:sz w:val="{num_half_pts}"/><w:szCs w:val="{num_half_pts}"/></w:rPr>"#,
                         r#"<w:t xml:space="preserve">{}</w:t></w:r></w:p></w:tc>"#,
                         r#"</w:tr></w:tbl>"#,
@@ -119,6 +113,7 @@ impl<'a> DocxWriter<'a> {
                 indent_left_dxa,
                 before_dxa,
                 after_dxa,
+                mark_sz_half_pt,
             } => {
                 out.push_str("<w:p><w:pPr>");
                 if indent_left_dxa > 0 {
@@ -126,7 +121,7 @@ impl<'a> DocxWriter<'a> {
                 }
                 let _ = write!(
                     out,
-                    r#"<w:jc w:val="center"/><w:spacing w:before="{before_dxa}" w:after="{after_dxa}"/></w:pPr>"#
+                    r#"<w:jc w:val="center"/><w:spacing w:before="{before_dxa}" w:after="{after_dxa}" w:line="240" w:lineRule="auto"/><w:rPr><w:sz w:val="{mark_sz_half_pt}"/><w:szCs w:val="{mark_sz_half_pt}"/></w:rPr></w:pPr>"#
                 );
                 let bm_id = eq
                     .bookmark

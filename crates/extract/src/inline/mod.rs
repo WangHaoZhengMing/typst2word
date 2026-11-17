@@ -57,7 +57,7 @@ impl<'a> ExtractorContext<'a> {
     ) -> Vec<InlineNode> {
         let mut out = Vec::new();
         let mut state = ActiveInlineState {
-            scope_loc: self.active_scope_loc,
+            scope_loc: self.scope.active_scope_loc,
             bold: force_bold,
             ..Default::default()
         };
@@ -184,26 +184,27 @@ impl<'a> ExtractorContext<'a> {
                         }
                     }
 
-                    let prev_origin = self.group_origin_offset;
-                    self.group_origin_offset += *pos;
-                    let extracted = self.try_extract_inline_box_group(
-                        group, *pos, children, out, state, last_y, last_x_end,
-                    );
+                    let extracted = self.with_scope(|ctx| {
+                        ctx.scope.group_origin_offset += *pos;
+                        if ctx.try_extract_inline_box_group(
+                            group, *pos, children, out, state, last_y, last_x_end,
+                        ) {
+                            return true;
+                        }
+                        let mut inner_y = None;
+                        let mut inner_x = None;
+                        ctx.extract_inlines_from_nodes(
+                            children,
+                            out,
+                            state,
+                            &mut inner_y,
+                            &mut inner_x,
+                        );
+                        false
+                    });
                     if extracted {
-                        self.group_origin_offset = prev_origin;
                         continue;
                     }
-
-                    let mut inner_y = None;
-                    let mut inner_x = None;
-                    self.extract_inlines_from_nodes(
-                        children,
-                        out,
-                        state,
-                        &mut inner_y,
-                        &mut inner_x,
-                    );
-                    self.group_origin_offset = prev_origin;
                     *last_x_end = Some(pos.x.to_pt() + group.frame.size().x.to_pt());
                 }
                 TreeNode::Element {
