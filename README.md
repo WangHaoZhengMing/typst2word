@@ -4,19 +4,22 @@
 
 Unlike pure syntax-tree converters (which cannot evaluate Typst scripting, `#show` rules, counters, or packages like CeTZ) or PDF-to-Word tools (which flatten everything into floating text boxes and raster images), `typst2word` embeds the full **Typst 0.15** compiler and lowers documents into **native, editable WordprocessingML, Office MathML (OMML), and DrawingML** constructs—calibrating Word's line-box metrics, paragraph spacing, and line-breaking behavior against Typst's laid-out reference geometry.
 
+> **Try Online (WebAssembly Studio)**: [**wanghaozhengming.github.io/typst2word**](https://wanghaozhengming.github.io/typst2word/) — edit multi-file Typst projects, auto-load `@preview` packages, inspect OpenXML/IR output, and export `.docx` directly in your browser.
+
 ---
 
 ## Getting Started
 
 ### 1. Installation
 
-#### Prebuilt Binaries
+#### Prebuilt Binaries & WebAssembly SDK
 
 Download the archive for your platform from [GitHub Releases](https://github.com/WangHaoZhengMing/typst2word/releases), extract it, and place `typst2word` (`typst2word.exe` on Windows) on your `PATH`:
 
 - **macOS**: `aarch64-apple-darwin` (Apple Silicon), `x86_64-apple-darwin` (Intel)
 - **Linux**: `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`
 - **Windows**: `x86_64-pc-windows-msvc`
+- **WebAssembly (`wasm32-unknown-unknown`)**: `typst2word-wasm32-unknown-unknown.tar.gz` / `.zip` (ES Module `web/`, `bundler/`, and `nodejs/` targets)
 
 #### Build from Source (Rust 1.85+ / Edition 2024)
 
@@ -201,7 +204,9 @@ typst2word/
 │   ├── extract/            # Dual-source Content + Frame semantic/geometric extractor
 │   ├── word-construct/     # Word layout compensation, spacing solvers & construct builders
 │   ├── docx-writer/        # Pure OpenXML serializer and .docx ZIP writer
+│   ├── wasm/               # WebAssembly (wasm-bindgen) workspace, SVG preview & OpenXML bindings
 │   └── visual-test/        # Automated Typst-vs-Word PDF diff CLI and desktop GUI studio
+├── web/                    # Svelte 5 + Vite online WebAssembly Studio (GitHub Pages)
 ├── examples/               # Sample Typst documents
 └── tests/                  # End-to-end conversion and architectural regression tests
 ```

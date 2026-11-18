@@ -1,0 +1,4 @@
+node_modules/
+dist/
+src/lib/wasm-pkg/
+.DS_Store

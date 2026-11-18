@@ -1,0 +1,164 @@
+:root,
+[data-theme='light'] {
+  color-scheme: light;
+  --bg-app: #f5f5f7;
+  --bg-canvas: #eef0f4;
+  --bg-surface: #ffffff;
+  --bg-sidebar: #fbfbfd;
+  --bg-elevated: #ffffff;
+  --bg-toolbar: rgba(251, 251, 253, 0.84);
+  --bg-popover: rgba(255, 255, 255, 0.92);
+  --bg-subtle: rgba(118, 118, 128, 0.08);
+  --bg-segmented: rgba(118, 118, 128, 0.12);
+  --bg-segmented-active: #ffffff;
+  --bg-code: #fafafa;
+
+  --text-primary: #1d1d1f;
+  --text-secondary: #515154;
+  --text-tertiary: #86868b;
+  --text-inverse: #ffffff;
+
+  --border-hairline: rgba(0, 0, 0, 0.085);
+  --border-strong: rgba(0, 0, 0, 0.14);
+
+  --accent-blue: #0071e3;
+  --accent-blue-hover: #0077ed;
+  --accent-blue-active: #0062c4;
+  --accent-blue-soft: rgba(0, 113, 227, 0.1);
+
+  --status-green: #248a3d;
+  --status-green-bg: rgba(52, 199, 89, 0.14);
+  --status-amber: #b25000;
+  --status-amber-bg: rgba(255, 159, 10, 0.15);
+  --status-red: #d70015;
+  --status-red-bg: rgba(255, 59, 48, 0.12);
+  --status-purple: #5e5ce6;
+  --status-purple-bg: rgba(94, 92, 230, 0.11);
+
+  --shadow-segmented: 0 1px 3px rgba(0, 0, 0, 0.1), 0 0.5px 1px rgba(0, 0, 0, 0.06);
+  --shadow-popover: 0 18px 48px rgba(0, 0, 0, 0.16), 0 2px 8px rgba(0, 0, 0, 0.06);
+  --shadow-paper: 0 1px 3px rgba(0, 0, 0, 0.06), 0 14px 36px rgba(0, 0, 0, 0.09);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.04), 0 4px 14px rgba(0, 0, 0, 0.035);
+}
+
+[data-theme='dark'] {
+  color-scheme: dark;
+  --bg-app: #141416;
+  --bg-canvas: #0f0f11;
+  --bg-surface: #1c1c1e;
+  --bg-sidebar: #18181a;
+  --bg-elevated: #242426;
+  --bg-toolbar: rgba(26, 26, 28, 0.82);
+  --bg-popover: rgba(34, 34, 37, 0.92);
+  --bg-subtle: rgba(255, 255, 255, 0.06);
+  --bg-segmented: rgba(118, 118, 128, 0.28);
+  --bg-segmented-active: #3a3a3c;
+  --bg-code: #161618;
+
+  --text-primary: #f5f5f7;
+  --text-secondary: #a1a1a6;
+  --text-tertiary: #6e6e73;
+  --text-inverse: #ffffff;
+
+  --border-hairline: rgba(255, 255, 255, 0.09);
+  --border-strong: rgba(255, 255, 255, 0.16);
+
+  --accent-blue: #0a84ff;
+  --accent-blue-hover: #2993ff;
+  --accent-blue-active: #0070e0;
+  --accent-blue-soft: rgba(10, 132, 255, 0.16);
+
+  --status-green: #30d158;
+  --status-green-bg: rgba(48, 209, 88, 0.16);
+  --status-amber: #ff9f0a;
+  --status-amber-bg: rgba(255, 159, 10, 0.16);
+  --status-red: #ff453a;
+  --status-red-bg: rgba(255, 69, 58, 0.16);
+  --status-purple: #7d7aff;
+  --status-purple-bg: rgba(125, 122, 255, 0.16);
+
+  --shadow-segmented: 0 1px 3px rgba(0, 0, 0, 0.42);
+  --shadow-popover: 0 22px 54px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.35);
+  --shadow-paper: 0 2px 6px rgba(0, 0, 0, 0.4), 0 18px 42px rgba(0, 0, 0, 0.52);
+  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.3), 0 6px 18px rgba(0, 0, 0, 0.22);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg-app);
+  color: var(--text-primary);
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'SF Pro Display',
+    'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei',
+    sans-serif;
+  font-size: 13px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+  border: none;
+  background: none;
+}
+
+button:focus-visible,
+input:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 1px;
+}
+
+code,
+pre,
+.mono {
+  font-family: 'SF Mono', ui-monospace, 'JetBrains Mono', Menlo, Monaco, Consolas,
+    monospace;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Subtle macOS-style scrollbars */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(128, 128, 136, 0.28);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(128, 128, 136, 0.46);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}

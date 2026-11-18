@@ -1099,6 +1099,7 @@ dependencies = [
  "comemo",
  "dirs 7.0.0",
  "ecow",
+ "flate2",
  "parking_lot",
  "typst",
  "typst-eval",
@@ -8140,6 +8141,32 @@ dependencies = [
  "roxmltree 0.21.2",
  "serde_json",
  "tempfile",
+ "word-construct",
+ "zip",
+]
+
+[[package]]
+name = "typst2word-wasm"
+version = "0.2.3"
+dependencies = [
+ "comemo",
+ "compiler",
+ "console_error_panic_hook",
+ "docx-writer",
+ "extract",
+ "flate2",
+ "getrandom 0.2.17",
+ "getrandom 0.3.4",
+ "getrandom 0.4.3",
+ "ir",
+ "js-sys",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "typst",
+ "typst-svg",
+ "typst-syntax",
+ "wasm-bindgen",
  "word-construct",
  "zip",
 ]

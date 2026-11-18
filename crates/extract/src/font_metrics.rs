@@ -17,11 +17,10 @@ impl<'a> ExtractorContext<'a> {
             scan_frame_fonts(&page.frame, &mut chosen_fonts);
         }
 
-        let global_res = compiler::world::GlobalTypstResources::get();
         let mut out = BTreeMap::new();
         for (family, (_, font)) in chosen_fonts {
             if let Some(metrics) =
-                parse_font_face_metrics(&font, global_res.is_system_font_family(&family))
+                parse_font_face_metrics(&font, self.world.is_system_font_family(&family))
             {
                 out.insert(family, metrics);
             }

@@ -11,3 +11,7 @@ __pycache__/
 /test/tools/pdf_inspector
 /test/*/*.report.json
 /test/test_summary.json
+/typst2word-wasm32-unknown-unknown.*
+/web/node_modules/
+/web/dist/
+/web/src/lib/wasm-pkg/

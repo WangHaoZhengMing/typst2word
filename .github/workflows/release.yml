@@ -96,9 +96,53 @@ jobs:
             typst2word-${{ matrix.target }}.${{ matrix.archive }}
             typst2word-${{ matrix.target }}.${{ matrix.archive }}.sha256
 
+  build-wasm:
+    name: Build (wasm32-unknown-unknown)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Binaryen and archive tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y binaryen zip
+
+      - name: Install Rust toolchain (wasm32-unknown-unknown)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Cargo registry and WASM artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: wasm32-unknown-unknown
+
+      - name: Install cargo-binstall and wasm-bindgen-cli
+        uses: taiki-e/install-action@cargo-binstall
+
+      - name: Install matching wasm-bindgen-cli
+        run: |
+          WASM_BINDGEN_VER=$(awk '/^name = "wasm-bindgen"$/{getline; gsub(/"/, "", $3); print $3; exit}' Cargo.lock)
+          echo "Installing wasm-bindgen-cli@${WASM_BINDGEN_VER}"
+          cargo binstall --no-confirm "wasm-bindgen-cli@${WASM_BINDGEN_VER}" || cargo install --locked wasm-bindgen-cli --version "${WASM_BINDGEN_VER}"
+
+      - name: Build multi-target WASM SDK archives
+        run: ./scripts/build-wasm.sh --release-dist
+
+      - name: Upload WASM release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: typst2word-wasm32-unknown-unknown
+          path: |
+            typst2word-wasm32-unknown-unknown.tar.gz
+            typst2word-wasm32-unknown-unknown.tar.gz.sha256
+            typst2word-wasm32-unknown-unknown.zip
+            typst2word-wasm32-unknown-unknown.zip.sha256
+
   release:
     name: Publish GitHub Release
-    needs: build
+    needs: [build, build-wasm]
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts

@@ -6,15 +6,21 @@ description = "Self-contained Typst 0.15 compiler, World implementation, and dua
 
 [dependencies]
 comemo = "0.5.1"
-dirs = "7.0.0"
 ecow = "0.2.6"
+flate2 = { version = "1.1", default-features = false, features = ["rust_backend"] }
 parking_lot = "0.12"
 typst = "0.15.1"
 typst-eval = "0.15.1"
 typst-html = "0.15.1"
-typst-kit = { version = "0.15.1", features = ["embedded-fonts", "scan-fonts", "system-packages", "system-downloader", "datetime"] }
 typst-layout = "0.15.1"
 typst-library = "0.15.1"
 typst-realize = "0.15.1"
 typst-syntax = "0.15.1"
 typst-utils = "0.15.1"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+dirs = "7.0.0"
+typst-kit = { version = "0.15.1", features = ["embedded-fonts", "scan-fonts", "system-packages", "system-downloader", "datetime"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+typst-kit = { version = "0.15.1", default-features = false, features = ["embedded-fonts"] }

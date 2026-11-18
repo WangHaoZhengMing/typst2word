@@ -1,0 +1,93 @@
+name: Deploy Web Studio to GitHub Pages
+
+on:
+  push:
+    branches:
+      - master
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-site:
+    name: Build WASM & Svelte Web Studio
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure GitHub Pages
+        id: pages
+        uses: actions/configure-pages@v5
+
+      - name: Install Binaryen (wasm-opt)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y binaryen
+
+      - name: Install Rust toolchain (wasm32-unknown-unknown)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Cargo registry and WASM target
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: pages-wasm32
+
+      - name: Install cargo-binstall
+        uses: taiki-e/install-action@cargo-binstall
+
+      - name: Install matching wasm-bindgen-cli
+        run: |
+          WASM_BINDGEN_VER=$(awk '/^name = "wasm-bindgen"$/{getline; gsub(/"/, "", $3); print $3; exit}' Cargo.lock)
+          echo "Installing wasm-bindgen-cli@${WASM_BINDGEN_VER}"
+          cargo binstall --no-confirm "wasm-bindgen-cli@${WASM_BINDGEN_VER}" || cargo install --locked wasm-bindgen-cli --version "${WASM_BINDGEN_VER}"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build typst2word-wasm bindings
+        run: ./scripts/build-wasm.sh web
+
+      - name: Install frontend dependencies
+        run: npm --prefix web ci
+
+      - name: Type-check and build Svelte studio
+        env:
+          BASE_PATH: "${{ steps.pages.outputs.base_path }}/"
+        run: |
+          npm --prefix web run check
+          npm --prefix web run build
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: web/dist
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build-site
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

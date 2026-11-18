@@ -6,4 +6,4 @@ description = "Pure OpenXML (WordprocessingML / OMML / DrawingML) serializer and
 
 [dependencies]
 word-construct = { path = "../word-construct" }
-zip = "9.4.2"
+zip = { version = "9.4.2", default-features = false, features = ["deflate"] }

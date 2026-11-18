@@ -24,17 +24,21 @@ pub use word_construct;
 use std::path::Path;
 
 use compiler::{TypstWorld, compile_world};
-use docx_writer::{DocxWriteOptions, write_docx_to_bytes_with_options, write_docx_to_path};
+#[cfg(not(target_arch = "wasm32"))]
+use docx_writer::write_docx_to_path;
+use docx_writer::{DocxWriteOptions, write_docx_to_bytes_with_options};
 use extract::extract_document_ir;
 use ir::DocumentIr;
 use word_construct::build_word_document;
 
 /// Compile a Typst `.typ` file and extract its pure `DocumentIr` (never mutated by Word passes).
+#[cfg(not(target_arch = "wasm32"))]
 pub fn compile_file_to_ir(input_path: &Path) -> Result<DocumentIr, String> {
     compile_file_to_ir_with_inputs(input_path, std::iter::empty::<(&str, &str)>())
 }
 
 /// Compile a Typst `.typ` file with `sys.inputs` key-value pairs and extract its pure `DocumentIr`.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn compile_file_to_ir_with_inputs<K: AsRef<str>, V: AsRef<str>>(
     input_path: &Path,
     inputs: impl IntoIterator<Item = (K, V)>,
@@ -55,12 +59,14 @@ pub fn compile_str_to_ir_with_inputs<K: AsRef<str>, V: AsRef<str>>(
     root_dir: Option<&Path>,
     inputs: impl IntoIterator<Item = (K, V)>,
 ) -> Result<DocumentIr, String> {
-    let world = TypstWorld::from_str(source, root_dir.map(|p| p.to_path_buf())).with_string_inputs(inputs);
+    let world =
+        TypstWorld::from_str(source, root_dir.map(|p| p.to_path_buf())).with_string_inputs(inputs);
     let compiled = compile_world(&world)?;
     Ok(extract_document_ir(&compiled, &world))
 }
 
 /// Convert a Typst `.typ` file directly to a `.docx` file on disk, returning the `DocumentIr`.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn convert_typst_file_to_docx(
     input_path: &Path,
     output_path: &Path,
@@ -73,6 +79,7 @@ pub fn convert_typst_file_to_docx(
 }
 
 /// Convert a Typst `.typ` file with `sys.inputs` directly to a `.docx` file on disk.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn convert_typst_file_to_docx_with_inputs<K: AsRef<str>, V: AsRef<str>>(
     input_path: &Path,
     output_path: &Path,
