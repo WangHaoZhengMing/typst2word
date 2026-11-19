@@ -217,7 +217,10 @@ pub fn solve_container_and_figure_flow_spacing(
                 {
                     apply_table_backed_post_gap(id_a, &mut blocks[idx + 1], next_font_pt, solved_nodes);
                 }
-                BlockNode::Table(t) if t.kind != TableKindIr::LayoutGrid && pb == pa + 1 => {
+                BlockNode::Table(t)
+                    if (t.kind != TableKindIr::LayoutGrid || is_graphic_object_row(t))
+                        && pb == pa + 1 =>
+                {
                     apply_table_backed_post_gap(id_a, &mut blocks[idx + 1], next_font_pt, solved_nodes);
                 }
                 _ => {}
@@ -267,9 +270,19 @@ pub fn solve_container_and_figure_flow_spacing(
         match &blocks[idx] {
             BlockNode::ShapeBlock(_) => {
                 // Wrapper `<w:p>` uses a 1pt paragraph mark (`~0.02 * font` descent), leaving only
-                // the following block's `~0.20 * next_font` internal top leading to subtract.
-                let needed_after_pt = (gap_pt - 0.22 * next_font_pt).max(0.0);
-                solved_nodes.entry(id_a).or_default().after_dxa = Some(pt_to_dxa(needed_after_pt));
+                // the following block's `~0.20 * next_font` internal top leading to subtract
+                // (or `~0.02 * next_font` when followed by another `ShapeBlock`).
+                let next_top_air = if matches!(blocks[idx + 1], BlockNode::ShapeBlock(_)) {
+                    0.04 * next_font_pt
+                } else {
+                    0.22 * next_font_pt
+                };
+                let needed_after_pt = (gap_pt - next_top_air).max(0.0);
+                let needed_dxa = pt_to_dxa(needed_after_pt);
+                solved_nodes.entry(id_a).or_default().after_dxa = Some(needed_dxa);
+                if matches!(blocks[idx + 1], BlockNode::ShapeBlock(_)) && !id_b.is_unset() {
+                    solved_nodes.entry(id_b).or_default().before_dxa = Some(needed_dxa);
+                }
             }
             BlockNode::Figure { .. } => {
                 let needed_after_pt = (gap_pt - 0.44 * next_font_pt).max(0.0);
@@ -306,13 +319,38 @@ pub fn solve_container_and_figure_flow_spacing(
                 let needed_before_pt = (gap_pt - 0.20 * next_font_pt).max(0.0);
                 apply_table_backed_post_gap(id_a, &mut blocks[idx + 1], needed_before_pt, solved_nodes);
             }
-            BlockNode::Table(t) if t.kind != TableKindIr::LayoutGrid => {
-                let needed_before_pt = (gap_pt - 0.20 * next_font_pt).max(0.0);
+            BlockNode::Table(t) if t.kind != TableKindIr::LayoutGrid || is_graphic_object_row(t) => {
+                let next_top_air_pt = if is_graphic_block(&blocks[idx + 1]) {
+                    0.0
+                } else {
+                    0.20 * next_font_pt
+                };
+                let needed_before_pt = (gap_pt - next_top_air_pt).max(0.0);
                 apply_table_backed_post_gap(id_a, &mut blocks[idx + 1], needed_before_pt, solved_nodes);
             }
             _ => {}
         }
     }
+}
+
+/// Whether a block lowers to a Word paragraph wrapping a single inline drawing (no text line box).
+fn is_graphic_block(block: &BlockNode) -> bool {
+    matches!(
+        block,
+        BlockNode::ShapeBlock(_) | BlockNode::CetzCanvas(_) | BlockNode::ImageBlock(_)
+    )
+}
+
+/// Whether a `LayoutGrid` table is a single horizontal row of graphic objects (e.g. lowered
+/// `#stack(dir: ltr, rect, ellipse, polygon)`), whose trailing gap must be solved like any other
+/// `<w:tbl>`-backed block because no cell paragraph carries a Typst `par.spacing`.
+fn is_graphic_object_row(t: &ir::TableIr) -> bool {
+    t.kind == TableKindIr::LayoutGrid
+        && t.rows.len() == 1
+        && t.rows[0]
+            .cells
+            .iter()
+            .all(|c| !c.blocks.is_empty() && c.blocks.iter().all(is_graphic_block))
 }
 
 fn apply_table_backed_post_gap(

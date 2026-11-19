@@ -325,6 +325,12 @@ impl<'a> DocxWriter<'a> {
     <w:family w:val="roman"/>
     <w:pitch w:val="variable"/>
   </w:font>
+  <w:font w:name="Hei">
+    <w:altName w:val="Heiti SC"/>
+    <w:charset w:val="86"/>
+    <w:family w:val="swiss"/>
+    <w:pitch w:val="variable"/>
+  </w:font>
 </w:fonts>"#
             .to_string()
     }

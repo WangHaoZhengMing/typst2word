@@ -169,6 +169,21 @@ impl<'a> ExtractorContext<'a> {
             Some(SemanticRoleIr::CetzCanvas),
             nodes,
         );
+        // Block-level `#align(center)[#canvas(...)]` realizes as a style (no `AlignElem` tag),
+        // so honor the active `StyleChain` alignment when the caller only inherited `Left`.
+        let align = if align == HAlignIr::Left {
+            let chain = self.scoped_style_chain(self.scope.active_scope_loc);
+            let (style_align, _) = Self::alignment_to_ir(typst::foundations::Smart::Custom(
+                chain.get(typst::layout::AlignElem::alignment),
+            ));
+            if matches!(style_align, HAlignIr::Center | HAlignIr::Right) {
+                style_align
+            } else {
+                align
+            }
+        } else {
+            align
+        };
         Some(CetzCanvasIr {
             id,
             width_pt,

@@ -59,10 +59,18 @@ impl<'a> ExtractorContext<'a> {
             )
         });
 
+        // For `sub` / `super` runs, record the unscaled surrounding size: Typst either keeps
+        // `TextItem::size` unscaled (typographic `subs`/`sups` glyphs) or pre-scales it
+        // (synthesized), so `size_pt` alone is ambiguous.
+        let run_size_pt = match (state.script, state.script_base_pt) {
+            (ir::ScriptKindIr::Normal, _) | (_, None) => size_pt,
+            (_, Some(base_pt)) => base_pt.max(size_pt),
+        };
+
         TextRunIr {
             text: item.text.to_string(),
             font_family: Some(info.family.to_string()),
-            font_size_pt: Some(size_pt),
+            font_size_pt: Some(run_size_pt),
             bold,
             italic,
             underline: state.underline.clone(),

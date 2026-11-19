@@ -80,7 +80,7 @@ impl<'a> DocxWriter<'a> {
         if !collapse_before
             && let Some(before_dxa) = self.doc.solved_before_dxa(shape.id)
         {
-            construct.before_dxa = construct.before_dxa.max(before_dxa);
+            construct.before_dxa = before_dxa;
         }
         if let Some(after_dxa) = after_dxa_override {
             construct.after_dxa = construct.after_dxa.max(after_dxa);

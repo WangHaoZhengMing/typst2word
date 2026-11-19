@@ -20,6 +20,10 @@ impl<'a> DocxWriter<'a> {
         out: &mut String,
     ) {
         let construct = CetzCanvasConstruct::solve(canvas);
+        let before_dxa = self
+            .doc
+            .solved_before_dxa(canvas.id)
+            .map_or(construct.before_dxa, |b| b.max(0));
         let run_xml = cetz_canvas_to_drawingml_run(canvas);
         out.push_str("<w:p><w:pPr>");
         if keep_with_next {
@@ -32,12 +36,14 @@ impl<'a> DocxWriter<'a> {
         let after_dxa = if keep_with_next {
             80
         } else {
-            construct.after_dxa
+            self.doc
+                .solved_after_dxa(canvas.id)
+                .map_or(construct.after_dxa, |a| a.max(0))
         };
         let _ = write!(
             out,
             r#"<w:spacing w:before="{}" w:after="{}" w:line="{}" w:lineRule="auto"/><w:rPr><w:sz w:val="{}"/><w:szCs w:val="{}"/></w:rPr></w:pPr>"#,
-            construct.before_dxa,
+            before_dxa,
             after_dxa,
             construct.line_dxa,
             construct.mark_sz_half_pt,

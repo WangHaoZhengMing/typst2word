@@ -1,14 +1,17 @@
-//! Layout container extractors (`AlignElem`, `PadElem`, `ColumnsElem`) and
+//! Layout container extractors (`AlignElem`, `PadElem`, `ColumnsElem`, `StackElem`) and
 //! group horizontal offset propagation.
 
 use typst::foundations::{Packed, Smart};
 use typst::introspection::Location;
-use typst::layout::{AlignElem, ColumnsElem, GroupItem, PadElem, Point};
+use typst::layout::{AlignElem, ColumnsElem, Dir, GroupItem, HElem, HideElem, PadElem, Point, StackElem};
 use typst::text::TextElem;
 
 use crate::ExtractorContext;
 use crate::frame_tree::TreeNode;
-use ir::{BlockNode, HAlignIr, SemanticRoleIr};
+use ir::{
+    BlockNode, BordersIr, HAlignIr, SemanticRoleIr, SidesPtIr, TableCellIr, TableIr, TableKindIr,
+    TableRowIr, VAlignIr,
+};
 
 impl<'a> ExtractorContext<'a> {
     /// Propagate horizontal offset when a laid-out `GroupItem` (such as an indented/centered
@@ -320,6 +323,268 @@ impl<'a> ExtractorContext<'a> {
             });
         } else {
             blocks.extend(child_blocks);
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn extract_stack_container(
+        &mut self,
+        stack: &Packed<StackElem>,
+        loc: Location,
+        pos: Point,
+        children: &[TreeNode],
+        blocks: &mut Vec<BlockNode>,
+        list_level: usize,
+        inherited_align: HAlignIr,
+    ) {
+        let chain = self.scoped_style_chain(Some(loc));
+        let dir = stack.dir.get(chain);
+
+        match dir {
+            Dir::TTB => {
+                let child_blocks =
+                    self.extract_blocks_from_nodes(children, list_level, inherited_align);
+                blocks.extend(child_blocks);
+            }
+            Dir::BTT => {
+                // `dir: btt` lays out child `0` at the bottom and the final child at the top;
+                // sort the stack's frame items top-to-bottom by laid-out Y so Word block flow
+                // and inter-block gap measurement see true page order.
+                if let [TreeNode::Group {
+                    group,
+                    pos: gpos,
+                    children: gchildren,
+                }] = children
+                    && gchildren.len() > 1
+                {
+                    let mut sorted = gchildren.clone();
+                    sorted.sort_by(|a, b| {
+                        let (_, ay, _, _) = Self::estimate_nodes_bbox(std::slice::from_ref(a));
+                        let (_, by, _, _) = Self::estimate_nodes_bbox(std::slice::from_ref(b));
+                        ay.partial_cmp(&by).unwrap_or(std::cmp::Ordering::Equal)
+                    });
+                    let rewrapped = TreeNode::Group {
+                        group: group.clone(),
+                        pos: *gpos,
+                        children: sorted,
+                    };
+                    let child_blocks = self.extract_blocks_from_nodes(
+                        std::slice::from_ref(&rewrapped),
+                        list_level,
+                        inherited_align,
+                    );
+                    blocks.extend(child_blocks);
+                } else {
+                    let child_blocks =
+                        self.extract_blocks_from_nodes(children, list_level, inherited_align);
+                    blocks.extend(child_blocks);
+                }
+            }
+            Dir::LTR | Dir::RTL => {
+                let (stack_pos, raw_items, local_offset) = match children {
+                    [TreeNode::Group {
+                        pos: gpos,
+                        children: gchildren,
+                        ..
+                    }] => (*gpos, gchildren.as_slice(), self.scope.group_origin_offset + *gpos),
+                    _ => (pos, children, self.scope.group_origin_offset),
+                };
+
+                // Preserve single-paragraph inline horizontal stacks (e.g. `#stack(dir: ltr, spacing: 12pt, [Alpha], [Beta], [Gamma])`)
+                // when all children are stray inline items in LTR order.
+                let all_stray_inline = dir == Dir::LTR
+                    && !raw_items.is_empty()
+                    && raw_items
+                        .iter()
+                        .enumerate()
+                        .all(|(i, _)| Self::is_stray_inline_node_at(raw_items, i, i > 0));
+                if all_stray_inline {
+                    let child_blocks =
+                        self.extract_blocks_from_nodes(children, list_level, inherited_align);
+                    blocks.extend(child_blocks);
+                    return;
+                }
+
+                // Group visible items into horizontal stack slots, coalescing only adjacent
+                // inline runs that belong to the same inline child (`gap_x < 2.0pt` without `HElem`).
+                let mut slots: Vec<(f64, f64, Vec<TreeNode>)> = Vec::new();
+                let mut saw_spacer = false;
+                for item in raw_items {
+                    if let TreeNode::Element { elem, .. } = item {
+                        if Self::is_page_furniture_elem(elem) || elem.is::<HideElem>() {
+                            continue;
+                        }
+                        if elem.is::<HElem>() {
+                            saw_spacer = true;
+                            continue;
+                        }
+                    }
+                    let (ix, _, iw, ih) = Self::estimate_nodes_bbox(std::slice::from_ref(item));
+                    if iw <= 0.0 && ih <= 0.0 {
+                        continue;
+                    }
+                    let is_inline = Self::is_stray_inline_node(item);
+                    if is_inline
+                        && !saw_spacer
+                        && let Some((last_x, last_w, last_nodes)) = slots.last_mut()
+                        && last_nodes.iter().all(Self::is_stray_inline_node)
+                    {
+                        let prev_right = *last_x + *last_w;
+                        if (ix - prev_right).abs() < 2.0 {
+                            let new_min_x = last_x.min(ix);
+                            let new_max_x = prev_right.max(ix + iw);
+                            *last_x = new_min_x;
+                            *last_w = (new_max_x - new_min_x).max(1.0);
+                            last_nodes.push(item.clone());
+                            continue;
+                        }
+                    }
+                    saw_spacer = false;
+                    slots.push((ix, iw.max(1.0), vec![item.clone()]));
+                }
+
+                if slots.len() <= 1 {
+                    let child_blocks =
+                        self.extract_blocks_from_nodes(children, list_level, inherited_align);
+                    blocks.extend(child_blocks);
+                    return;
+                }
+
+                // Sort slots left-to-right by laid-out `x` (automatically handling `Dir::RTL` too).
+                slots.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+                let stack_id = self.alloc_node_with_fragments(
+                    stack.span(),
+                    Some(loc),
+                    Some(SemanticRoleIr::Grid),
+                    children,
+                );
+                self.parent_node_stack.push(stack_id);
+
+                let mut extracted_slots: Vec<(f64, f64, f64, Vec<BlockNode>)> =
+                    Vec::with_capacity(slots.len());
+                for (sx, sw, snodes) in &slots {
+                    let cell_blocks = self.with_scope(|ctx| {
+                        ctx.scope.group_origin_offset = local_offset;
+                        ctx.scope.active_group_bounds_pt = Some((*sx, *sx + sw.max(20.0)));
+                        ctx.scope.container_inset_pt = 0.0;
+                        ctx.extract_blocks_from_nodes(snodes, list_level, HAlignIr::Left)
+                    });
+                    if cell_blocks.is_empty() {
+                        continue;
+                    }
+                    let stroke_pad_pt = match cell_blocks.as_slice() {
+                        [BlockNode::ShapeBlock(sh)] => sh
+                            .stroke
+                            .as_ref()
+                            .or(sh.borders.top.as_ref())
+                            .map_or(0.0, |s| s.thickness_pt.max(0.5)),
+                        _ => 0.0,
+                    };
+                    let eff_w = match cell_blocks.as_slice() {
+                        [BlockNode::ShapeBlock(sh)] => sh.width_pt.max(*sw),
+                        _ => *sw,
+                    };
+                    extracted_slots.push((*sx, eff_w, stroke_pad_pt, cell_blocks));
+                }
+
+                self.parent_node_stack.pop();
+
+                if extracted_slots.len() <= 1 {
+                    for (_, _, _, mut cb) in extracted_slots {
+                        blocks.append(&mut cb);
+                    }
+                    return;
+                }
+
+                let n = extracted_slots.len();
+                let mut col_widths_pt = Vec::with_capacity(n);
+                let mut cells = Vec::with_capacity(n);
+
+                for idx in 0..n {
+                    let (sx, sw, s_pad, ref cb) = extracted_slots[idx];
+                    // Leading offset is carried by `tblInd` (`left_indent_pt`), never by the first
+                    // cell's `tcMar.left` (`sx` is an absolute page coordinate).
+                    let pad_left_pt = 0.0;
+                    let pad_right_pt = if idx + 1 < n {
+                        let (next_x, _, next_s_pad, _) = extracted_slots[idx + 1];
+                        let raw_gap_pt = (next_x - (sx + sw)).max(0.0);
+                        (raw_gap_pt - s_pad - next_s_pad).max(0.0)
+                    } else {
+                        0.0
+                    };
+                    let col_w_pt = sw + 2.0 * s_pad + pad_left_pt + pad_right_pt;
+                    col_widths_pt.push(col_w_pt.max(8.0));
+                    cells.push(TableCellIr {
+                        x: idx,
+                        y: 0,
+                        colspan: 1,
+                        rowspan: 1,
+                        fill: None,
+                        borders: BordersIr::default(),
+                        inset: SidesPtIr {
+                            top: 0.0,
+                            bottom: 0.0,
+                            left: pad_left_pt,
+                            right: pad_right_pt,
+                        },
+                        halign: HAlignIr::Left,
+                        valign: VAlignIr::Top,
+                        is_header_cell: false,
+                        blocks: cb.clone(),
+                    });
+                }
+
+                let left_bound = self
+                    .scope
+                    .active_group_bounds_pt
+                    .map(|(l, _)| l)
+                    .unwrap_or(self.content_left_pt);
+                let raw_left_off = stack_pos.x.to_pt() - left_bound;
+                // Inline DrawingML shapes reserve `<wp:effectExtent l=stroke>` before the shape box,
+                // so pull the table left by the first slot's stroke pad to keep the shape edge at
+                // Typst's exact `x`.
+                let first_stroke_pad_pt = extracted_slots.first().map_or(0.0, |s| s.2);
+                let left_indent_pt = if self.scope.container_inset_pt <= 0.1
+                    && list_level == 0
+                    && inherited_align == HAlignIr::Left
+                    && ((-144.0..=-1.5).contains(&raw_left_off)
+                        || (2.0..=48.0).contains(&raw_left_off))
+                {
+                    raw_left_off - first_stroke_pad_pt
+                } else if list_level > 0 && inherited_align == HAlignIr::Left {
+                    15.0 * list_level as f64 - first_stroke_pad_pt
+                } else if inherited_align == HAlignIr::Left {
+                    -first_stroke_pad_pt
+                } else {
+                    0.0
+                };
+
+                let tbl_align = match inherited_align {
+                    HAlignIr::Center => HAlignIr::Center,
+                    HAlignIr::Right => HAlignIr::Right,
+                    _ => HAlignIr::Left,
+                };
+
+                self.report.tables_count += 1;
+                blocks.push(BlockNode::Table(TableIr {
+                    id: stack_id,
+                    kind: TableKindIr::LayoutGrid,
+                    col_widths_pt,
+                    row_heights_pt: vec![0.0],
+                    header_rows: 0,
+                    footer_rows: 0,
+                    rows: vec![TableRowIr {
+                        height_pt: None,
+                        is_header: false,
+                        is_footer: false,
+                        cells,
+                    }],
+                    align: tbl_align,
+                    left_indent_pt,
+                    summary: None,
+                }));
+            }
         }
     }
 }

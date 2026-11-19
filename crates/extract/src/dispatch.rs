@@ -9,7 +9,7 @@ use typst::foundations::{Content, StyleChain};
 use typst::introspection::Location;
 use typst::layout::{
     AlignElem, BlockElem, ColbreakElem, ColumnsElem, GridElem, HideElem, LayoutElem, MoveElem,
-    PadElem, PagebreakElem, Point, RotateElem, ScaleElem,
+    PadElem, PagebreakElem, Point, RotateElem, ScaleElem, StackElem,
 };
 use typst::math::EquationElem;
 use typst::model::{
@@ -508,6 +508,18 @@ impl<'a> ExtractorContext<'a> {
             self.extract_columns_container(
                 cols_elem,
                 loc,
+                children,
+                blocks,
+                list_level,
+                inherited_align,
+            );
+            return;
+        }
+        if let Some(stack_elem) = elem.to_packed::<StackElem>() {
+            self.extract_stack_container(
+                stack_elem,
+                loc,
+                pos,
                 children,
                 blocks,
                 list_level,

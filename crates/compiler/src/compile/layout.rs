@@ -9,7 +9,9 @@ use std::collections::HashSet;
 use typst::engine::Engine;
 use typst::foundations::{Content, Smart, StyleChain};
 use typst::introspection::{Location, SplitLocator, Tag, TagElem};
-use typst::layout::{BlockElem, BoxElem, ColbreakElem, HElem, PadElem, PagebreakElem, Sizing};
+use typst::layout::{
+    BlockElem, BoxElem, ColbreakElem, HElem, PadElem, PagebreakElem, Sizing, StackElem,
+};
 use typst::routines::{Arenas, Pair};
 use typst::text::LinebreakElem;
 
@@ -195,6 +197,7 @@ fn should_wrap_layout_item(item: &Content, chain: StyleChain<'_>) -> bool {
     !is_cetz_span(item.span())
         && ((item.is::<BlockElem>() && is_styled_or_structural_block(item, chain))
             || (item.is::<PadElem>() && item.location().is_none())
+            || (item.is::<StackElem>() && item.location().is_none())
             || item.is::<ColbreakElem>()
             || item.is::<LinebreakElem>()
             || (item.is::<BoxElem>() && item.location().is_none())

@@ -104,15 +104,14 @@ impl<'a> TextRunConstruct<'a> {
                         ((sz_pt * 1.09 * 2.0).round() as u32).clamp(10, 288),
                     )
                 } else {
-                    // Typst's `SubElem` / `SuperElem` pre-scales `item.size` by the font's OS/2
-                    // `ySubscriptYSize` / `ySuperscriptYSize` ratio (`1331/2048 = 0.65`), and
+                    // `extract` records `sub` / `super` runs at their unscaled surrounding size;
                     // Word's `<w:vertAlign w:val="subscript|superscript"/>` scales `<w:sz>` down
-                    // again and truncates to its internal `0.24pt` (`1/300 in`) grid (`w:sz="22"`
-                    // -> `29 * 0.24pt = 6.96pt`, whereas `w:sz="23"` -> `30 * 0.24pt = 7.20pt`,
-                    // matching Typst's `7.15pt` within `0.05pt`).
+                    // and truncates to its internal `0.24pt` (`1/300 in`) grid, so bias by
+                    // `0.65 / 0.635` (`w:sz="23"` for 11pt -> `30 * 0.24pt = 7.20pt`, matching
+                    // Typst's `0.65 * 11 = 7.15pt` within `0.05pt`).
                     let unscaled_pt = match run.script {
                         ScriptKindIr::Normal => sz_pt,
-                        ScriptKindIr::Sub | ScriptKindIr::Super => sz_pt / 0.635,
+                        ScriptKindIr::Sub | ScriptKindIr::Super => sz_pt * (0.65 / 0.635),
                     };
                     RunFontSizeConstruct::StandardHalfPts(
                         ((unscaled_pt * 2.0).round() as u32).clamp(4, 288),

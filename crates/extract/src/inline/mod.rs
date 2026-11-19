@@ -40,6 +40,10 @@ pub(crate) struct ActiveInlineState {
     pub(crate) highlight: Option<ColorHex>,
     pub(crate) border: Option<StrokeIr>,
     pub(crate) script: ScriptKindIr,
+    /// Unscaled surrounding text size (`pt`) at the enclosing `sub` / `super` element, so the
+    /// IR records the base size regardless of whether Typst used typographic `subs`/`sups`
+    /// glyphs (unscaled `TextItem::size`) or synthesized scaled glyphs.
+    pub(crate) script_base_pt: Option<f64>,
     pub(crate) smallcaps: bool,
     pub(crate) is_code: bool,
     pub(crate) hidden: bool,

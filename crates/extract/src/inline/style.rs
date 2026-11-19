@@ -79,18 +79,23 @@ impl<'a> ExtractorContext<'a> {
             state.highlight = prev;
             return true;
         }
-        if elem.is::<SubElem>() {
+        if elem.is::<SubElem>() || elem.is::<SuperElem>() {
             let prev = state.script;
-            state.script = ScriptKindIr::Sub;
+            let prev_base = state.script_base_pt;
+            state.script = if elem.is::<SubElem>() {
+                ScriptKindIr::Sub
+            } else {
+                ScriptKindIr::Super
+            };
+            if prev_base.is_none() {
+                state.script_base_pt = Some(Self::resolve_length_pt(
+                    chain.get(typst::text::TextElem::size).0,
+                    11.0,
+                ));
+            }
             self.extract_inlines_from_nodes(children, out, state, last_y, last_x_end);
             state.script = prev;
-            return true;
-        }
-        if elem.is::<SuperElem>() {
-            let prev = state.script;
-            state.script = ScriptKindIr::Super;
-            self.extract_inlines_from_nodes(children, out, state, last_y, last_x_end);
-            state.script = prev;
+            state.script_base_pt = prev_base;
             return true;
         }
         if elem.is::<SmallcapsElem>() {

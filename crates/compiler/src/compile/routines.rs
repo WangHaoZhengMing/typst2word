@@ -12,7 +12,7 @@ use typst::foundations::{
 use typst::introspection::{Locatable, Location, SplitLocator, Tag, TagElem, TagFlags, Tagged};
 use typst::layout::{
     AlignElem, BlockBody, BlockElem, BoxElem, ColbreakElem, ColumnsElem, HideElem, MoveElem,
-    PadElem, RepeatElem, RotateElem, ScaleElem, SkewElem,
+    PadElem, RepeatElem, RotateElem, ScaleElem, SkewElem, StackChild, StackElem,
 };
 use typst::routines::{Arenas, Pair, RealizationKind, Routines};
 use typst::syntax::{Span, VirtualRoot};
@@ -186,6 +186,44 @@ fn annotate_content_for_realization(
         } else if !content.is_prepared() {
             // `PadElem` has a built-in `Target::Paged` native show rule, so assign a synthetic
             // location pre-realization to preserve its `Tag::Start(PadElem)` / `Tag::End(PadElem)`.
+            let key = typst_utils::hash128(&packed);
+            let loc = locator.next_location(engine, key, packed.span());
+            packed.set_location(loc);
+        }
+        return Some(packed);
+    }
+
+    if let Some(st) = content.to_packed::<StackElem>()
+        && !is_cetz_span(content.span())
+    {
+        let mut cloned = st.clone();
+        let mut children_changed = false;
+        let mut new_children = Vec::with_capacity(st.children.len());
+        for child in &st.children {
+            match child {
+                StackChild::Block(blk_content) => {
+                    if let Some(updated) =
+                        annotate_content_for_realization(blk_content, engine, locator)
+                    {
+                        children_changed = true;
+                        new_children.push(StackChild::Block(updated));
+                    } else {
+                        new_children.push(StackChild::Block(blk_content.clone()));
+                    }
+                }
+                StackChild::Spacing(sp) => new_children.push(StackChild::Spacing(*sp)),
+            }
+        }
+        if children_changed {
+            cloned.children = new_children;
+        }
+        let mut packed = cloned.pack();
+        if let Some(lbl) = content.label() {
+            packed.set_label(lbl);
+        }
+        if let Some(loc) = content.location() {
+            packed.set_location(loc);
+        } else if !content.is_prepared() {
             let key = typst_utils::hash128(&packed);
             let loc = locator.next_location(engine, key, packed.span());
             packed.set_location(loc);
