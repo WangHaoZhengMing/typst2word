@@ -1,6 +1,6 @@
 [package]
 name = "visual-test"
-version = "0.2.3"
+version = "0.2.4"
 edition = "2024"
 autobins = false
 description = "Atomic single-variable (margin: 10pt) Typst-to-Word IR & visual test suite + gpui-kit desktop inspector"

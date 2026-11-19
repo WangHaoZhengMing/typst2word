@@ -1094,7 +1094,7 @@ dependencies = [
 
 [[package]]
 name = "compiler"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "comemo",
  "dirs 7.0.0",
@@ -1599,7 +1599,7 @@ dependencies = [
 
 [[package]]
 name = "docx-writer"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "word-construct",
  "zip",
@@ -1868,7 +1868,7 @@ dependencies = [
 
 [[package]]
 name = "extract"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "compiler",
  "ecow",
@@ -3874,7 +3874,7 @@ checksum = "791930b43c0d5973160d90a8f3894509f2b273430f5c5c73b668636d0287c5c0"
 
 [[package]]
 name = "ir"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "serde",
 ]
@@ -8132,7 +8132,7 @@ dependencies = [
 
 [[package]]
 name = "typst2word"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "compiler",
  "docx-writer",
@@ -8147,7 +8147,7 @@ dependencies = [
 
 [[package]]
 name = "typst2word-wasm"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "comemo",
  "compiler",
@@ -8557,7 +8557,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "visual-test"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "compiler",
  "docx-writer",
@@ -9736,7 +9736,7 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 
 [[package]]
 name = "word-construct"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "ir",
  "serde",
