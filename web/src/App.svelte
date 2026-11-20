@@ -60,7 +60,8 @@
   // Engine state
   let client: TypstWordWorkerClient | null = null;
   let enginePhase = $state<EnginePhase>('booting');
-  let engineMessage = $state('正在启动本地 WASM 引擎…');
+  let engineMessage = $state('正在加载引擎…');
+  let bootProgress = $state<number | null>(null);
   let fonts = $state<FontFamilyDto[]>([]);
   let packages = $state<string[]>([]);
   let converting = $state(false);
@@ -461,10 +462,14 @@
         packages = p;
         enginePhase = 'ready';
         engineMessage = '就绪';
+        bootProgress = 100;
       },
-      onStatus: (phase, message) => {
+      onStatus: (phase, message, progress) => {
         enginePhase = phase;
         engineMessage = message;
+        if (phase === 'booting' && typeof progress === 'number') {
+          bootProgress = progress;
+        }
       },
       onFontsUpdated: (f) => {
         fonts = f;
@@ -537,7 +542,11 @@
       >
         <span class="status-dot"></span>
         {#if enginePhase === 'booting'}
-          正在加载引擎…
+          {#if bootProgress !== null}
+            加载引擎 {bootProgress}%
+          {:else}
+            正在加载引擎…
+          {/if}
         {:else if enginePhase === 'error'}
           引擎异常
         {:else}
@@ -848,6 +857,7 @@
         <button
           type="button"
           class="primary-btn"
+          class:booting={enginePhase === 'booting'}
           disabled={!canConvert}
           onclick={handleConvert}
         >
@@ -856,7 +866,10 @@
             <span>{engineMessage || '正在转换…'}</span>
           {:else if enginePhase === 'booting'}
             <span class="spinner"></span>
-            <span>正在初始化 WASM 引擎…</span>
+            <span>{engineMessage || '正在初始化 WASM 引擎…'}</span>
+            {#if bootProgress !== null}
+              <span class="btn-progress" style={`width: ${bootProgress}%`}></span>
+            {/if}
           {:else}
             <span>转换为 .docx</span>
           {/if}
@@ -1592,6 +1605,8 @@
   }
 
   .primary-btn {
+    position: relative;
+    overflow: hidden;
     width: 100%;
     height: 42px;
     border: none;
@@ -1605,6 +1620,19 @@
     justify-content: center;
     gap: 8px;
     transition: background 0.15s ease, opacity 0.15s ease;
+  }
+
+  .primary-btn.booting {
+    opacity: 0.78;
+  }
+
+  .btn-progress {
+    position: absolute;
+    left: 0;
+    bottom: 0;
+    height: 3px;
+    background: var(--accent);
+    transition: width 0.16s ease-out;
   }
 
   .primary-btn:hover:not(:disabled) {

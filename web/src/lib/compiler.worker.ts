@@ -177,6 +177,63 @@ async function preloadCachedCjkFontsIfPresent(workspace: WasmWorkspace): Promise
   }
 }
 
+async function fetchWasmWithProgress(url: string): Promise<Uint8Array> {
+  const resp = await fetch(url);
+  if (!resp.ok) {
+    throw new Error(`HTTP ${resp.status} while fetching WASM binary`);
+  }
+  const totalHeader = Number(resp.headers.get('content-length') || 0);
+  if (!resp.body) {
+    const buf = new Uint8Array(await resp.arrayBuffer());
+    return buf;
+  }
+
+  const reader = resp.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let loaded = 0;
+  let lastEmit = 0;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (value) {
+      chunks.push(value);
+      loaded += value.byteLength;
+      const now = performance.now();
+      if (now - lastEmit >= 70) {
+        lastEmit = now;
+        const mbLoaded = (loaded / (1024 * 1024)).toFixed(1);
+        if (totalHeader > 0) {
+          const pct = Math.min(92, Math.round((loaded / totalHeader) * 92));
+          const mbTotal = (totalHeader / (1024 * 1024)).toFixed(1);
+          postEvent({
+            type: 'status',
+            phase: 'booting',
+            progress: pct,
+            message: `正在下载引擎 ${pct}% (${mbLoaded} / ${mbTotal} MB)`,
+          });
+        } else {
+          const pseudoPct = Math.min(88, Math.round((1 - Math.exp(-loaded / (8 * 1024 * 1024))) * 90));
+          postEvent({
+            type: 'status',
+            phase: 'booting',
+            progress: pseudoPct,
+            message: `正在下载引擎 ${mbLoaded} MB…`,
+          });
+        }
+      }
+    }
+  }
+
+  const merged = new Uint8Array(loaded);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return merged;
+}
+
 async function ensureWorkspace(): Promise<WasmWorkspace> {
   if (ws) return ws;
   if (!initPromise) {
@@ -184,9 +241,17 @@ async function ensureWorkspace(): Promise<WasmWorkspace> {
       postEvent({
         type: 'status',
         phase: 'booting',
-        message: '正在启动 Typst 0.15 与 Word 语义引擎 (WASM)…',
+        progress: 2,
+        message: '正在连接并下载 WASM 引擎…',
       });
-      await initWasm({ module_or_path: wasmUrl });
+      const wasmBytes = await fetchWasmWithProgress(wasmUrl);
+      postEvent({
+        type: 'status',
+        phase: 'booting',
+        progress: 95,
+        message: '正在编译并初始化 WASM 模块…',
+      });
+      await initWasm({ module_or_path: wasmBytes });
       const instance = new WasmWorkspace();
       await preloadCachedCjkFontsIfPresent(instance);
       ws = instance;

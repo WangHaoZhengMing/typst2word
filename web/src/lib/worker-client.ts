@@ -15,7 +15,7 @@ interface PendingCall {
 
 export interface StudioWorkerCallbacks {
   onBooted?: (data: { fonts: FontFamilyDto[]; packages: string[] }) => void;
-  onStatus?: (phase: EnginePhase, message: string) => void;
+  onStatus?: (phase: EnginePhase, message: string, progress?: number) => void;
   onFontsUpdated?: (fonts: FontFamilyDto[], autoRecompile: boolean) => void;
   onPackagesUpdated?: (packages: string[]) => void;
 }
@@ -45,7 +45,11 @@ export class TypstWordWorkerClient {
             });
             break;
           case 'status':
-            this.callbacks.onStatus?.(data.phase, data.message);
+            this.callbacks.onStatus?.(
+              data.phase,
+              data.message,
+              typeof data.progress === 'number' ? data.progress : undefined,
+            );
             break;
           case 'fonts-updated':
             this.callbacks.onFontsUpdated?.(data.fonts ?? [], Boolean(data.autoRecompile));
