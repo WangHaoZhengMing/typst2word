@@ -166,4 +166,7 @@ pub struct ConversionReport {
     /// (original font family names in IR are preserved verbatim without substitution).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub font_fallback_warnings: Vec<String>,
+    /// Informational notes about embedded fonts (e.g. count, size, subset editability reminder).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub font_embed_notes: Vec<String>,
 }

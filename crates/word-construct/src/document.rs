@@ -7,8 +7,8 @@
 use std::collections::BTreeMap;
 
 use ir::{
-    BlockNode, DocumentIr, DocumentSectionIr, FontFaceMetricsIr, InlineNode, MetadataIr, NodeId,
-    PageSetupIr, ShapeIr, merge_split_styled_containers, visit_block_list_mut,
+    BlockNode, DocumentIr, DocumentSectionIr, EmbeddedFontFaceIr, FontFaceMetricsIr, InlineNode,
+    MetadataIr, NodeId, PageSetupIr, ShapeIr, merge_split_styled_containers, visit_block_list_mut,
     visit_page_setup_blocks_mut,
 };
 
@@ -62,6 +62,11 @@ pub struct WordDocument {
     /// Extracted OpenType binary font metrics (`upem`, `hhea`, `OS/2`, CJK codepage, system status)
     /// carried from `DocumentIr` for `docx-writer` line-box queries.
     pub font_metrics: BTreeMap<String, FontFaceMetricsIr>,
+    /// Resolved Word OpenType `MATH` font family name (`nameID 1`, e.g. `"NewComputerModernMath"`)
+    /// when a math font is embedded for OMML rendering; `None` defaults to `"Cambria Math"`.
+    pub math_font_family: Option<String>,
+    /// Standalone SFNT font faces carried from `DocumentIr` for OOXML `.odttf` packaging.
+    pub embedded_fonts: Vec<EmbeddedFontFaceIr>,
     /// Unified per-`NodeId` solved Word layout side-table (`paragraph_line`, `code_line_spacing`,
     /// `shape`, `before_dxa`, `after_dxa`), keeping `DocumentIr` 100% immutable.
     pub solved_nodes: BTreeMap<NodeId, SolvedNodeLayout>,
@@ -229,6 +234,7 @@ impl WordDocument {
         }
 
         let has_cetz_canvas = docs.iter().any(|d| d.has_cetz_canvas);
+        let math_font_family = docs.iter().find_map(|d| d.math_font_family.clone());
 
         Ok(Self {
             sections,
@@ -236,6 +242,8 @@ impl WordDocument {
             page_setup: first_doc.page_setup.clone(),
             blocks: first_blocks,
             font_metrics: merged_font_metrics,
+            math_font_family,
+            embedded_fonts: first_doc.embedded_fonts.clone(),
             solved_nodes: merged_solved_nodes,
             has_cjk: first_doc.has_cjk,
             has_cetz_canvas,
@@ -422,6 +430,8 @@ pub fn build_word_document(ir: &DocumentIr) -> WordDocument {
         page_setup,
         blocks,
         font_metrics: ir.font_metrics.clone(),
+        math_font_family: ir.math_font_family.clone(),
+        embedded_fonts: ir.embedded_fonts.clone(),
         solved_nodes,
         has_cjk,
         has_cetz_canvas,

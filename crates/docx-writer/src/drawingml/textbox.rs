@@ -1,7 +1,7 @@
 //! Shape / label body blocks -> `<w:txbxContent>` paragraphs, tables, and runs.
 
 use crate::inlines::text::render_text_run_xml;
-use crate::math::render_equation_omml;
+use crate::math::{render_equation_omml, render_equation_omml_with_font};
 use crate::writer::DocxWriter;
 use word_construct::model::{BlockNode, HAlignIr, InlineNode, TextRunIr};
 use word_construct::shape::FirstParaExactLayout;
@@ -80,7 +80,7 @@ pub(crate) fn render_textbox_blocks_with_first_override(
                 out.push_str(&format!(
                     r#"<w:p><w:pPr><w:jc w:val="center"/><w:spacing w:before="110" w:after="{after_dxa}"/></w:pPr>"#,
                 ));
-                render_equation_omml(eq, &mut out);
+                render_equation_omml_with_font(eq, writer.doc.math_font_family.as_deref(), &mut out);
                 out.push_str("</w:p>");
             }
             BlockNode::Container(container) => {

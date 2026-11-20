@@ -4,7 +4,7 @@ use std::fmt::Write as _;
 
 use word_construct::equation::EquationBlockConstruct;
 use crate::writer::DocxWriter;
-use crate::math::render_equation_omml;
+use crate::math::render_equation_omml_with_font;
 use word_construct::model::EquationIr;
 use crate::xml::escape_xml;
 
@@ -89,7 +89,7 @@ impl<'a> DocxWriter<'a> {
                 out.push_str(
                     r#"<m:oMathPara><m:oMathParaPr><m:jc m:val="center"/></m:oMathParaPr>"#,
                 );
-                render_equation_omml(eq, out);
+                render_equation_omml_with_font(eq, self.doc.math_font_family.as_deref(), out);
                 out.push_str("</m:oMathPara>");
                 if let Some(id) = bm_id {
                     Self::emit_bookmark_end(id, out);
@@ -130,7 +130,7 @@ impl<'a> DocxWriter<'a> {
                 out.push_str(
                     r#"<m:oMathPara><m:oMathParaPr><m:jc m:val="center"/></m:oMathParaPr>"#,
                 );
-                render_equation_omml(eq, out);
+                render_equation_omml_with_font(eq, self.doc.math_font_family.as_deref(), out);
                 out.push_str("</m:oMathPara>");
                 if let Some(id) = bm_id {
                     Self::emit_bookmark_end(id, out);

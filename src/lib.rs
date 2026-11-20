@@ -27,8 +27,8 @@ use compiler::{TypstWorld, compile_world};
 #[cfg(not(target_arch = "wasm32"))]
 use docx_writer::write_docx_to_path;
 use docx_writer::{DocxWriteOptions, write_docx_to_bytes_with_options};
-use extract::extract_document_ir;
-use ir::DocumentIr;
+use extract::{extract_document_ir, extract_document_ir_with_embed_mode};
+use ir::{DocumentIr, FontEmbedMode};
 use word_construct::build_word_document;
 
 /// Compile a Typst `.typ` file and extract its pure `DocumentIr` (never mutated by Word passes).
@@ -43,9 +43,19 @@ pub fn compile_file_to_ir_with_inputs<K: AsRef<str>, V: AsRef<str>>(
     input_path: &Path,
     inputs: impl IntoIterator<Item = (K, V)>,
 ) -> Result<DocumentIr, String> {
+    compile_file_to_ir_with_options(input_path, inputs, FontEmbedMode::default())
+}
+
+/// Compile a Typst `.typ` file with `sys.inputs` and explicit [`FontEmbedMode`].
+#[cfg(not(target_arch = "wasm32"))]
+pub fn compile_file_to_ir_with_options<K: AsRef<str>, V: AsRef<str>>(
+    input_path: &Path,
+    inputs: impl IntoIterator<Item = (K, V)>,
+    embed_mode: FontEmbedMode,
+) -> Result<DocumentIr, String> {
     let world = TypstWorld::from_file(input_path)?.with_string_inputs(inputs);
     let compiled = compile_world(&world)?;
-    Ok(extract_document_ir(&compiled, &world))
+    Ok(extract_document_ir_with_embed_mode(&compiled, &world, embed_mode))
 }
 
 /// Compile an in-memory Typst source string and extract its pure `DocumentIr` (never mutated by Word passes).
@@ -85,7 +95,23 @@ pub fn convert_typst_file_to_docx_with_inputs<K: AsRef<str>, V: AsRef<str>>(
     output_path: &Path,
     inputs: impl IntoIterator<Item = (K, V)>,
 ) -> Result<DocumentIr, String> {
-    let ir = compile_file_to_ir_with_inputs(input_path, inputs)?;
+    convert_typst_file_to_docx_with_options(
+        input_path,
+        output_path,
+        inputs,
+        FontEmbedMode::default(),
+    )
+}
+
+/// Convert a Typst `.typ` file with `sys.inputs` and explicit [`FontEmbedMode`] to a `.docx` file.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn convert_typst_file_to_docx_with_options<K: AsRef<str>, V: AsRef<str>>(
+    input_path: &Path,
+    output_path: &Path,
+    inputs: impl IntoIterator<Item = (K, V)>,
+    embed_mode: FontEmbedMode,
+) -> Result<DocumentIr, String> {
+    let ir = compile_file_to_ir_with_options(input_path, inputs, embed_mode)?;
     let word_doc = build_word_document(&ir);
     write_docx_to_path(&word_doc, output_path)?;
     Ok(ir)

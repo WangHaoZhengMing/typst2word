@@ -2,11 +2,18 @@ use std::env;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use typst2word::convert_typst_file_to_docx_with_inputs;
+use typst2word::convert_typst_file_to_docx_with_options;
+use typst2word::ir::FontEmbedMode;
 
 fn print_usage() {
     eprintln!(
-        "Usage: typst2word <input.typ> [output.docx] [--dump-ir <ir.json>] [--input key=value]\n\
+        "Usage: typst2word <input.typ> [output.docx] [--dump-ir <ir.json>] [--input key=value] [--embed-fonts=<subset|full|none>]\n\
+         \n\
+         Options:\n\
+           --embed-fonts=<mode>  Font embedding mode: 'subset' (default), 'full', or 'none'\n\
+           --no-embed-fonts      Shorthand for --embed-fonts=none\n\
+           --dump-ir <ir.json>   Write extracted DocumentIr JSON for debugging\n\
+           --input key=value     Pass sys.inputs key-value pair to Typst\n\
          \n\
          Converts a Typst document (.typ) into Microsoft Word (.docx) while\n\
          preserving both visual layout and semantic structure (headings, lists,\n\
@@ -26,6 +33,7 @@ fn main() -> ExitCode {
     let mut output_path: Option<PathBuf> = None;
     let mut dump_ir_path: Option<PathBuf> = None;
     let mut sys_inputs: Vec<(String, String)> = Vec::new();
+    let mut embed_mode = FontEmbedMode::default();
 
     let mut i = 0;
     while i < args.len() {
@@ -51,6 +59,40 @@ fn main() -> ExitCode {
                 } else {
                     eprintln!("Error: --input requires key=value");
                     return ExitCode::FAILURE;
+                }
+            }
+            "--no-embed-fonts" => {
+                embed_mode = FontEmbedMode::None;
+                i += 1;
+            }
+            "--embed-fonts" => {
+                if i + 1 < args.len() && !args[i + 1].starts_with('-') {
+                    match FontEmbedMode::parse_cli(&args[i + 1]) {
+                        Ok(mode) => {
+                            embed_mode = mode;
+                            i += 2;
+                        }
+                        Err(_) => {
+                            embed_mode = FontEmbedMode::Subset;
+                            i += 1;
+                        }
+                    }
+                } else {
+                    embed_mode = FontEmbedMode::Subset;
+                    i += 1;
+                }
+            }
+            arg if arg.starts_with("--embed-fonts=") => {
+                let val = &arg["--embed-fonts=".len()..];
+                match FontEmbedMode::parse_cli(val) {
+                    Ok(mode) => {
+                        embed_mode = mode;
+                        i += 1;
+                    }
+                    Err(e) => {
+                        eprintln!("Error: {e}");
+                        return ExitCode::FAILURE;
+                    }
                 }
             }
             arg if arg.starts_with('-') => {
@@ -80,7 +122,7 @@ fn main() -> ExitCode {
 
     let output = output_path.unwrap_or_else(|| input.with_extension("docx"));
 
-    match convert_typst_file_to_docx_with_inputs(&input, &output, sys_inputs) {
+    match convert_typst_file_to_docx_with_options(&input, &output, sys_inputs, embed_mode) {
         Ok(ir) => {
             if let Some(ir_path) = dump_ir_path {
                 match serde_json::to_string_pretty(&ir) {
@@ -125,6 +167,9 @@ fn main() -> ExitCode {
             }
             for w in &r.font_fallback_warnings {
                 eprintln!("  ⚠️  {w}");
+            }
+            for note in &r.font_embed_notes {
+                println!("  ℹ️  {note}");
             }
             for unsup in &r.unsupported_elements {
                 println!("  ! {}", unsup.display_badge());

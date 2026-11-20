@@ -109,13 +109,14 @@ impl<'a> DocxWriter<'a> {
         }
         self.active_part = "footnotes".into();
         let footnotes_xml = self.render_footnotes_xml();
-        let font_table_xml = Self::render_font_table_xml();
+        let prepared_fonts = crate::parts::fonts::prepare_embedded_fonts(&self.doc.embedded_fonts);
+        let font_table_xml = self.render_font_table_xml(&prepared_fonts);
         let styles_xml = self.render_styles_xml();
         let numbering_xml = self.render_numbering_xml();
         let settings_xml = self.render_settings_xml();
         let doc_rels_xml = self.render_part_rels_xml("document");
         let root_rels_xml = Self::render_root_rels_xml();
-        let content_types_xml = self.render_content_types_xml();
+        let content_types_xml = self.render_content_types_xml(!prepared_fonts.is_empty());
         let core_props_xml = self.render_core_props_xml();
         let app_props_xml = Self::render_app_props_xml();
 
@@ -141,6 +142,23 @@ impl<'a> DocxWriter<'a> {
         Self::zip_write_str(&mut zip, "word/settings.xml", &settings_xml, options)?;
         Self::zip_write_str(&mut zip, "word/footnotes.xml", &footnotes_xml, options)?;
         Self::zip_write_str(&mut zip, "word/fontTable.xml", &font_table_xml, options)?;
+
+        if !prepared_fonts.is_empty() {
+            let font_rels_xml = Self::render_font_table_rels_xml(&prepared_fonts);
+            Self::zip_write_str(
+                &mut zip,
+                "word/_rels/fontTable.xml.rels",
+                &font_rels_xml,
+                options,
+            )?;
+            for pf in &prepared_fonts {
+                let path = format!("word/fonts/{}", pf.part_filename);
+                zip.start_file(path, options)
+                    .map_err(|e| format!("zip start_file(font) error: {e}"))?;
+                zip.write_all(&pf.obfuscated_data)
+                    .map_err(|e| format!("zip write_all(font) error: {e}"))?;
+            }
+        }
 
         for (part, xml) in &furniture_xml {
             Self::zip_write_str(&mut zip, &format!("word/{part}.xml"), xml, options)?;
@@ -177,7 +195,7 @@ impl<'a> DocxWriter<'a> {
         Ok(())
     }
 
-    pub(crate) fn render_content_types_xml(&self) -> String {
+    pub(crate) fn render_content_types_xml(&self, has_embedded_fonts: bool) -> String {
         let mut out = String::new();
         out.push_str(
             r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -188,7 +206,15 @@ impl<'a> DocxWriter<'a> {
   <Default Extension="jpeg" ContentType="image/jpeg"/>
   <Default Extension="jpg" ContentType="image/jpeg"/>
   <Default Extension="gif" ContentType="image/gif"/>
-  <Default Extension="svg" ContentType="image/svg+xml"/>
+  <Default Extension="svg" ContentType="image/svg+xml"/>"#,
+        );
+        if has_embedded_fonts {
+            out.push_str(
+                "\n  <Default Extension=\"odttf\" ContentType=\"application/vnd.openxmlformats-officedocument.obfuscatedFont\"/>",
+            );
+        }
+        out.push_str(
+            r#"
   <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
   <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
   <Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>
@@ -301,37 +327,6 @@ impl<'a> DocxWriter<'a> {
 <Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties">
   <Application>typst2word</Application>
 </Properties>"#
-            .to_string()
-    }
-
-    pub(crate) fn render_font_table_xml() -> String {
-        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:fonts xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
-  <w:font w:name="DejaVu Sans Mono">
-    <w:altName w:val="Consolas"/>
-    <w:charset w:val="00"/>
-    <w:family w:val="modern"/>
-    <w:pitch w:val="fixed"/>
-  </w:font>
-  <w:font w:name="Libertinus Serif">
-    <w:altName w:val="Times New Roman"/>
-    <w:charset w:val="00"/>
-    <w:family w:val="roman"/>
-    <w:pitch w:val="variable"/>
-  </w:font>
-  <w:font w:name="New Computer Modern Math">
-    <w:altName w:val="Cambria Math"/>
-    <w:charset w:val="00"/>
-    <w:family w:val="roman"/>
-    <w:pitch w:val="variable"/>
-  </w:font>
-  <w:font w:name="Hei">
-    <w:altName w:val="Heiti SC"/>
-    <w:charset w:val="86"/>
-    <w:family w:val="swiss"/>
-    <w:pitch w:val="variable"/>
-  </w:font>
-</w:fonts>"#
             .to_string()
     }
 }

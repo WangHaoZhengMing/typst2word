@@ -67,7 +67,11 @@ impl<'a> DocxWriter<'a> {
                 self.render_text_run(run, out);
             }
             InlineNode::EquationInline(eq) => {
-                crate::math::render_equation_omml(eq, out);
+                crate::math::render_equation_omml_with_font(
+                    eq,
+                    self.doc.math_font_family.as_deref(),
+                    out,
+                );
             }
             InlineNode::ShapeInline(shape) => {
                 let run_xml = shape_to_inline_drawingml_run(self, shape);

@@ -13,6 +13,7 @@ mod dispatch;
 mod document;
 mod elements;
 mod flow;
+mod font_embed;
 mod font_metrics;
 mod frame_tree;
 mod inline;
@@ -31,16 +32,27 @@ use typst::{World, WorldExt};
 use compiler::compile::CompiledTypstDocument;
 use compiler::world::TypstWorld;
 use ir::{
-    BlockLayoutSpanIr, BlockNode, ConversionReport, DocumentIr, HAlignIr, LayoutFragmentIr, NodeId,
-    NodeOrigin, NodeReferenceLayout, PageSetupIr, SemanticRoleIr, normalize_document_ir,
+    BlockLayoutSpanIr, BlockNode, ConversionReport, DocumentIr, FontEmbedMode, HAlignIr,
+    LayoutFragmentIr, NodeId, NodeOrigin, NodeReferenceLayout, PageSetupIr, SemanticRoleIr,
+    normalize_document_ir,
 };
 
 use self::sections::consolidate_page_sections;
 
-/// Extract a complete, structurally normalized `DocumentIr` from a `CompiledTypstDocument` and `TypstWorld`.
+/// Extract a complete, structurally normalized `DocumentIr` from a `CompiledTypstDocument` and `TypstWorld`
+/// using the default font embedding mode ([`FontEmbedMode::Subset`]).
 pub fn extract_document_ir(compiled: &CompiledTypstDocument, world: &TypstWorld) -> DocumentIr {
+    extract_document_ir_with_embed_mode(compiled, world, FontEmbedMode::default())
+}
+
+/// Extract a complete, structurally normalized `DocumentIr` with an explicit [`FontEmbedMode`].
+pub fn extract_document_ir_with_embed_mode(
+    compiled: &CompiledTypstDocument,
+    world: &TypstWorld,
+    embed_mode: FontEmbedMode,
+) -> DocumentIr {
     let mut ctx = ExtractorContext::new(compiled, world);
-    let mut doc = ctx.extract();
+    let mut doc = ctx.extract(embed_mode);
     normalize_document_ir(&mut doc);
     doc
 }
@@ -413,7 +425,7 @@ impl<'a> ExtractorContext<'a> {
         len.abs.to_pt() + len.em.get() * font_size_pt
     }
 
-    pub(crate) fn extract(&mut self) -> DocumentIr {
+    pub(crate) fn extract(&mut self, embed_mode: FontEmbedMode) -> DocumentIr {
         self.report.pages_count = self.compiled.document.pages().len();
         for warn in &self.compiled.warnings {
             let msg = warn.message.to_string();
@@ -506,10 +518,12 @@ impl<'a> ExtractorContext<'a> {
         };
         let anchors = self.extract_page_line_anchors();
         let font_metrics = self.collect_document_font_metrics();
+        let embedded = self.collect_embedded_fonts(embed_mode);
         // Warn when realized fonts in the document are embedded in Typst rather than installed
-        // on the host OS, without altering any extracted font family names.
+        // on the host OS AND were not embedded into the `.docx` package.
         for (family, metrics) in &font_metrics {
             if !metrics.is_system_installed
+                && !embedded.embedded_typst_families.contains(family)
                 && self
                     .seen_font_fallbacks
                     .insert(("<host>".to_string(), family.clone()))
@@ -519,6 +533,7 @@ impl<'a> ExtractorContext<'a> {
                 ));
             }
         }
+        self.report.font_embed_notes = embedded.notes;
 
         let mut doc = DocumentIr::default();
         doc.sections = sections;
@@ -526,6 +541,8 @@ impl<'a> ExtractorContext<'a> {
         doc.page_setup = page_setup;
         doc.blocks = blocks;
         doc.font_metrics = font_metrics;
+        doc.math_font_family = embedded.math_font_family;
+        doc.embedded_fonts = embedded.faces;
         doc.origins = std::mem::take(&mut self.origins);
         doc.reference_layout = std::mem::take(&mut self.reference_layout);
         doc.report = self.report.clone();

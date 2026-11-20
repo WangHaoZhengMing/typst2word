@@ -18,6 +18,7 @@ mod cetz;
 pub mod container;
 mod document;
 mod equation;
+mod font_embed;
 mod image;
 mod list;
 pub mod locale;
@@ -38,7 +39,8 @@ pub use bibliography::BibEntryIr;
 pub use cetz::{CetzCanvasIr, CetzLabelDrawableIr, CetzPathDrawableIr};
 pub use container::{ContainerIr, ContainerStyleIr};
 pub use document::{ConversionReport, MetadataIr, PageNumberFormatIr, PageSetupIr};
-pub use equation::{EquationIr, MathFracStyleIr, MathNodeIr, MathRunIr, MathScriptIr, MathStyleIr};
+pub use equation::{EquationIr, MathFracStyleIr, MathNodeIr, MathRunIr, MathStyleIr, MathScriptIr};
+pub use font_embed::{EmbeddedFontFaceIr, EmbeddedFontSlot, FontEmbedMode};
 pub use image::{ImageFormatIr, ImageIr};
 pub use list::{EnumItemIr, ListItemIr, TermItemIr};
 pub use locale::{LocaleIr, TextDirIr};
@@ -126,6 +128,13 @@ pub struct DocumentIr {
     /// Intrinsic OpenType binary table metrics for every font family realized in the document.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub font_metrics: BTreeMap<String, FontFaceMetricsIr>,
+    /// Resolved Word OpenType `MATH` font family name (`nameID 1`, e.g. `"NewComputerModernMath"`)
+    /// when a math font is embedded for OMML rendering; `None` defaults to `"Cambria Math"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub math_font_family: Option<String>,
+    /// Standalone SFNT font faces extracted for `.docx` embedding (skipped from JSON IR dumps).
+    #[serde(skip)]
+    pub embedded_fonts: Vec<EmbeddedFontFaceIr>,
     /// Unified node provenance and semantic roles indexed by `NodeId`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub origins: BTreeMap<NodeId, NodeOrigin>,
