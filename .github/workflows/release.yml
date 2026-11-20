@@ -48,7 +48,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'
@@ -89,7 +89,7 @@ jobs:
           "$hash  typst2word-${{ matrix.target }}.zip" | Out-File -Encoding ascii "typst2word-${{ matrix.target }}.zip.sha256"
 
       - name: Upload release artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: typst2word-${{ matrix.target }}
           path: |
@@ -101,7 +101,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Binaryen and archive tools
         run: |
@@ -131,7 +131,7 @@ jobs:
         run: ./scripts/build-wasm.sh --release-dist
 
       - name: Upload WASM release artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: typst2word-wasm32-unknown-unknown
           path: |
@@ -146,7 +146,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
           merge-multiple: true
