@@ -546,8 +546,45 @@ fn merge_block_list_by_identity(
         }
 
         let should_merge_code = match (&blocks[i - 1], &blocks[i]) {
-            (BlockNode::CodeBlock { id: id_a, .. }, BlockNode::CodeBlock { id: id_b, .. }) => {
-                same_nonzero_typst_location(origins, *id_a, *id_b) == Some(true)
+            (
+                BlockNode::CodeBlock {
+                    id: id_a,
+                    fill: fill_a,
+                    stroke: stroke_a,
+                    ..
+                },
+                BlockNode::CodeBlock {
+                    id: id_b,
+                    lang: lang_b,
+                    fill: fill_b,
+                    stroke: stroke_b,
+                    ..
+                },
+            ) => {
+                if same_nonzero_typst_location(origins, *id_a, *id_b) == Some(true) {
+                    true
+                } else {
+                    // Typst only emits `Tag::Start(RawElem)` on the opening page; cross-page
+                    // continuation fragments arrive without `typst_location` or `lang`.
+                    let b_has_no_loc = origins
+                        .get(id_b)
+                        .and_then(|o| o.typst_location.as_ref())
+                        .is_none();
+                    let next_page_continuation = layouts
+                        .get(id_a)
+                        .and_then(|la| la.span.end_page_and_bottom_y())
+                        .zip(
+                            layouts
+                                .get(id_b)
+                                .and_then(|lb| lb.span.start_page_and_top_y()),
+                        )
+                        .is_some_and(|((end_p, _), (start_p, _))| start_p == end_p + 1);
+                    b_has_no_loc
+                        && lang_b.is_none()
+                        && next_page_continuation
+                        && fill_a == fill_b
+                        && stroke_a == stroke_b
+                }
             }
             _ => false,
         };

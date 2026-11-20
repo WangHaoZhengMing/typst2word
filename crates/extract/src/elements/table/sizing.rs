@@ -30,6 +30,7 @@ impl<'a> ExtractorContext<'a> {
         let mut col_fr = vec![0.0_f64; num_cols];
         let mut row_heights_pt = vec![0.0_f64; num_rows];
         let mut row_has_explicit_height = vec![false; num_rows];
+        let mut any_non_left_col = false;
 
         let has_fr_col = grid.cols.iter().any(|c| matches!(c, Sizing::Fr(_)));
 
@@ -37,7 +38,10 @@ impl<'a> ExtractorContext<'a> {
             let colspan = Self::get_cell_colspan(cell_elem);
             let rowspan = Self::get_cell_rowspan(cell_elem);
             let (bbox_x, _, bbox_w, bbox_h) = Self::estimate_nodes_bbox(cnodes);
-            let (ins, _, _, _) = Self::extract_cell_props(cell_elem, false, is_semantic_table);
+            let (ins, ha, _, _) = Self::extract_cell_props(cell_elem, false, is_semantic_table);
+            if matches!(ha, ir::HAlignIr::Center | ir::HAlignIr::Right) {
+                any_non_left_col = true;
+            }
             let pad_w = if is_semantic_table {
                 let list_pad = if Self::nodes_contain_list(cnodes) {
                     15.0
@@ -145,9 +149,13 @@ impl<'a> ExtractorContext<'a> {
         // have laid-out X coordinates, refine widths from Typst's inter-column X deltas.
         // Skip when every track is already an explicit `Sizing::Rel` (`30%`, `100pt`, etc.)
         // so centered/right-aligned cell contents do not skew explicit column widths.
+        // Skip when any cell is centered or right-aligned, because `col_min_x[x]` then includes
+        // alignment offset `(track_w - ink_w)` and `col_min_x[x + 1] - col_min_x[x]` would steal
+        // width from centered/right-aligned `1fr` columns.
         let has_auto_col = (0..num_cols)
             .any(|x| matches!(grid.cols.get(x * factor), Some(Sizing::Auto) | None));
         if !is_semantic_table
+            && !any_non_left_col
             && num_cols > 1
             && (total_fr > 0.0 || has_auto_col)
             && col_min_x.iter().all(|x| x.is_finite())

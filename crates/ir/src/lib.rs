@@ -336,6 +336,8 @@ pub enum BlockNode {
     },
     /// Horizontal divider line (`#line(length: 100%)`).
     HorizontalRule {
+        #[serde(default, skip_serializing_if = "NodeId::is_unset")]
+        id: NodeId,
         length_pt: f64,
         stroke: StrokeIr,
         align: HAlignIr,
@@ -371,6 +373,7 @@ impl BlockNode {
             | Self::Quote { id, .. }
             | Self::CodeBlock { id, .. }
             | Self::Figure { id, .. }
+            | Self::HorizontalRule { id, .. }
             | Self::Columns { id, .. } => *id,
             Self::Container(c) => c.id,
             Self::Table(t) => t.id,
@@ -380,7 +383,6 @@ impl BlockNode {
             Self::ImageBlock(i) => i.id,
             Self::Outline { .. }
             | Self::Bibliography { .. }
-            | Self::HorizontalRule { .. }
             | Self::PageBreak
             | Self::ColumnBreak
             | Self::UnsupportedBlock(_) => NodeId::UNSET,
@@ -399,6 +401,7 @@ impl BlockNode {
             | Self::Quote { id, .. }
             | Self::CodeBlock { id, .. }
             | Self::Figure { id, .. }
+            | Self::HorizontalRule { id, .. }
             | Self::Columns { id, .. } => *id = new_id,
             Self::Container(c) => c.id = new_id,
             Self::Table(t) => t.id = new_id,
@@ -408,7 +411,6 @@ impl BlockNode {
             Self::ImageBlock(i) => i.id = new_id,
             Self::Outline { .. }
             | Self::Bibliography { .. }
-            | Self::HorizontalRule { .. }
             | Self::PageBreak
             | Self::ColumnBreak
             | Self::UnsupportedBlock(_) => {}

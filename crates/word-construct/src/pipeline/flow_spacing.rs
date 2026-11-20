@@ -267,7 +267,45 @@ pub fn solve_container_and_figure_flow_spacing(
             }
         }
 
+        // Solve pre-gap onto `blocks[idx + 1]` when `blocks[idx + 1]` is a `HorizontalRule` (`#line(...)`).
+        if matches!(blocks[idx + 1], BlockNode::HorizontalRule { .. }) && !id_b.is_unset() {
+            let prev_bot_air_pt = match &blocks[idx] {
+                BlockNode::Container(_) | BlockNode::Table(_) | BlockNode::HorizontalRule { .. } => {
+                    0.0
+                }
+                BlockNode::CodeBlock { fill, stroke, .. }
+                    if fill.is_some() || stroke.is_some() =>
+                {
+                    0.0
+                }
+                _ => 0.18 * next_font_pt,
+            };
+            let needed_before_pt = (gap_pt - prev_bot_air_pt).max(0.0);
+            solved_nodes.entry(id_b).or_default().before_dxa = Some(pt_to_dxa(needed_before_pt));
+        }
+
         match &blocks[idx] {
+            BlockNode::HorizontalRule { .. } => {
+                // `HorizontalRule` is a 1pt-tall empty `<w:p>` with bottom border (`w:line="20"`),
+                // so only the following block's internal top leading (`~0.20 * next_font`) needs subtraction.
+                let next_top_air = match &blocks[idx + 1] {
+                    BlockNode::Container(_)
+                    | BlockNode::Table(_)
+                    | BlockNode::ShapeBlock(_)
+                    | BlockNode::HorizontalRule { .. } => 0.0,
+                    BlockNode::Paragraph { style, .. } => {
+                        let sz = style.resolved_font_size_pt.unwrap_or(next_font_pt);
+                        0.20 * sz
+                    }
+                    BlockNode::Heading { content, .. } | BlockNode::Title { content, .. } => {
+                        let sz = ir::dominant_inline_font_size_pt(content, next_font_pt);
+                        0.20 * sz
+                    }
+                    _ => 0.20 * next_font_pt,
+                };
+                let needed_after_pt = (gap_pt - next_top_air).max(0.0);
+                solved_nodes.entry(id_a).or_default().after_dxa = Some(pt_to_dxa(needed_after_pt));
+            }
             BlockNode::ShapeBlock(_) => {
                 // Wrapper `<w:p>` uses a 1pt paragraph mark (`~0.02 * font` descent), leaving only
                 // the following block's `~0.20 * next_font` internal top leading to subtract

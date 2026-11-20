@@ -3,13 +3,15 @@
 use std::fmt::Write as _;
 
 use crate::writer::DocxWriter;
-use word_construct::model::{HAlignIr, StrokeIr};
+use word_construct::model::{HAlignIr, NodeId, StrokeIr};
 use word_construct::units::pt_to_dxa;
 
 impl<'a> DocxWriter<'a> {
     /// `BlockNode::HorizontalRule` -> empty paragraph with a bottom border.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn render_horizontal_rule(
         &mut self,
+        id: NodeId,
         length_pt: f64,
         stroke: &StrokeIr,
         align: HAlignIr,
@@ -47,10 +49,15 @@ impl<'a> DocxWriter<'a> {
         } else {
             String::new()
         };
-        let before_dxa = if collapse_before { 0 } else { 60 };
+        let before_dxa = if collapse_before {
+            0
+        } else {
+            self.doc.solved_before_dxa(id).unwrap_or(60)
+        };
+        let after_dxa = self.doc.solved_after_dxa(id).unwrap_or(80);
         let _ = write!(
             out,
-            r#"<w:p><w:pPr><w:pBdr><w:bottom w:val="{val}" w:sz="{sz}" w:space="0" w:color="{}"/></w:pBdr>{ind_xml}<w:spacing w:before="{before_dxa}" w:after="80" w:line="20" w:lineRule="exact"/>{}</w:pPr></w:p>"#,
+            r#"<w:p><w:pPr><w:pBdr><w:bottom w:val="{val}" w:sz="{sz}" w:space="0" w:color="{}"/></w:pBdr>{ind_xml}<w:spacing w:before="{before_dxa}" w:after="{after_dxa}" w:line="20" w:lineRule="exact"/>{}</w:pPr></w:p>"#,
             stroke.color,
             crate::xml_helpers::TINY_MARK_RPR_XML,
         );

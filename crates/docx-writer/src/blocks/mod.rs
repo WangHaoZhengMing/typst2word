@@ -170,12 +170,14 @@ impl<'a> DocxWriter<'a> {
                     self.render_bibliography(title.as_deref(), entries, nb.collapse_before, out);
                 }
                 BlockNode::HorizontalRule {
+                    id,
                     length_pt,
                     stroke,
                     align,
                     left_indent_pt,
                 } => {
                     self.render_horizontal_rule(
+                        *id,
                         *length_pt,
                         stroke,
                         *align,
@@ -330,12 +332,14 @@ impl<'a> DocxWriter<'a> {
                 self.render_bibliography(title.as_deref(), entries, false, out);
             }
             BlockNode::HorizontalRule {
+                id,
                 length_pt,
                 stroke,
                 align,
                 left_indent_pt,
             } => {
                 self.render_horizontal_rule(
+                    *id,
                     *length_pt,
                     stroke,
                     *align,

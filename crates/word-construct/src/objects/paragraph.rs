@@ -351,6 +351,77 @@ pub fn compute_line_spacing_dxa(content: &[InlineNode], line_spacing_pt: Option<
     compute_line_spacing_dxa_with_metrics(content, line_spacing_pt, &BTreeMap::new(), None)
 }
 
+/// Determine the `(font_family, font_size_pt)` that governs Microsoft Word's `<w:spacing w:lineRule="auto"/>`
+/// single-line box height for `content`.
+///
+/// In Word's `PTLS7` line-box model, a line's `1.0x` height is determined by the **tallest**
+/// normal-script font box present (e.g., `11pt` body CJK dominates over `8.8pt` inline `raw` code
+/// even when inline code has more ASCII characters).
+fn tallest_line_box_run<'a>(
+    content: &'a [InlineNode],
+    font_metrics: &BTreeMap<String, FontFaceMetricsIr>,
+) -> Option<(Option<&'a str>, f64)> {
+    fn visit<'a>(
+        nodes: &'a [InlineNode],
+        font_metrics: &BTreeMap<String, FontFaceMetricsIr>,
+        best: &mut Option<(f64, Option<&'a str>, f64)>,
+    ) {
+        for inl in nodes {
+            match inl {
+                InlineNode::Text(r) => {
+                    if r.script != ir::ScriptKindIr::Normal
+                        || r.text.is_empty()
+                        || r.text.chars().all(char::is_whitespace)
+                    {
+                        continue;
+                    }
+                    let sz = r.font_size_pt.unwrap_or(11.0).max(6.0);
+                    let fam = r.font_family.as_deref();
+                    let face = fam.and_then(|f| {
+                        font_metrics.get(f).or_else(|| {
+                            let fl = f.trim().to_ascii_lowercase();
+                            font_metrics
+                                .iter()
+                                .find_map(|(k, v)| k.trim().eq_ignore_ascii_case(&fl).then_some(v))
+                        })
+                    });
+                    let run_cjk = crate::objects::text_run::run_has_cjk(r);
+                    let eff_fam = if run_cjk && fam.is_none() {
+                        Some("PingFang SC")
+                    } else {
+                        fam
+                    };
+                    let single_h = crate::WordLineBox::from_paragraph_metrics(
+                        eff_fam,
+                        face,
+                        None,
+                        crate::objects::text_run::run_has_cjk_chars(r),
+                        false,
+                        false,
+                        sz,
+                        None,
+                    )
+                    .line_box_height_pt;
+                    if best.is_none_or(|(best_h, _, _)| single_h > best_h + 0.05) {
+                        *best = Some((single_h, eff_fam, sz));
+                    }
+                }
+                InlineNode::Field { content: inner, .. }
+                | InlineNode::Link { content: inner, .. }
+                | InlineNode::Ref { content: inner, .. }
+                | InlineNode::Citation { content: inner, .. } => {
+                    visit(inner, font_metrics, best);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let mut best = None;
+    visit(content, font_metrics, &mut best);
+    best.map(|(_, fam, sz)| (fam, sz))
+}
+
 /// Solve Word `w:line` (`1/240` line units) for `content` using document-level OpenType binary
 /// font metrics (`font_metrics`) and optional ground-truth Typst baseline step (`para_lines`).
 pub fn compute_line_spacing_dxa_with_metrics(
@@ -359,20 +430,26 @@ pub fn compute_line_spacing_dxa_with_metrics(
     font_metrics: &BTreeMap<String, FontFaceMetricsIr>,
     para_lines: Option<&ParagraphLineMetricsIr>,
 ) -> i64 {
-    let base_font_pt = primary_font_size_pt(content).max(6.0);
-    let first_font = dominant_inline_font_family(content, base_font_pt, font_metrics);
     let has_cjk_chars = content_has_cjk_chars(content);
     let is_cjk = content_has_cjk(content);
+    let (eff_font, base_font_pt) =
+        if let Some((tall_fam, tall_sz)) = tallest_line_box_run(content, font_metrics) {
+            (tall_fam, tall_sz)
+        } else {
+            let sz = primary_font_size_pt(content).max(6.0);
+            let first_font = dominant_inline_font_family(content, sz, font_metrics);
+            let eff = if is_cjk && first_font.is_none() {
+                Some("PingFang SC")
+            } else {
+                first_font
+            };
+            (eff, sz)
+        };
     let has_inline_eq = content
         .iter()
         .any(|inl| matches!(inl, InlineNode::EquationInline(_)));
     let only_inline_eq =
         has_inline_eq && !content.iter().any(|inl| matches!(inl, InlineNode::Text(_)));
-    let eff_font = if is_cjk && first_font.is_none() {
-        Some("PingFang SC")
-    } else {
-        first_font
-    };
     let font_face = eff_font.and_then(|f| {
         font_metrics.get(f).or_else(|| {
             let fl = f.trim().to_ascii_lowercase();

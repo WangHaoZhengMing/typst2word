@@ -60,6 +60,7 @@ impl<'a> ExtractorContext<'a> {
                     {
                         self.report.shapes_count += 1;
                         blocks.push(BlockNode::HorizontalRule {
+                            id: shape_ir.id,
                             length_pt: (x2_pt - x1_pt).abs(),
                             stroke: shape_ir.stroke.unwrap_or_default(),
                             align: inherited_align,
@@ -452,6 +453,7 @@ impl<'a> ExtractorContext<'a> {
             {
                 self.report.shapes_count += 1;
                 blocks.push(BlockNode::HorizontalRule {
+                    id: shape_ir.id,
                     length_pt: (x2_pt - x1_pt).abs(),
                     stroke: shape_ir.stroke.unwrap_or_default(),
                     align: inherited_align,

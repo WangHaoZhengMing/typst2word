@@ -259,6 +259,24 @@ impl<'a> ExtractorContext<'a> {
             return None;
         }
 
+        // When all body text blocks are horizontally centered, `line_starts`'s `min_x` reflects
+        // centering whitespace `(width - text_w) / 2`, NOT box padding. Never bake centering
+        // whitespace into `inset.left`/`inset.right` (which narrows `<wps:bodyPr>` and causes
+        // premature wrapping/clipping in Word).
+        let all_body_centered = !body_blocks.is_empty()
+            && body_blocks.iter().all(|b| match b {
+                BlockNode::Paragraph { style, .. } => style.align == HAlignIr::Center,
+                BlockNode::Heading { align, .. } | BlockNode::Title { align, .. } => {
+                    *align == HAlignIr::Center
+                }
+                _ => false,
+            });
+        let horiz_pad = if all_body_centered {
+            inferred_pad.min(2.0)
+        } else {
+            inferred_pad
+        };
+
         let inset = SidesPtIr {
             top: if has_box_sides || top_border.is_some() {
                 v_pad
@@ -270,8 +288,8 @@ impl<'a> ExtractorContext<'a> {
             } else {
                 0.0
             },
-            left: inferred_pad,
-            right: inferred_pad,
+            left: horiz_pad,
+            right: horiz_pad,
         };
 
         let corner_radius_pt = bg_shapes.iter().find_map(|(_, s, _)| {

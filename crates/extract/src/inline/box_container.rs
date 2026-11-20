@@ -553,15 +553,17 @@ impl<'a> ExtractorContext<'a> {
                 })
                 .unwrap_or(9.0);
             let space_w_pt = (sz_pt * 0.25).max(1.5);
-            if min_x.is_finite() && min_x > 1.5 {
-                let lead_count = (min_x / space_w_pt).round().max(1.0) as usize;
-                out.push(InlineNode::Text(ir::TextRunIr {
-                    text: "\u{00A0}".repeat(lead_count),
-                    font_family: Some("Times New Roman".to_string()),
-                    font_size_pt: Some(sz_pt),
-                    underline: Some(ul.clone()),
-                    ..Default::default()
-                }));
+            if min_x.is_finite() && min_x > 2.0 {
+                let lead_count = ((min_x - 1.0).max(0.0) / space_w_pt).floor() as usize;
+                if lead_count > 0 {
+                    out.push(InlineNode::Text(ir::TextRunIr {
+                        text: "\u{00A0}".repeat(lead_count),
+                        font_family: Some("Times New Roman".to_string()),
+                        font_size_pt: Some(sz_pt),
+                        underline: Some(ul.clone()),
+                        ..Default::default()
+                    }));
+                }
             }
             out.extend(box_inlines);
             let used_end_x = if min_x.is_finite() {
@@ -569,16 +571,18 @@ impl<'a> ExtractorContext<'a> {
             } else {
                 text_w.max(0.0)
             };
-            if props.width_pt - used_end_x > 1.5 {
+            if props.width_pt - used_end_x > 2.0 {
                 let trail_count =
-                    ((props.width_pt - used_end_x) / space_w_pt).round().max(1.0) as usize;
-                out.push(InlineNode::Text(ir::TextRunIr {
-                    text: "\u{00A0}".repeat(trail_count),
-                    font_family: Some("Times New Roman".to_string()),
-                    font_size_pt: Some(sz_pt),
-                    underline: Some(ul.clone()),
-                    ..Default::default()
-                }));
+                    ((props.width_pt - used_end_x - 1.5).max(0.0) / space_w_pt).floor() as usize;
+                if trail_count > 0 {
+                    out.push(InlineNode::Text(ir::TextRunIr {
+                        text: "\u{00A0}".repeat(trail_count),
+                        font_family: Some("Times New Roman".to_string()),
+                        font_size_pt: Some(sz_pt),
+                        underline: Some(ul.clone()),
+                        ..Default::default()
+                    }));
+                }
             }
         } else {
             self.extract_inlines_from_nodes(
