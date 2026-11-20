@@ -3,6 +3,12 @@
   import JSZip from 'jszip';
   import { TypstWordWorkerClient } from './lib/worker-client';
   import { STUDIO_PRESETS } from './lib/presets';
+  import {
+    isLocalFontApiSupported,
+    loadMatchingLocalFonts,
+    queryLocalFontCatalog,
+    type LocalFontData,
+  } from './lib/local-fonts';
   import XRayInspector from './lib/components/XRayInspector.svelte';
   import type {
     ConversionReport,
@@ -67,6 +73,12 @@
   let converting = $state(false);
   let errorMessage = $state<string | null>(null);
   let result = $state<ConversionResult | null>(null);
+
+  // Local Font Access API state (Chromium)
+  const localFontsSupported = isLocalFontApiSupported();
+  let localFontCatalog = $state<LocalFontData[]>([]);
+  let localFontState = $state<'idle' | 'requesting' | 'granted' | 'denied'>('idle');
+  const loadedLocalFaceKeys = new Set<string>();
 
   // OpenXML modal state
   let showXRay = $state(false);
@@ -295,6 +307,22 @@
     sysInputs = next;
   }
 
+  async function authorizeLocalFonts(reconvertAfter = false) {
+    if (!localFontsSupported || localFontState === 'requesting') return;
+    localFontState = 'requesting';
+    errorMessage = null;
+    try {
+      const catalog = await queryLocalFontCatalog();
+      localFontCatalog = catalog;
+      localFontState = catalog.length > 0 ? 'granted' : 'denied';
+      if (reconvertAfter && localFontState === 'granted' && canConvert) {
+        await handleConvert();
+      }
+    } catch {
+      localFontState = 'denied';
+    }
+  }
+
   async function handleConvert() {
     if (!client || !canConvert) return;
     converting = true;
@@ -304,6 +332,22 @@
 
     try {
       const ws = buildActiveWorkspace();
+      if (localFontCatalog.length > 0) {
+        const typTexts = ws.files
+          .filter((f) => f.path.toLowerCase().endsWith('.typ') && f.text !== null)
+          .map((f) => f.text as string);
+        engineMessage = '正在匹配本机字体…';
+        const matched = await loadMatchingLocalFonts(
+          localFontCatalog,
+          typTexts,
+          loadedLocalFaceKeys,
+        );
+        if (matched.entries.length > 0) {
+          engineMessage = `正在载入本机字体 (${matched.matchedFamilies.slice(0, 3).join(', ')})…`;
+          const fontRes = await client.addFonts(matched.entries);
+          fonts = fontRes.fonts;
+        }
+      }
       const out = await client.exportDocx(ws, embedMode);
       if (out.fonts.length > 0) fonts = out.fonts;
       if (out.packages.length > 0) packages = out.packages;
@@ -766,28 +810,53 @@
           </div>
         </div>
 
-        <button
-          type="button"
-          class="advanced-toggle"
-          class:open={showAdvanced}
-          onclick={() => (showAdvanced = !showAdvanced)}
-        >
-          <span>高级选项</span>
-          {#if advancedBadgeCount > 0}
-            <span class="mini-badge">{advancedBadgeCount}</span>
+        <div class="options-right">
+          {#if localFontsSupported}
+            <button
+              type="button"
+              class="local-font-btn"
+              class:granted={localFontState === 'granted'}
+              onclick={() => authorizeLocalFonts(false)}
+              title={localFontState === 'granted'
+                ? `已授权 ${localFontCatalog.length} 个本机字体，转换时自动按需加载`
+                : '授权读取本机已安装字体（转换时仅按需加载文档用到的字体）'}
+            >
+              {#if localFontState === 'granted'}
+                <span class="lf-dot"></span>
+                <span>本机字体 ({localFontCatalog.length})</span>
+              {:else if localFontState === 'requesting'}
+                <span>授权中…</span>
+              {:else if localFontState === 'denied'}
+                <span>本机字体未授权</span>
+              {:else}
+                <span>使用本机字体</span>
+              {/if}
+            </button>
           {/if}
-          <svg
-            width="14"
-            height="14"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            class="chevron"
+
+          <button
+            type="button"
+            class="advanced-toggle"
+            class:open={showAdvanced}
+            onclick={() => (showAdvanced = !showAdvanced)}
           >
-            <polyline points="6 9 12 15 18 9" />
-          </svg>
-        </button>
+            <span>高级选项</span>
+            {#if advancedBadgeCount > 0}
+              <span class="mini-badge">{advancedBadgeCount}</span>
+            {/if}
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              class="chevron"
+            >
+              <polyline points="6 9 12 15 18 9" />
+            </svg>
+          </button>
+        </div>
       </div>
 
       {#if showAdvanced}
@@ -798,6 +867,17 @@
               <span class="adv-meta">当前已载入 {fonts.length} 个字体族</span>
             </div>
             <div class="adv-controls">
+              {#if localFontsSupported}
+                <button
+                  type="button"
+                  class="secondary-btn"
+                  onclick={() => authorizeLocalFonts(false)}
+                >
+                  {localFontState === 'granted'
+                    ? `已授权本机字体 (${localFontCatalog.length})`
+                    : '授权读取本机字体'}
+                </button>
+              {/if}
               <button type="button" class="secondary-btn" onclick={() => fontInputEl?.click()}>
                 上传 .ttf / .otf / .ttc
               </button>
@@ -807,6 +887,11 @@
                 </button>
               {/if}
             </div>
+            {#if !localFontsSupported}
+              <div class="adv-meta">
+                当前浏览器不支持自动读取本机字体（Chrome / Edge 支持），可手动上传字体文件。
+              </div>
+            {/if}
           </div>
 
           <div class="adv-row">
@@ -943,13 +1028,24 @@
               <div class="note-item">{w}</div>
             {/each}
             {#if (result.report.font_fallback_warnings?.length ?? 0) > 0}
-              <button
-                type="button"
-                class="inline-action"
-                onclick={() => fontInputEl?.click()}
-              >
-                补充本地字体 (.ttf / .otf) 后重新转换 →
-              </button>
+              <div class="inline-actions-row">
+                {#if localFontsSupported && localFontState !== 'granted'}
+                  <button
+                    type="button"
+                    class="inline-action"
+                    onclick={() => authorizeLocalFonts(true)}
+                  >
+                    授权读取本机字体并重新转换 →
+                  </button>
+                {/if}
+                <button
+                  type="button"
+                  class="inline-action"
+                  onclick={() => fontInputEl?.click()}
+                >
+                  手动上传字体 (.ttf / .otf) →
+                </button>
+              </div>
             {/if}
           </div>
         {/if}
@@ -1465,6 +1561,51 @@
     font-size: 12.5px;
     color: var(--text-secondary);
     font-weight: 500;
+  }
+
+  .options-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .local-font-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text-secondary);
+    padding: 4px 9px;
+    border-radius: 7px;
+    font-size: 12px;
+    font-weight: 500;
+    transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+  }
+
+  .local-font-btn:hover {
+    border-color: var(--border-strong);
+    color: var(--text);
+  }
+
+  .local-font-btn.granted {
+    border-color: var(--success-border);
+    background: var(--success-bg);
+    color: var(--success);
+  }
+
+  .lf-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--success);
+  }
+
+  .inline-actions-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-top: 4px;
   }
 
   .advanced-toggle {
