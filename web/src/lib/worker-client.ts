@@ -1,6 +1,7 @@
 import type {
   ConversionReport,
   EnginePhase,
+  FontEmbedMode,
   FontFamilyDto,
   OpenXmlPackageDto,
   PreviewResponseDto,
@@ -131,40 +132,54 @@ export class TypstWordWorkerClient {
     return this.call('compile-only-preview');
   }
 
-  async exportDocx(workspace?: {
-    mainPath: string;
-    files: VirtualFile[];
-    inputs: Record<string, string>;
-  }): Promise<{
+  async exportDocx(
+    workspace?: {
+      mainPath: string;
+      files: VirtualFile[];
+      inputs: Record<string, string>;
+    },
+    embedMode: FontEmbedMode = 'subset',
+  ): Promise<{
     docxBytes: Uint8Array;
     report: ConversionReport;
     elapsedMs: number;
+    fonts: FontFamilyDto[];
+    packages: string[];
   }> {
     const res = await this.call<{
       docxBuffer: ArrayBuffer;
       report: ConversionReport;
       elapsedMs: number;
+      fonts?: FontFamilyDto[];
+      packages?: string[];
     }>('export-docx', {
       workspace: workspace
         ? TypstWordWorkerClient.toPlainWorkspace(workspace)
         : undefined,
+      embedMode,
     });
     return {
       docxBytes: new Uint8Array(res.docxBuffer),
       report: res.report,
       elapsedMs: res.elapsedMs,
+      fonts: res.fonts ?? [],
+      packages: res.packages ?? [],
     };
   }
 
-  inspectOpenXml(workspace?: {
-    mainPath: string;
-    files: VirtualFile[];
-    inputs: Record<string, string>;
-  }): Promise<OpenXmlPackageDto> {
+  inspectOpenXml(
+    workspace?: {
+      mainPath: string;
+      files: VirtualFile[];
+      inputs: Record<string, string>;
+    },
+    embedMode: FontEmbedMode = 'subset',
+  ): Promise<OpenXmlPackageDto> {
     return this.call('inspect-openxml', {
       workspace: workspace
         ? TypstWordWorkerClient.toPlainWorkspace(workspace)
         : undefined,
+      embedMode,
     });
   }
 

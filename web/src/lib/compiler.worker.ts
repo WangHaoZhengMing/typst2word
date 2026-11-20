@@ -348,6 +348,9 @@ self.onmessage = async (event: MessageEvent) => {
       }
 
       case 'export-docx': {
+        if (payload?.embedMode && typeof (workspace as any).set_embed_fonts_mode === 'function') {
+          (workspace as any).set_embed_fonts_mode(String(payload.embedMode));
+        }
         if (payload?.workspace) {
           const hasCjk = syncWorkspaceState(workspace, payload.workspace);
           if (hasCjk && !hasAnyCjkFont(workspace)) {
@@ -394,6 +397,8 @@ self.onmessage = async (event: MessageEvent) => {
                   docxBuffer: buffer,
                   report,
                   elapsedMs,
+                  fonts: listFonts(workspace),
+                  packages: listPackages(workspace),
                 },
               },
               [buffer],
@@ -407,6 +412,9 @@ self.onmessage = async (event: MessageEvent) => {
       }
 
       case 'inspect-openxml': {
+        if (payload?.embedMode && typeof (workspace as any).set_embed_fonts_mode === 'function') {
+          (workspace as any).set_embed_fonts_mode(String(payload.embedMode));
+        }
         if (payload?.workspace) {
           syncWorkspaceState(workspace, payload.workspace);
         }

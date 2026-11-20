@@ -21,8 +21,8 @@ use compiler::{
     CustomFontRegistry, TypstWorld, compile_world, unpack_package_tar_gz,
 };
 use docx_writer::write_docx_to_bytes;
-use extract::extract_document_ir;
-use ir::ConversionReport;
+use extract::extract_document_ir_with_embed_mode;
+use ir::{ConversionReport, FontEmbedMode};
 use parking_lot::RwLock;
 use serde::Serialize;
 use typst::foundations::Bytes;
@@ -156,6 +156,7 @@ pub struct WasmWorkspace {
     fonts: Arc<CustomFontRegistry>,
     inputs: BTreeMap<String, String>,
     today_ymd: Option<(i32, u8, u8)>,
+    embed_fonts_mode: FontEmbedMode,
 }
 
 impl Default for WasmWorkspace {
@@ -181,6 +182,15 @@ impl WasmWorkspace {
             fonts: Arc::new(CustomFontRegistry::with_embedded()),
             inputs: BTreeMap::new(),
             today_ymd,
+            embed_fonts_mode: FontEmbedMode::default(),
+        }
+    }
+
+    /// Configure font embedding mode for `.docx` export (`"subset"`, `"full"`, or `"none"`).
+    #[wasm_bindgen]
+    pub fn set_embed_fonts_mode(&mut self, mode: &str) {
+        if let Ok(parsed) = FontEmbedMode::parse_cli(mode) {
+            self.embed_fonts_mode = parsed;
         }
     }
 
@@ -398,7 +408,7 @@ impl WasmWorkspace {
             Vec::new()
         };
 
-        let ir = extract_document_ir(&compiled, &world);
+        let ir = extract_document_ir_with_embed_mode(&compiled, &world, self.embed_fonts_mode);
         let report_json = serde_json::to_string(&ir.report).unwrap_or_else(|_| "{}".to_string());
         let word_doc = build_word_document(&ir);
         comemo::evict(10);
@@ -431,7 +441,7 @@ impl WasmWorkspace {
             comemo::evict(10);
             JsError::new(&e)
         })?;
-        let ir = extract_document_ir(&compiled, &world);
+        let ir = extract_document_ir_with_embed_mode(&compiled, &world, self.embed_fonts_mode);
         comemo::evict(10);
         serde_json::to_string_pretty(&ir).map_err(|e| JsError::new(&e.to_string()))
     }
@@ -454,7 +464,7 @@ impl WasmWorkspace {
         let compiled = compile_world(&world).inspect_err(|_| {
             comemo::evict(10);
         })?;
-        let ir = extract_document_ir(&compiled, &world);
+        let ir = extract_document_ir_with_embed_mode(&compiled, &world, self.embed_fonts_mode);
         let word_doc = build_word_document(&ir);
         comemo::evict(10);
 
@@ -537,7 +547,7 @@ impl WasmWorkspace {
                     .iter()
                     .map(|page| typst_svg::svg(page, &svg_opts))
                     .collect();
-                let ir = extract_document_ir(&compiled, &world);
+                let ir = extract_document_ir_with_embed_mode(&compiled, &world, self.embed_fonts_mode);
                 let mut seen = BTreeSet::new();
                 let mut warnings = Vec::new();
                 for diag in &compiled.warnings {

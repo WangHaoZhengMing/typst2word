@@ -22,7 +22,10 @@ export interface ConversionReport {
   unsupported_elements: UnsupportedElement[];
   compiler_warnings: string[];
   font_fallback_warnings?: string[];
+  font_embed_notes?: string[];
 }
+
+export type FontEmbedMode = 'subset' | 'full' | 'none';
 
 export interface MissingPackageDto {
   spec: string;
