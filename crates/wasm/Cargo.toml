@@ -1,6 +1,6 @@
 [package]
 name = "typst2word-wasm"
-version = "0.2.4"
+version = "0.2.5"
 edition = "2024"
 description = "WebAssembly (wasm-bindgen) bindings for typst2word: in-memory virtual workspace, @preview package loader, live SVG preview, and .docx export"
 
