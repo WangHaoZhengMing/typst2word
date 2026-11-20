@@ -4,7 +4,9 @@
 
 Unlike pure syntax-tree converters (which cannot evaluate Typst scripting, `#show` rules, counters, or packages like CeTZ) or PDF-to-Word tools (which flatten everything into floating text boxes and raster images), `typst2word` embeds the full **Typst 0.15** compiler and lowers documents into **native, editable WordprocessingML, Office MathML (OMML), and DrawingML** constructs—calibrating Word's line-box metrics, paragraph spacing, and line-breaking behavior against Typst's laid-out reference geometry.
 
-> **Try Online (WebAssembly Studio)**: [**wanghaozhengming.github.io/typst2word**](https://wanghaozhengming.github.io/typst2word/) — edit multi-file Typst projects, auto-load `@preview` packages, inspect OpenXML/IR output, and export `.docx` directly in your browser.
+> **Try Online (WebAssembly Converter)**: [**wanghaozhengming.github.io/typst2word**](https://wanghaozhengming.github.io/typst2word/) — convert `.typ` files, `.zip` project archives, or pasted snippets directly to `.docx` locally in your browser (zero server upload, supports subset/full font embedding, Local Font Access API on Chromium, and OpenXML inspection).
+>
+> **Documentation**: See [`docs/`](./docs/README.md) for the complete technical reference ([CLI & Library](./docs/cli-and-library.md), [Architecture](./docs/architecture.md), [IR Specification](./docs/ir-specification.md), [Fonts & Embedding](./docs/fonts-and-embedding.md), [Layout Calibration](./docs/layout-calibration.md), [Feature Matrix](./docs/feature-matrix.md), [WebAssembly & Web](./docs/wasm-and-web.md), [Testing & Visual Parity](./docs/testing-and-visual-parity.md)).
 
 ---
 
@@ -39,17 +41,20 @@ cargo build --release
 ### 2. Command-Line Usage
 
 ```bash
-typst2word <input.typ> [output.docx] [--dump-ir <ir.json>] [--input key=value]
+typst2word <input.typ> [output.docx] [--embed-fonts=<subset|full|none>] [--no-embed-fonts] [--dump-ir <ir.json>] [--input key=value]
 ```
 
 **Examples:**
 
 ```bash
-# Convert input.typ -> input.docx in the same directory
+# Convert input.typ -> input.docx in the same directory (subset font embedding enabled by default)
 typst2word thesis.typ
 
-# Specify an explicit output path
-typst2word report.typ dist/report.docx
+# Specify an explicit output path with full font embedding for unrestricted editing in Word
+typst2word report.typ dist/report.docx --embed-fonts=full
+
+# Disable font embedding for minimal file size
+typst2word draft.typ draft.docx --no-embed-fonts
 
 # Pass key-value pairs into Typst's sys.inputs (repeatable)
 typst2word paper.typ paper.docx --input blind_review=true --input version=2.1
@@ -58,7 +63,7 @@ typst2word paper.typ paper.docx --input blind_review=true --input version=2.1
 typst2word report.typ report.docx --dump-ir debug_ir.json
 ```
 
-After conversion, `typst2word` prints a structural summary (pages, headings, paragraphs, lists, tables, OMML equations, DrawingML shapes, CeTZ canvases, footnotes, links, etc.). If a requested font is missing on the host system and triggers font fallback during compilation, `typst2word` **preserves the original font family name in the generated `.docx`** and emits an explicit `⚠️` warning in the terminal rather than silently rewriting user-specified font names.
+After conversion, `typst2word` prints a structural summary (pages, headings, paragraphs, lists, tables, OMML equations, DrawingML shapes, CeTZ canvases, footnotes, links, etc.), an embedded-font summary (`ℹ️`), and any font fallback warnings (`⚠️`). `typst2word` preserves original font family names verbatim and does not filter font embedding by `fsType` or OS vendor—users are responsible for complying with font license terms (e.g., Apple system fonts are licensed for macOS/Apple platforms only; see [Fonts & OOXML Embedding](./docs/fonts-and-embedding.md)).
 
 ---
 
