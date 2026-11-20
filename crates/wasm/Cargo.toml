@@ -1,27 +1,28 @@
 [package]
 name = "typst2word-wasm"
-version = "0.2.5"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+publish = false
 description = "WebAssembly (wasm-bindgen) bindings for typst2word: in-memory virtual workspace, @preview package loader, live SVG preview, and .docx export"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-comemo = "0.5.1"
-compiler = { path = "../compiler" }
-docx-writer = { path = "../docx-writer" }
-extract = { path = "../extract" }
-ir = { path = "../ir" }
-parking_lot = "0.12"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-typst = "0.15.1"
-typst-svg = "0.15.1"
-typst-syntax = "0.15.1"
+comemo.workspace = true
+compiler.workspace = true
+docx-writer.workspace = true
+extract.workspace = true
+ir.workspace = true
+parking_lot.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+typst.workspace = true
+typst-svg.workspace = true
+typst-syntax.workspace = true
 wasm-bindgen = "0.2"
-word-construct = { path = "../word-construct" }
-zip = { version = "9.4.2", default-features = false, features = ["deflate"] }
+word-construct.workspace = true
+zip.workspace = true
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 console_error_panic_hook = "0.1"
@@ -31,5 +32,4 @@ getrandom_04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] 
 js-sys = "0.3"
 
 [dev-dependencies]
-flate2 = { version = "1.1", default-features = false, features = ["rust_backend"] }
-zip = { version = "9.4.2", default-features = false, features = ["deflate"] }
+flate2.workspace = true

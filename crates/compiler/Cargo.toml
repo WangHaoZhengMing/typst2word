@@ -1,26 +1,26 @@
 [package]
 name = "compiler"
-version = "0.2.5"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 description = "Self-contained Typst 0.15 compiler, World implementation, and dual semantic/layout query engine"
 
 [dependencies]
-comemo = "0.5.1"
-ecow = "0.2.6"
-flate2 = { version = "1.1", default-features = false, features = ["rust_backend"] }
-parking_lot = "0.12"
-typst = "0.15.1"
-typst-eval = "0.15.1"
-typst-html = "0.15.1"
-typst-layout = "0.15.1"
-typst-library = "0.15.1"
-typst-realize = "0.15.1"
-typst-syntax = "0.15.1"
-typst-utils = "0.15.1"
+comemo.workspace = true
+ecow.workspace = true
+flate2.workspace = true
+parking_lot.workspace = true
+typst.workspace = true
+typst-eval.workspace = true
+typst-html.workspace = true
+typst-layout.workspace = true
+typst-library.workspace = true
+typst-realize.workspace = true
+typst-syntax.workspace = true
+typst-utils.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 dirs = "7.0.0"
-typst-kit = { version = "0.15.1", features = ["embedded-fonts", "scan-fonts", "system-packages", "system-downloader", "datetime"] }
+typst-kit = { workspace = true, default-features = true, features = ["embedded-fonts", "scan-fonts", "system-packages", "system-downloader", "datetime"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-typst-kit = { version = "0.15.1", default-features = false, features = ["embedded-fonts"] }
+typst-kit = { workspace = true, features = ["embedded-fonts"] }
