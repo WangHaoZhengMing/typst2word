@@ -136,3 +136,95 @@ pub fn convert_typst_str_to_docx_bytes_with_options(
     let bytes = write_docx_to_bytes_with_options(&word_doc, options)?;
     Ok((bytes, ir))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn centered_auto_table_preserves_alignment_bold_cells_and_single_line_width() {
+        let source = r#"
+#align(center)[
+  #table(
+    columns: (auto, auto),
+    align: (right + horizon, center + horizon),
+    stroke: none,
+    inset: 5pt,
+    [#text(weight: "bold")[姓名：]], [王浩然], table.hline(start: 1),
+    [#text(weight: "bold")[班级：]], [计算机学科学与技术2301], table.hline(start: 1),
+  )
+]
+"#;
+        let world = TypstWorld::from_str(source, None);
+        let compiled = compile_world(&world).expect("typst compile should succeed");
+        let ir = extract_document_ir_with_embed_mode(&compiled, &world, FontEmbedMode::None);
+
+        let table = ir
+            .blocks
+            .iter()
+            .find_map(|b| match b {
+                ir::BlockNode::Table(t) => Some(t),
+                _ => None,
+            })
+            .expect("expected extracted table");
+        assert_eq!(table.align, ir::HAlignIr::Center);
+        assert_eq!(table.cols.len(), 2);
+        assert!(
+            table.cols.iter().all(|c| c.is_auto()),
+            "columns: (auto, auto) must preserve TableColTrackIr::Auto, got {:?}",
+            table.cols
+        );
+        assert_eq!(table.rows.len(), 2);
+        assert_eq!(table.rows[0].cells[0].halign, ir::HAlignIr::Right);
+        assert_eq!(table.rows[0].cells[1].halign, ir::HAlignIr::Center);
+
+        let first_cell_bold = match &table.rows[0].cells[0].blocks[0] {
+            ir::BlockNode::Paragraph { content, .. } => content.iter().all(|inl| match inl {
+                ir::InlineNode::Text(r) => r.bold,
+                _ => true,
+            }),
+            _ => false,
+        };
+        assert!(
+            first_cell_bold,
+            "inline-fragment #text(weight: \"bold\")[...] inside table cell must preserve bold"
+        );
+
+        let word_doc = build_word_document(&ir);
+        let solved_table = word_doc
+            .blocks
+            .iter()
+            .find_map(|b| match b {
+                ir::BlockNode::Table(t) => Some(t),
+                _ => None,
+            })
+            .expect("expected solved table");
+        assert!(
+            solved_table.col_width_pt(0) >= 45.5,
+            "col 0 must be wide enough for bold 3-char CJK+colon in Word, got {}",
+            solved_table.col_width_pt(0)
+        );
+        assert_eq!(
+            word_construct::table::TableConstruct::solve(solved_table).layout_mode,
+            word_construct::table::TableLayoutMode::Autofit
+        );
+        let docx_bytes = docx_writer::write_docx_to_bytes(&word_doc)
+            .expect("docx serialization should succeed");
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(docx_bytes))
+            .expect("valid docx zip archive");
+        let mut doc_xml = String::new();
+        std::io::Read::read_to_string(
+            &mut zip.by_name("word/document.xml").expect("word/document.xml"),
+            &mut doc_xml,
+        )
+        .expect("read word/document.xml");
+        assert!(
+            doc_xml.contains(r#"<w:tblPr><w:jc w:val="center"/>"#),
+            "centered table must emit <w:jc w:val=\"center\"/>"
+        );
+        assert!(
+            doc_xml.contains(r#"<w:tblLayout w:type="autofit"/>"#),
+            "all-auto semantic table must emit <w:tblLayout w:type=\"autofit\"/>"
+        );
+    }
+}

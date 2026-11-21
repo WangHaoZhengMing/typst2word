@@ -63,7 +63,7 @@ pub use style::{
     BordersIr, DashPatternIr, HAlignIr, LineCapIr, LineJoinIr, LinebreaksIr, ParagraphStyleIr,
     SidesPtIr, StrokeIr, VAlignIr,
 };
-pub use table::{TableCellIr, TableIr, TableKindIr, TableRowIr};
+pub use table::{TableCellIr, TableColTrackIr, TableIr, TableKindIr, TableRowIr};
 pub use text::{
     FontFaceMetricsIr, ScriptKindIr, TextRunIr, dominant_inline_font_size_pt, is_cjk_char,
 };

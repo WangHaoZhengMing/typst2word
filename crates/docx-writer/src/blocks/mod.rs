@@ -25,9 +25,45 @@ use word_construct::model::BlockNode;
 use crate::writer::DocxWriter;
 use crate::xml_helpers::{open_tiny_sect_carrier_p, write_exact_spacer_p, write_tiny_break_p};
 
+/// Inject `<w:pageBreakBefore/>` into the first paragraph inside `out[start_len..]` in strict
+/// ECMA-376 `<w:pPr>` element order (immediately after `<w:pStyle .../>` when present), falling
+/// back to a tiny explicit page-break paragraph only if no `<w:p>` was emitted.
+fn inject_page_break_before(out: &mut String, start_len: usize) {
+    let slice = &out[start_len..];
+    if let Some(ppr_rel) = slice.find("<w:pPr>") {
+        let ppr_content_start = start_len + ppr_rel + "<w:pPr>".len();
+        let after_ppr = &out[ppr_content_start..];
+        let insert_at = if after_ppr.starts_with("<w:pStyle ")
+            && let Some(end_tag) = after_ppr.find("/>")
+        {
+            ppr_content_start + end_tag + 2
+        } else {
+            ppr_content_start
+        };
+        out.insert_str(insert_at, "<w:pageBreakBefore/>");
+    } else if let Some(p_rel) = slice.find("<w:p>") {
+        let insert_at = start_len + p_rel + "<w:p>".len();
+        out.insert_str(insert_at, "<w:pPr><w:pageBreakBefore/></w:pPr>");
+    } else {
+        let block_xml = out.split_off(start_len);
+        write_tiny_break_p("page", out);
+        out.push_str(&block_xml);
+    }
+}
+
 impl<'a> DocxWriter<'a> {
     pub(crate) fn render_blocks(&mut self, blocks: &[BlockNode], out: &mut String) {
+        let mut pending_page_break = false;
         for (idx, block) in blocks.iter().enumerate() {
+            if matches!(block, BlockNode::PageBreak) {
+                if pending_page_break {
+                    write_tiny_break_p("page", out);
+                } else {
+                    pending_page_break = true;
+                }
+                continue;
+            }
+            let start_len = out.len();
             let nb = BlockSequenceNeighborContext::for_index(blocks, idx, self.doc);
             if let BlockNode::Heading {
                 id,
@@ -53,9 +89,7 @@ impl<'a> DocxWriter<'a> {
                     nb.heading_compact_after,
                     out,
                 );
-                continue;
-            }
-            if let BlockNode::Paragraph {
+            } else if let BlockNode::Paragraph {
                 id,
                 content,
                 style,
@@ -63,9 +97,7 @@ impl<'a> DocxWriter<'a> {
             } = block
             {
                 self.render_paragraph(*id, content, style, bookmark.as_deref(), out);
-                continue;
-            }
-            if let BlockNode::Figure {
+            } else if let BlockNode::Figure {
                 body,
                 caption,
                 caption_pos,
@@ -86,104 +118,114 @@ impl<'a> DocxWriter<'a> {
                     nb.figure_keep_with_next,
                     out,
                 );
-                continue;
-            }
-            match block {
-                BlockNode::List {
-                    id,
-                    items,
-                    tight,
-                    level,
-                    spacing_pt,
-                    indent_pt,
-                    hanging_pt,
-                } => {
-                    self.render_list_collapsed_with_id(
-                        *id,
+            } else {
+                match block {
+                    BlockNode::List {
+                        id,
                         items,
-                        *tight,
-                        *level,
-                        *spacing_pt,
-                        *indent_pt,
-                        *hanging_pt,
-                        nb.collapse_before,
-                        out,
-                    );
-                }
-                BlockNode::Enum {
-                    id,
-                    items,
-                    tight,
-                    level,
-                    spacing_pt,
-                    indent_pt,
-                    hanging_pt,
-                } => {
-                    self.render_enum_collapsed_with_id(
-                        *id,
+                        tight,
+                        level,
+                        spacing_pt,
+                        indent_pt,
+                        hanging_pt,
+                    } => {
+                        self.render_list_collapsed_with_id(
+                            *id,
+                            items,
+                            *tight,
+                            *level,
+                            *spacing_pt,
+                            *indent_pt,
+                            *hanging_pt,
+                            nb.collapse_before,
+                            out,
+                        );
+                    }
+                    BlockNode::Enum {
+                        id,
                         items,
-                        *tight,
-                        *level,
-                        *spacing_pt,
-                        *indent_pt,
-                        *hanging_pt,
-                        nb.collapse_before,
-                        nb.enum_after_table_block,
-                        out,
-                    );
-                }
-                BlockNode::Quote {
-                    body, attribution, ..
-                } => {
-                    self.render_quote_collapsed(
-                        body,
-                        attribution.as_deref(),
-                        nb.collapse_before,
-                        out,
-                    );
-                }
-                BlockNode::EquationBlock(eq) => {
-                    self.render_equation_block_with_layout(
-                        eq,
-                        nb.equation_before_dxa,
-                        nb.equation_after_dxa,
-                        0,
-                        out,
-                    );
-                }
-                BlockNode::ShapeBlock(shape) => {
-                    self.render_shape_block_collapsed(shape, nb.collapse_before, out);
-                }
-                BlockNode::ImageBlock(img) => {
-                    self.render_image_block_collapsed(img, nb.collapse_before, out);
-                }
-                BlockNode::Outline { title, entries } => {
-                    self.render_outline(title.as_deref(), entries, nb.collapse_before, out);
-                }
-                BlockNode::Bibliography { title, entries } => {
-                    self.render_bibliography(title.as_deref(), entries, nb.collapse_before, out);
-                }
-                BlockNode::HorizontalRule {
-                    id,
-                    length_pt,
-                    stroke,
-                    align,
-                    left_indent_pt,
-                } => {
-                    self.render_horizontal_rule(
-                        *id,
-                        *length_pt,
+                        tight,
+                        level,
+                        spacing_pt,
+                        indent_pt,
+                        hanging_pt,
+                    } => {
+                        self.render_enum_collapsed_with_id(
+                            *id,
+                            items,
+                            *tight,
+                            *level,
+                            *spacing_pt,
+                            *indent_pt,
+                            *hanging_pt,
+                            nb.collapse_before,
+                            nb.enum_after_table_block,
+                            out,
+                        );
+                    }
+                    BlockNode::Quote {
+                        body, attribution, ..
+                    } => {
+                        self.render_quote_collapsed(
+                            body,
+                            attribution.as_deref(),
+                            nb.collapse_before,
+                            out,
+                        );
+                    }
+                    BlockNode::EquationBlock(eq) => {
+                        self.render_equation_block_with_layout(
+                            eq,
+                            nb.equation_before_dxa,
+                            nb.equation_after_dxa,
+                            0,
+                            out,
+                        );
+                    }
+                    BlockNode::ShapeBlock(shape) => {
+                        self.render_shape_block_collapsed(shape, nb.collapse_before, out);
+                    }
+                    BlockNode::ImageBlock(img) => {
+                        self.render_image_block_collapsed(img, nb.collapse_before, out);
+                    }
+                    BlockNode::Outline { title, entries } => {
+                        self.render_outline(title.as_deref(), entries, nb.collapse_before, out);
+                    }
+                    BlockNode::Bibliography { title, entries } => {
+                        self.render_bibliography(title.as_deref(), entries, nb.collapse_before, out);
+                    }
+                    BlockNode::HorizontalRule {
+                        id,
+                        length_pt,
                         stroke,
-                        *align,
-                        *left_indent_pt,
-                        nb.collapse_before,
-                        out,
-                    );
+                        align,
+                        left_indent_pt,
+                    } => {
+                        self.render_horizontal_rule(
+                            *id,
+                            *length_pt,
+                            stroke,
+                            *align,
+                            *left_indent_pt,
+                            nb.collapse_before,
+                            out,
+                        );
+                    }
+                    _ => self.render_block(block, out),
                 }
-                _ => self.render_block(block, out),
+                if let Some(sep_after) = nb.table_to_table_separator_after_dxa {
+                    write_exact_spacer_p(sep_after, 40, false, out);
+                }
             }
-            if let Some(sep_after) = nb.table_to_table_separator_after_dxa {
-                write_exact_spacer_p(sep_after, 40, false, out);
+
+            if pending_page_break && out.len() > start_len {
+                // Prefer `<w:pageBreakBefore/>` on the following block's first `<w:pPr>`
+                // over a standalone `<w:p><w:r><w:br w:type="page"/></w:r></w:p>`: when the
+                // preceding block ends right near the bottom of a page, a standalone break
+                // paragraph wraps onto the next page and then breaks a second time, creating
+                // a spurious blank page, whereas `<w:pageBreakBefore/>` is idempotent.
+                inject_page_break_before(out, start_len);
+                pending_page_break = false;
             }
         }
     }

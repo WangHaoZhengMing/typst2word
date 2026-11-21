@@ -498,7 +498,7 @@ impl<'a> ExtractorContext<'a> {
                 }
 
                 let n = extracted_slots.len();
-                let mut col_widths_pt = Vec::with_capacity(n);
+                let mut cols = Vec::with_capacity(n);
                 let mut cells = Vec::with_capacity(n);
 
                 for idx in 0..n {
@@ -514,7 +514,9 @@ impl<'a> ExtractorContext<'a> {
                         0.0
                     };
                     let col_w_pt = sw + 2.0 * s_pad + pad_left_pt + pad_right_pt;
-                    col_widths_pt.push(col_w_pt.max(8.0));
+                    cols.push(ir::TableColTrackIr::Fixed {
+                        width_pt: col_w_pt.max(8.0),
+                    });
                     cells.push(TableCellIr {
                         x: idx,
                         y: 0,
@@ -570,7 +572,7 @@ impl<'a> ExtractorContext<'a> {
                 blocks.push(BlockNode::Table(TableIr {
                     id: stack_id,
                     kind: TableKindIr::LayoutGrid,
-                    col_widths_pt,
+                    cols,
                     row_heights_pt: vec![0.0],
                     header_rows: 0,
                     footer_rows: 0,

@@ -167,7 +167,8 @@ impl<'a> ExtractorContext<'a> {
                     pos,
                     children,
                 } => {
-                    if Self::is_cetz_group_nodes(children)
+                    if (Self::is_cetz_group_nodes(children)
+                        || Self::is_vector_canvas_group(group, children))
                         && let Some(canvas) = self.extract_cetz_canvas(
                             children,
                             Some(group.frame.size()),

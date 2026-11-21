@@ -852,4 +852,224 @@ mod tests {
         // Paragraph -> HorizontalRule subtracts 0.18 + 0.0 = 1.8pt
         assert!((WordBlockVerticalBox::needed_gap_pt(box_para, box_hr, 10.0) - 8.2).abs() < 1e-6);
     }
+
+    #[test]
+    fn test_single_line_cjk_auto_table_column_expands_for_word_fullwidth_punctuation() {
+        let mut ir = ir::DocumentIr::default();
+        ir.page_setup.width_pt = 595.28;
+        ir.page_setup.margin_left_pt = 70.87;
+        ir.page_setup.margin_right_pt = 70.87;
+
+        let make_para = |id: u32, text: &str, bold: bool| ir::BlockNode::Paragraph {
+            id: ir::NodeId(id),
+            content: vec![ir::InlineNode::Text(ir::TextRunIr {
+                text: text.to_string(),
+                font_family: Some("Hei".to_string()),
+                font_size_pt: Some(11.0),
+                bold,
+                ..Default::default()
+            })],
+            style: ir::ParagraphStyleIr {
+                resolved_font_size_pt: Some(11.0),
+                ..Default::default()
+            },
+            bookmark: None,
+        };
+        let inset_5 = ir::SidesPtIr {
+            top: 5.0,
+            bottom: 5.0,
+            left: 5.0,
+            right: 5.0,
+        };
+        for (id, w_pt, lines) in [(1, 27.5, 1), (2, 122.2, 1), (3, 27.5, 1), (4, 390.0, 3)] {
+            ir.reference_layout.insert(
+                ir::NodeId(id),
+                ir::NodeReferenceLayout {
+                    fragments: vec![ir::LayoutFragmentIr {
+                        page_idx: 0,
+                        x_pt: 0.0,
+                        top_y_pt: 0.0,
+                        width_pt: w_pt,
+                        height_pt: 11.0 * lines as f64,
+                    }],
+                    paragraph_lines: Some(ir::ParagraphLineMetricsIr {
+                        line_count: lines,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            );
+        }
+
+        // Case 1: Narrow `columns: (auto, auto)` table where col 0 was 41pt in Typst
+        // (`姓名：` compressed to 27.5pt + 10pt inset + 3.5pt slack), which wraps in Word.
+        let narrow_tbl = ir::TableIr {
+            id: ir::NodeId(10),
+            kind: ir::TableKindIr::SemanticTable,
+            cols: vec![
+                ir::TableColTrackIr::Auto { width_pt: 41.0 },
+                ir::TableColTrackIr::Auto { width_pt: 138.2 },
+            ],
+            row_heights_pt: vec![21.75],
+            header_rows: 0,
+            footer_rows: 0,
+            rows: vec![ir::TableRowIr {
+                height_pt: None,
+                is_header: false,
+                is_footer: false,
+                cells: vec![
+                    ir::TableCellIr {
+                        x: 0,
+                        y: 0,
+                        colspan: 1,
+                        rowspan: 1,
+                        fill: None,
+                        borders: Default::default(),
+                        inset: inset_5,
+                        halign: ir::HAlignIr::Right,
+                        valign: ir::VAlignIr::Center,
+                        is_header_cell: false,
+                        blocks: vec![make_para(1, "姓名：", true)],
+                    },
+                    ir::TableCellIr {
+                        x: 1,
+                        y: 0,
+                        colspan: 1,
+                        rowspan: 1,
+                        fill: None,
+                        borders: Default::default(),
+                        inset: inset_5,
+                        halign: ir::HAlignIr::Center,
+                        valign: ir::VAlignIr::Center,
+                        is_header_cell: false,
+                        blocks: vec![make_para(2, "计算机学科学与技术2301", false)],
+                    },
+                ],
+            }],
+            align: ir::HAlignIr::Center,
+            left_indent_pt: 0.0,
+            summary: None,
+        };
+
+        // Case 2: Full-width `columns: (auto, 1fr)` table (total 453.54pt) borrows deficit
+        // from the flexible `Fraction` column without exceeding page content width.
+        let full_tbl = ir::TableIr {
+            id: ir::NodeId(11),
+            kind: ir::TableKindIr::SemanticTable,
+            cols: vec![
+                ir::TableColTrackIr::Auto { width_pt: 41.0 },
+                ir::TableColTrackIr::Fraction {
+                    fr: 1.0,
+                    width_pt: 412.54,
+                },
+            ],
+            row_heights_pt: vec![44.0],
+            header_rows: 0,
+            footer_rows: 0,
+            rows: vec![ir::TableRowIr {
+                height_pt: None,
+                is_header: false,
+                is_footer: false,
+                cells: vec![
+                    ir::TableCellIr {
+                        x: 0,
+                        y: 0,
+                        colspan: 1,
+                        rowspan: 1,
+                        fill: None,
+                        borders: Default::default(),
+                        inset: inset_5,
+                        halign: ir::HAlignIr::Right,
+                        valign: ir::VAlignIr::Center,
+                        is_header_cell: false,
+                        blocks: vec![make_para(3, "姓名：", true)],
+                    },
+                    ir::TableCellIr {
+                        x: 1,
+                        y: 0,
+                        colspan: 1,
+                        rowspan: 1,
+                        fill: None,
+                        borders: Default::default(),
+                        inset: inset_5,
+                        halign: ir::HAlignIr::Left,
+                        valign: ir::VAlignIr::Top,
+                        is_header_cell: false,
+                        blocks: vec![make_para(4, "这是一段会在多行内自动换行的长正文内容", false)],
+                    },
+                ],
+            }],
+            align: ir::HAlignIr::Left,
+            left_indent_pt: 0.0,
+            summary: None,
+        };
+
+        // Case 3: Explicit `Fixed` columns (`columns: (41pt, 140pt)`) preserve author-specified
+        // widths verbatim and solve to `TableLayoutMode::Fixed`.
+        let fixed_tbl = ir::TableIr {
+            id: ir::NodeId(12),
+            kind: ir::TableKindIr::SemanticTable,
+            cols: vec![
+                ir::TableColTrackIr::Fixed { width_pt: 41.0 },
+                ir::TableColTrackIr::Fixed { width_pt: 140.0 },
+            ],
+            row_heights_pt: vec![21.75],
+            header_rows: 0,
+            footer_rows: 0,
+            rows: narrow_tbl.rows.clone(),
+            align: ir::HAlignIr::Left,
+            left_indent_pt: 0.0,
+            summary: None,
+        };
+
+        ir.blocks = vec![
+            ir::BlockNode::Table(narrow_tbl),
+            ir::BlockNode::Table(full_tbl),
+            ir::BlockNode::Table(fixed_tbl),
+        ];
+        let doc = build_word_document(&ir);
+
+        let ir::BlockNode::Table(solved_narrow) = &doc.blocks[0] else {
+            panic!("expected narrow table");
+        };
+        assert!(solved_narrow.cols.iter().all(|c| c.is_auto()));
+        assert!(
+            solved_narrow.col_width_pt(0) >= 45.5,
+            "narrow auto col 0 should expand past Word bold CJK+colon width + tcMar, got {}",
+            solved_narrow.col_width_pt(0)
+        );
+        assert!((solved_narrow.col_width_pt(1) - 138.2).abs() < 1e-6);
+        assert_eq!(
+            crate::table::TableConstruct::solve(solved_narrow).layout_mode,
+            crate::table::TableLayoutMode::Autofit
+        );
+
+        let ir::BlockNode::Table(solved_full) = &doc.blocks[1] else {
+            panic!("expected full-width table");
+        };
+        assert!(
+            solved_full.col_width_pt(0) >= 45.5,
+            "full-width auto col 0 should borrow from Fraction sibling, got {}",
+            solved_full.col_width_pt(0)
+        );
+        let full_sum: f64 = solved_full.total_width_pt();
+        assert!(
+            (full_sum - 453.54).abs() < 0.05,
+            "full-width table must preserve total content width, got {full_sum}"
+        );
+        assert_eq!(
+            crate::table::TableConstruct::solve(solved_full).layout_mode,
+            crate::table::TableLayoutMode::Fixed
+        );
+
+        let ir::BlockNode::Table(solved_fixed) = &doc.blocks[2] else {
+            panic!("expected fixed table");
+        };
+        assert!((solved_fixed.col_width_pt(0) - 41.0).abs() < 1e-6);
+        assert!((solved_fixed.col_width_pt(1) - 140.0).abs() < 1e-6);
+        assert_eq!(
+            crate::table::TableConstruct::solve(solved_fixed).layout_mode,
+            crate::table::TableLayoutMode::Fixed
+        );
+    }
 }

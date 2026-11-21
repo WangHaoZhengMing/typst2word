@@ -338,7 +338,7 @@ fn try_normalize_slot_counter(
         return false;
     }
     if blocks_have_page_field(slot_blocks(&slice[0], is_header)) {
-        return false;
+        return normalize_static_denominator_after_page_field(slice, total_doc_pages, is_header);
     }
 
     let per_page_texts: Vec<Vec<String>> = slice
@@ -380,6 +380,10 @@ fn try_normalize_slot_counter(
         let mut cursor = 0usize;
         rewrite_blocks_counter_leaves(slot_blocks_mut(setup, is_header), &matched, &mut cursor);
     }
+
+    // Also normalize any static total-pages denominator split across 1..N subsequent `Text` runs
+    // immediately following the newly inserted `Field(Page)` (e.g. `"1"` + `" "` + `"/"` + `" "` + `"37"`).
+    let _ = normalize_static_denominator_after_page_field(slice, total_doc_pages, is_header);
 
     reconcile_counter_table_col_widths(slice, is_header);
 
@@ -514,6 +518,171 @@ fn parse_denominator_in_suffix(
         field_kind,
         suffix[digit_end..].to_string(),
     ))
+}
+
+fn blocks_have_total_pages_field(blocks: &[BlockNode]) -> bool {
+    blocks.iter().any(|b| match b {
+        BlockNode::Paragraph { content, .. }
+        | BlockNode::Heading { content, .. }
+        | BlockNode::Title { content, .. } => inlines_have_total_pages_field(content),
+        BlockNode::Table(t) => t
+            .rows
+            .iter()
+            .any(|r| r.cells.iter().any(|c| blocks_have_total_pages_field(&c.blocks))),
+        BlockNode::Container(c) => blocks_have_total_pages_field(&c.body),
+        BlockNode::ShapeBlock(s) => blocks_have_total_pages_field(&s.body),
+        BlockNode::Quote { body, .. }
+        | BlockNode::Figure { body, .. }
+        | BlockNode::Columns { body, .. } => blocks_have_total_pages_field(body),
+        _ => false,
+    })
+}
+
+fn inlines_have_total_pages_field(inlines: &[InlineNode]) -> bool {
+    inlines.iter().any(|i| match i {
+        InlineNode::Field { kind, .. } => {
+            matches!(kind, FieldKindIr::NumPages | FieldKindIr::SectionPages)
+        }
+        InlineNode::Link { content, .. }
+        | InlineNode::Ref { content, .. }
+        | InlineNode::Citation { content, .. } => inlines_have_total_pages_field(content),
+        _ => false,
+    })
+}
+
+/// Convert a static total-pages denominator immediately following an existing `FieldKindIr::Page`
+/// (e.g. Touying `dewdrop` emitting `Field(Page)` + `Text(" / 37")` via `counter(page).final()`)
+/// into a dynamic `NUMPAGES` / `SECTIONPAGES` field.
+fn normalize_static_denominator_after_page_field(
+    slice: &mut [PageSetupIr],
+    total_doc_pages: usize,
+    is_header: bool,
+) -> bool {
+    if blocks_have_total_pages_field(slot_blocks(&slice[0], is_header)) {
+        return false;
+    }
+    let run_len = slice.len();
+    let mut changed_any = false;
+    for setup in slice.iter_mut() {
+        if rewrite_blocks_denominator_after_page_field(
+            slot_blocks_mut(setup, is_header),
+            total_doc_pages,
+            run_len,
+        ) {
+            changed_any = true;
+        }
+    }
+    if changed_any {
+        reconcile_counter_table_col_widths(slice, is_header);
+    }
+    changed_any
+}
+
+fn rewrite_blocks_denominator_after_page_field(
+    blocks: &mut [BlockNode],
+    total_doc_pages: usize,
+    run_len: usize,
+) -> bool {
+    let mut changed = false;
+    for b in blocks {
+        match b {
+            BlockNode::Paragraph { content, .. }
+            | BlockNode::Heading { content, .. }
+            | BlockNode::Title { content, .. } => {
+                if rewrite_inlines_denominator_after_page_field(content, total_doc_pages, run_len) {
+                    changed = true;
+                }
+            }
+            BlockNode::Table(t) => {
+                for r in &mut t.rows {
+                    for c in &mut r.cells {
+                        if rewrite_blocks_denominator_after_page_field(
+                            &mut c.blocks,
+                            total_doc_pages,
+                            run_len,
+                        ) {
+                            changed = true;
+                        }
+                    }
+                }
+            }
+            BlockNode::Container(c) => {
+                if rewrite_blocks_denominator_after_page_field(
+                    &mut c.body,
+                    total_doc_pages,
+                    run_len,
+                ) {
+                    changed = true;
+                }
+            }
+            BlockNode::ShapeBlock(s) => {
+                if rewrite_blocks_denominator_after_page_field(
+                    &mut s.body,
+                    total_doc_pages,
+                    run_len,
+                ) {
+                    changed = true;
+                }
+            }
+            BlockNode::Quote { body, .. }
+            | BlockNode::Figure { body, .. }
+            | BlockNode::Columns { body, .. } => {
+                if rewrite_blocks_denominator_after_page_field(body, total_doc_pages, run_len) {
+                    changed = true;
+                }
+            }
+            _ => {}
+        }
+    }
+    changed
+}
+
+fn rewrite_inlines_denominator_after_page_field(
+    inlines: &mut Vec<InlineNode>,
+    total_doc_pages: usize,
+    run_len: usize,
+) -> bool {
+    let mut changed = false;
+    let orig = std::mem::take(inlines);
+    let mut out = Vec::with_capacity(orig.len() + 2);
+    let mut i = 0;
+    while i < orig.len() {
+        let is_page_field = matches!(
+            &orig[i],
+            InlineNode::Field {
+                kind: FieldKindIr::Page,
+                ..
+            }
+        );
+        out.push(orig[i].clone());
+        if is_page_field {
+            // Collect all consecutive `InlineNode::Text` runs immediately after `Field(Page)`
+            // because Typst/Touying may split `" / 37"` into multiple runs (`" "` + `"/"` + `" "` + `"37"`)
+            // prior to `ir::normalize` run coalescing.
+            let mut j = i + 1;
+            let mut combined = String::new();
+            let mut template_run: Option<&TextRunIr> = None;
+            while let Some(InlineNode::Text(r)) = orig.get(j) {
+                if template_run.is_none() {
+                    template_run = Some(r);
+                }
+                combined.push_str(&r.text);
+                j += 1;
+            }
+            if let Some(tpl) = template_run
+                && let Some((prefix, denom, field_kind, suffix)) =
+                    parse_denominator_in_suffix(&combined, total_doc_pages, run_len)
+            {
+                push_denominator_nodes(tpl, &prefix, denom, field_kind, &suffix, &mut out);
+                changed = true;
+                i = j;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    *inlines = out;
+    changed
 }
 
 fn blocks_have_page_field(blocks: &[BlockNode]) -> bool {
@@ -684,26 +853,7 @@ fn push_dynamic_counter_nodes(
         content: vec![InlineNode::Text(page_run)],
     });
     if let Some((mid_sep, denom, field_kind, tail_suffix)) = &pat.denominator {
-        if !mid_sep.is_empty() {
-            let mut r = template.clone();
-            r.text = mid_sep.clone();
-            out.push(InlineNode::Text(r));
-        }
-        let mut total_run = template.clone();
-        total_run.text = denom.to_string();
-        out.push(InlineNode::Field {
-            kind: match field_kind {
-                DenominatorFieldKind::NumPages => FieldKindIr::NumPages,
-                DenominatorFieldKind::SectionPages => FieldKindIr::SectionPages,
-            },
-            format: Some("Arabic".into()),
-            content: vec![InlineNode::Text(total_run)],
-        });
-        if !tail_suffix.is_empty() {
-            let mut r = template.clone();
-            r.text = tail_suffix.clone();
-            out.push(InlineNode::Text(r));
-        }
+        push_denominator_nodes(template, mid_sep, *denom, *field_kind, tail_suffix, out);
     } else if !pat.suffix.is_empty() {
         let mut r = template.clone();
         r.text = pat.suffix.clone();
@@ -711,8 +861,38 @@ fn push_dynamic_counter_nodes(
     }
 }
 
+fn push_denominator_nodes(
+    template: &TextRunIr,
+    prefix: &str,
+    denom: u64,
+    field_kind: DenominatorFieldKind,
+    suffix: &str,
+    out: &mut Vec<InlineNode>,
+) {
+    if !prefix.is_empty() {
+        let mut r = template.clone();
+        r.text = prefix.to_string();
+        out.push(InlineNode::Text(r));
+    }
+    let mut total_run = template.clone();
+    total_run.text = denom.to_string();
+    out.push(InlineNode::Field {
+        kind: match field_kind {
+            DenominatorFieldKind::NumPages => FieldKindIr::NumPages,
+            DenominatorFieldKind::SectionPages => FieldKindIr::SectionPages,
+        },
+        format: Some("Arabic".into()),
+        content: vec![InlineNode::Text(total_run)],
+    });
+    if !suffix.is_empty() {
+        let mut r = template.clone();
+        r.text = suffix.to_string();
+        out.push(InlineNode::Text(r));
+    }
+}
+
 /// When a header/footer layout grid auto-sizes the column containing a dynamic page counter
-/// (e.g. `"1 / 41"` -> 41.5pt vs `"20 / 41"` -> 59.9pt), unify `col_widths_pt` across the run
+/// (e.g. `"1 / 41"` -> 41.5pt vs `"20 / 41"` -> 59.9pt), unify `cols` across the run
 /// using the widest counter column so `furniture_eq` matches and multi-digit page numbers never wrap.
 fn reconcile_counter_table_col_widths(slice: &mut [PageSetupIr], is_header: bool) {
     let block_count = slot_blocks(&slice[0], is_header).len();
@@ -727,11 +907,11 @@ fn reconcile_counter_table_col_widths(slice: &mut [PageSetupIr], is_header: bool
         let BlockNode::Table(ref t0) = slot_blocks(&slice[0], is_header)[bi] else {
             continue;
         };
-        let ncols = t0.col_widths_pt.len();
+        let ncols = t0.cols.len();
         if ncols == 0 {
             continue;
         }
-        let total_w0: f64 = t0.col_widths_pt.iter().sum();
+        let total_w0: f64 = t0.total_width_pt();
 
         let counter_cols: Vec<usize> = (0..ncols)
             .filter(|&col_idx| {
@@ -750,31 +930,31 @@ fn reconcile_counter_table_col_widths(slice: &mut [PageSetupIr], is_header: bool
             matches!(
                 &slot_blocks(s, is_header)[bi],
                 BlockNode::Table(t)
-                    if t.col_widths_pt.len() == ncols
-                        && (t.col_widths_pt.iter().sum::<f64>() - total_w0).abs() <= 2.0
+                    if t.cols.len() == ncols
+                        && (t.total_width_pt() - total_w0).abs() <= 2.0
             )
         });
         if !all_compatible {
             continue;
         }
 
-        let best_widths = slice
+        let best_cols = slice
             .iter()
             .filter_map(|s| match &slot_blocks(s, is_header)[bi] {
-                BlockNode::Table(t) => Some(&t.col_widths_pt),
+                BlockNode::Table(t) => Some(&t.cols),
                 _ => None,
             })
             .max_by(|a, b| {
-                let wa: f64 = counter_cols.iter().map(|&c| a[c]).sum();
-                let wb: f64 = counter_cols.iter().map(|&c| b[c]).sum();
+                let wa: f64 = counter_cols.iter().map(|&c| a[c].width_pt()).sum();
+                let wb: f64 = counter_cols.iter().map(|&c| b[c].width_pt()).sum();
                 wa.total_cmp(&wb)
             })
             .cloned();
 
-        if let Some(widths) = best_widths {
+        if let Some(cols) = best_cols {
             for s in slice.iter_mut() {
                 if let BlockNode::Table(t) = &mut slot_blocks_mut(s, is_header)[bi] {
-                    t.col_widths_pt = widths.clone();
+                    t.cols = cols.clone();
                 }
             }
         }

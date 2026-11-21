@@ -120,27 +120,79 @@ impl<'a> ExtractorContext<'a> {
                     pos,
                     children,
                 } => {
+                    let sx = group.transform.sx.get();
+                    let kx = group.transform.kx.get();
+                    let ky = group.transform.ky.get();
+                    let sy = group.transform.sy.get();
+                    let has_linear_transform = (sx - 1.0).abs() > 1e-4
+                        || (sy - 1.0).abs() > 1e-4
+                        || kx.abs() > 1e-4
+                        || ky.abs() > 1e-4;
                     let abs_pos =
                         offset + *pos + Point::new(group.transform.tx, group.transform.ty);
-                    if !Self::contains_any_drawable_shapes_recursive(children) {
+
+                    // Do not collapse a container group holding multiple separately-positioned
+                    // label sub-groups (e.g. y-axis ticks `0.0..0.4`), a rotated/transformed
+                    // descendant group (e.g. `-90deg` y-axis label `f(x)`), or an alignment wrapper
+                    // whose inner content sits far offset inside a much wider/taller box (e.g.
+                    // right-aligned x-axis label `x` inside a 283pt track).
+                    let positioned_subgroups = Self::count_positioned_text_subgroups(children);
+                    let has_transformed_descendant =
+                        !has_linear_transform && Self::has_transformed_descendant_group(children);
+                    let is_alignment_wrapper = if !has_linear_transform && positioned_subgroups >= 1 {
+                        let gsize = group.frame.size();
+                        let (bx, by, bw, bh) = Self::estimate_nodes_bbox(children);
+                        (bw > 0.5 && gsize.x.to_pt() > bw * 1.5 && bx > 4.0)
+                            || (bh > 0.5 && gsize.y.to_pt() > bh * 1.5 && by > 4.0)
+                    } else {
+                        false
+                    };
+
+                    if !Self::contains_any_drawable_shapes_recursive(children)
+                        && positioned_subgroups <= 1
+                        && !has_transformed_descendant
+                        && !is_alignment_wrapper
+                    {
                         let inlines = self.extract_inlines_flat(children);
                         let has_horiz_jump = inlines
                             .iter()
                             .any(|n| matches!(n, InlineNode::HorizontalSpace { .. }));
                         if !inlines.is_empty() && !has_horiz_jump {
                             let gsize = group.frame.size();
-                            let cap_top_adj =
-                                Self::estimate_label_cap_top_offset_pt(children, Point::zero())
-                                    .unwrap_or(0.0)
-                                    .min(0.0);
-                            labels.push(CetzLabelDrawableIr {
-                                x_pt: abs_pos.x.to_pt(),
-                                y_pt: (abs_pos.y.to_pt() + cap_top_adj).max(0.0),
-                                width_pt: gsize.x.to_pt().max(18.0),
-                                height_pt: (gsize.y.to_pt() - cap_top_adj).max(14.0),
-                                rotation_deg,
-                                content: inlines,
-                            });
+                            if has_linear_transform {
+                                let w = gsize.x.to_pt().max(18.0);
+                                let h = gsize.y.to_pt().max(14.0);
+                                let cx_local = gsize.x.to_pt() * 0.5;
+                                let cy_local = gsize.y.to_pt() * 0.5;
+                                let cx_abs = abs_pos.x.to_pt() + sx * cx_local + kx * cy_local;
+                                let cy_abs = abs_pos.y.to_pt() + ky * cx_local + sy * cy_local;
+                                let eff_rot = if rotation_deg.abs() > 1e-3 {
+                                    rotation_deg
+                                } else {
+                                    ky.atan2(sx).to_degrees()
+                                };
+                                labels.push(CetzLabelDrawableIr {
+                                    x_pt: cx_abs - w * 0.5,
+                                    y_pt: cy_abs - h * 0.5,
+                                    width_pt: w,
+                                    height_pt: h,
+                                    rotation_deg: eff_rot,
+                                    content: inlines,
+                                });
+                            } else {
+                                let cap_top_adj =
+                                    Self::estimate_label_cap_top_offset_pt(children, Point::zero())
+                                        .unwrap_or(0.0)
+                                        .min(0.0);
+                                labels.push(CetzLabelDrawableIr {
+                                    x_pt: abs_pos.x.to_pt(),
+                                    y_pt: abs_pos.y.to_pt() + cap_top_adj,
+                                    width_pt: gsize.x.to_pt().max(18.0),
+                                    height_pt: (gsize.y.to_pt() - cap_top_adj).max(14.0),
+                                    rotation_deg,
+                                    content: inlines,
+                                });
+                            }
                             continue;
                         }
                     } else if !Self::contains_cetz_shapes_recursive(children) {
@@ -213,6 +265,53 @@ impl<'a> ExtractorContext<'a> {
                 _ => {}
             }
         }
+    }
+
+    fn has_transformed_descendant_group(nodes: &[TreeNode]) -> bool {
+        nodes.iter().any(|n| match n {
+            TreeNode::Group {
+                group, children, ..
+            } => {
+                let t = group.transform;
+                let linear = (t.sx.get() - 1.0).abs() > 1e-4
+                    || (t.sy.get() - 1.0).abs() > 1e-4
+                    || t.kx.get().abs() > 1e-4
+                    || t.ky.get().abs() > 1e-4;
+                linear || Self::has_transformed_descendant_group(children)
+            }
+            TreeNode::Element { elem, children, .. } => {
+                elem.is::<RotateElem>() || Self::has_transformed_descendant_group(children)
+            }
+            _ => false,
+        })
+    }
+
+    fn count_positioned_text_subgroups(nodes: &[TreeNode]) -> usize {
+        let mut count = 0usize;
+        for node in nodes {
+            match node {
+                TreeNode::Group { children, .. } => {
+                    if Self::nodes_have_any_text(children) {
+                        count += 1;
+                    }
+                }
+                TreeNode::Element { children, .. } => {
+                    count += Self::count_positioned_text_subgroups(children);
+                }
+                _ => {}
+            }
+        }
+        count
+    }
+
+    fn nodes_have_any_text(nodes: &[TreeNode]) -> bool {
+        nodes.iter().any(|n| match n {
+            TreeNode::Text { text, .. } => !text.text.trim().is_empty(),
+            TreeNode::Group { children, .. } | TreeNode::Element { children, .. } => {
+                Self::nodes_have_any_text(children)
+            }
+            _ => false,
+        })
     }
 
     fn estimate_label_cap_top_offset_pt(nodes: &[TreeNode], offset: Point) -> Option<f64> {

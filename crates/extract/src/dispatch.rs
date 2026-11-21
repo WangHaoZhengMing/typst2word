@@ -118,8 +118,8 @@ impl<'a> ExtractorContext<'a> {
         list_level: usize,
         inherited_align: HAlignIr,
     ) {
-        // 1. Standalone CeTZ canvas group.
-        if Self::is_cetz_group_nodes(children)
+        // 1. Standalone 2D vector canvas group (CeTZ, Lilaq, Fletcher, custom vector diagrams).
+        if (Self::is_cetz_group_nodes(children) || Self::is_vector_canvas_group(group, children))
             && let Some(canvas) =
                 self.extract_cetz_canvas(children, Some(group.frame.size()), inherited_align)
         {
@@ -496,6 +496,31 @@ impl<'a> ExtractorContext<'a> {
             blocks.push(BlockNode::ColumnBreak);
             return;
         }
+        if let Some(v) = elem.to_packed::<typst::layout::VElem>() {
+            let chain = self.scoped_style_chain(Some(loc));
+            if !v.weak.get(chain)
+                && let typst::layout::Spacing::Rel(rel) = v.amount
+            {
+                let base_em =
+                    Self::resolve_length_pt(chain.get(typst::text::TextElem::size).0, 11.0);
+                let page_content_h = self.current_page_content_height_pt();
+                let h_pt =
+                    Self::resolve_length_pt(rel.abs, base_em) + rel.rel.get() * page_content_h;
+                let (_, local_y, _) =
+                    crate::frame_tree::decode_page_and_local_y(pos.y.to_pt(), pos.x.to_pt());
+                let page_bottom_y = self.content_bottom_pt.max(72.0);
+                if self.scope.active_region_height_pt.is_none()
+                    && self.scope.active_group_bounds_pt.is_none()
+                    && (rel.rel.get() >= 0.95
+                        || (h_pt >= 72.0 && local_y + h_pt >= page_bottom_y - 2.0))
+                    && !blocks.is_empty()
+                    && !matches!(blocks.last(), Some(BlockNode::PageBreak))
+                {
+                    blocks.push(BlockNode::PageBreak);
+                }
+            }
+            return;
+        }
 
         // 17. Layout Containers (`AlignElem`, `PadElem`, `ColumnsElem`).
         if let Some(al) = elem.to_packed::<AlignElem>() {
@@ -589,6 +614,14 @@ impl<'a> ExtractorContext<'a> {
                 inset_pt,
             )
         });
+        if blk_props.is_some()
+            && Self::is_vector_canvas_nodes(children)
+            && let Some(canvas) = self.extract_cetz_canvas(children, None, inherited_align)
+        {
+            self.report.cetz_canvases_count += 1;
+            blocks.push(BlockNode::CetzCanvas(canvas));
+            return;
+        }
         if let Some((breakable, sticky, _, _, _)) = blk_props
             && let Some(styled_box) = self.try_extract_styled_container_nodes(
                 None,

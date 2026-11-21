@@ -50,6 +50,17 @@ pub enum TableWidthConstruct {
     FullWidthPct5000,
 }
 
+/// Exhaustive Word `<w:tblLayout>` mode derived from [`TableKindIr`] and [`ir::TableColTrackIr`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TableLayoutMode {
+    /// `<w:tblLayout w:type="fixed"/>` — grids, styled containers, or tables with any explicit
+    /// `Fixed`/`Fraction` column tracks.
+    Fixed,
+    /// `<w:tblLayout w:type="autofit"/>` — semantic tables whose columns are all `Auto`, allowing
+    /// Word graceful overflow protection on top of our solved `<w:tcW>` widths.
+    Autofit,
+}
+
 /// Exhaustive row split policy for `<w:trPr>`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RowSplitPolicy {
@@ -78,6 +89,7 @@ pub struct TableConstruct<'a> {
     pub align: HAlignIr,
     pub indent_dxa: Option<i64>,
     pub width: TableWidthConstruct,
+    pub layout_mode: TableLayoutMode,
     pub grid_cols_dxa: Vec<i64>,
     pub rows: Vec<TableRowConstruct<'a>>,
 }
@@ -92,21 +104,32 @@ impl<'a> TableConstruct<'a> {
         let indent_dxa = (table.left_indent_pt.abs() > 0.5 && table.align == HAlignIr::Left)
             .then(|| pt_to_dxa(table.left_indent_pt));
 
-        let total_w_dxa: i64 = table.col_widths_pt.iter().map(|&w| pt_to_dxa(w)).sum();
+        let total_w_dxa: i64 = table.cols.iter().map(|c| pt_to_dxa(c.width_pt())).sum();
         let width = if total_w_dxa > 0 {
             TableWidthConstruct::ExactDxa(total_w_dxa)
         } else {
             TableWidthConstruct::FullWidthPct5000
         };
 
+        let layout_mode = match kind {
+            TableKindIr::SemanticTable
+                if !table.cols.is_empty() && table.cols.iter().all(|c| c.is_auto()) =>
+            {
+                TableLayoutMode::Autofit
+            }
+            TableKindIr::SemanticTable
+            | TableKindIr::LayoutGrid
+            | TableKindIr::StyledContainer => TableLayoutMode::Fixed,
+        };
+
         let grid_cols_dxa = table
-            .col_widths_pt
+            .cols
             .iter()
-            .map(|&col_w| pt_to_dxa(col_w).max(144))
+            .map(|c| pt_to_dxa(c.width_pt()).max(144))
             .collect();
 
         let num_cols = table
-            .col_widths_pt
+            .cols
             .len()
             .max(
                 table
@@ -184,6 +207,7 @@ impl<'a> TableConstruct<'a> {
             align: table.align,
             indent_dxa,
             width,
+            layout_mode,
             grid_cols_dxa,
             rows,
         }
@@ -200,7 +224,13 @@ impl<'a> TableConstruct<'a> {
         while x < num_cols {
             if let Some(cell) = row.cells.iter().find(|c| c.x == x) {
                 let span_cols = cell.colspan.max(1);
-                let cell_w_pt: f64 = table.col_widths_pt.iter().skip(x).take(span_cols).sum();
+                let cell_w_pt: f64 = table
+                    .cols
+                    .iter()
+                    .skip(x)
+                    .take(span_cols)
+                    .map(|c| c.width_pt())
+                    .sum();
                 let width_dxa = pt_to_dxa(cell_w_pt).max(144);
                 let vmerge = (cell.rowspan > 1).then_some(VMergeState::Restart);
                 slots.push(TableCellSlotConstruct::Primary {
@@ -225,7 +255,13 @@ impl<'a> TableConstruct<'a> {
 
             if let Some(parent_cell) = found_vmerge_parent {
                 let span_cols = parent_cell.colspan.max(1);
-                let cell_w_pt: f64 = table.col_widths_pt.iter().skip(x).take(span_cols).sum();
+                let cell_w_pt: f64 = table
+                    .cols
+                    .iter()
+                    .skip(x)
+                    .take(span_cols)
+                    .map(|c| c.width_pt())
+                    .sum();
                 let width_dxa = pt_to_dxa(cell_w_pt).max(144);
                 slots.push(TableCellSlotConstruct::VMergeContinue {
                     x,
@@ -327,30 +363,34 @@ pub fn solve_list_item_child_table(
     let target_left_pt = indent_left_dxa as f64 / 20.0;
     if adjusted.kind != TableKindIr::SemanticTable && adjusted.align == HAlignIr::Center {
         let avail_w_pt = ((content_width_dxa as f64 / 20.0) - target_left_pt).max(100.0);
-        let total_col_w: f64 = adjusted.col_widths_pt.iter().sum();
+        let total_col_w: f64 = adjusted.total_width_pt();
         adjusted.align = HAlignIr::Left;
         adjusted.left_indent_pt = target_left_pt + ((avail_w_pt - total_col_w).max(0.0) * 0.5);
     } else if adjusted.kind != TableKindIr::SemanticTable && adjusted.align == HAlignIr::Left {
         adjusted.left_indent_pt = target_left_pt;
         let avail_w_pt = ((content_width_dxa as f64 / 20.0) - target_left_pt).max(100.0);
-        let total_col_w: f64 = adjusted.col_widths_pt.iter().sum();
+        let total_col_w: f64 = adjusted.total_width_pt();
         if total_col_w > avail_w_pt + 6.0 {
             let excess = total_col_w - avail_w_pt;
-            let ncols = adjusted.col_widths_pt.len();
+            let ncols = adjusted.cols.len();
             if ncols > 1 {
-                let head_sum: f64 = adjusted.col_widths_pt[..ncols - 1].iter().sum();
+                let head_sum: f64 = adjusted.cols[..ncols - 1]
+                    .iter()
+                    .map(|c| c.width_pt())
+                    .sum();
                 if head_sum > excess + 24.0 * (ncols - 1) as f64 {
-                    for w in &mut adjusted.col_widths_pt[..ncols - 1] {
-                        *w -= excess * (*w / head_sum);
+                    for col in &mut adjusted.cols[..ncols - 1] {
+                        let w = col.width_pt();
+                        *col.width_pt_mut() = w - excess * (w / head_sum);
                     }
                 } else {
                     let scale = avail_w_pt / total_col_w;
-                    for w in &mut adjusted.col_widths_pt {
-                        *w *= scale;
+                    for col in &mut adjusted.cols {
+                        *col.width_pt_mut() *= scale;
                     }
                 }
-            } else {
-                adjusted.col_widths_pt[0] = avail_w_pt;
+            } else if let Some(first) = adjusted.cols.first_mut() {
+                *first.width_pt_mut() = avail_w_pt;
             }
         }
     }

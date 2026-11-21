@@ -10,7 +10,8 @@ use typst::engine::Engine;
 use typst::foundations::{Content, Smart, StyleChain};
 use typst::introspection::{Location, SplitLocator, Tag, TagElem};
 use typst::layout::{
-    BlockElem, BoxElem, ColbreakElem, HElem, PadElem, PagebreakElem, Sizing, StackElem,
+    BlockElem, BoxElem, ColbreakElem, HElem, PadElem, PagebreakElem, Sizing, Spacing, StackElem,
+    VElem,
 };
 use typst::routines::{Arenas, Pair};
 use typst::text::LinebreakElem;
@@ -203,7 +204,15 @@ fn should_wrap_layout_item(item: &Content, chain: StyleChain<'_>) -> bool {
             || (item.is::<BoxElem>() && item.location().is_none())
             || item
                 .to_packed::<HElem>()
-                .is_some_and(|h| !h.weak.get(chain) && !h.amount.is_zero()))
+                .is_some_and(|h| !h.weak.get(chain) && !h.amount.is_zero())
+            || item.to_packed::<VElem>().is_some_and(|v| {
+                !v.weak.get(chain)
+                    && matches!(
+                        v.amount,
+                        Spacing::Rel(rel)
+                            if rel.rel.get() >= 0.5 || rel.abs.abs.to_pt() >= 72.0
+                    )
+            }))
 }
 
 /// Find the index in `out` where trailing unterminated `TagElem`s start.

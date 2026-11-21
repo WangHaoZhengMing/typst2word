@@ -54,7 +54,9 @@ impl<'a> ExtractorContext<'a> {
     ) -> Option<BlockNode> {
         // Check if this container starts with background/border `Shape` items (e.g. `#block(fill: ..., stroke: ...)[...]`)
         // AND is not a raw table/grid cell or CeTZ canvas.
-        if Self::is_direct_table_or_code_container(children) || Self::is_cetz_group_nodes(children)
+        if Self::is_direct_table_or_code_container(children)
+            || Self::is_cetz_group_nodes(children)
+            || Self::is_vector_canvas_nodes(children)
         {
             return None;
         }
@@ -184,19 +186,28 @@ impl<'a> ExtractorContext<'a> {
         let mut line_starts = Vec::new();
         Self::collect_line_left_edges(&content_nodes, Point::zero(), &mut line_starts);
         Self::collect_shape_left_edges(&content_nodes, Point::zero(), &mut line_starts);
+        // Preserve genuine `0pt` left insets (e.g. `#block(fill: luma(230))[...]`) rather than
+        // filtering out `< 2.0pt` lines and falling back to an indented first line or a synthetic pad.
+        let raw_min_left = line_starts
+            .iter()
+            .map(|(_, lx)| if min_shape_x > 10.0 { *lx - min_shape_x } else { *lx })
+            .filter(|&lx| lx >= -0.5)
+            .reduce(f64::min);
         let inferred_pad = if has_box_sides {
-            line_starts
-                .iter()
-                .map(|(_, lx)| if min_shape_x > 10.0 { *lx - min_shape_x } else { *lx })
-                .filter(|&lx| lx >= 2.0)
-                .reduce(f64::min)
-                .map(|lx| lx.clamp(4.0, 24.0))
-                .unwrap_or(6.0)
+            match raw_min_left {
+                Some(lx) if lx < 2.0 => 0.0,
+                Some(lx) => lx.clamp(2.0, 24.0),
+                None => 0.0,
+            }
         } else {
             0.0
         };
         let v_pad = if has_box_sides {
-            inferred_pad.clamp(4.0, 12.0)
+            if inferred_pad < 2.0 {
+                0.0
+            } else {
+                inferred_pad.clamp(4.0, 12.0)
+            }
         } else {
             2.0
         };
@@ -260,9 +271,10 @@ impl<'a> ExtractorContext<'a> {
         }
 
         // When all body text blocks are horizontally centered, `line_starts`'s `min_x` reflects
-        // centering whitespace `(width - text_w) / 2`, NOT box padding. Never bake centering
-        // whitespace into `inset.left`/`inset.right` (which narrows `<wps:bodyPr>` and causes
-        // premature wrapping/clipping in Word).
+        // centering whitespace `(width - text_w) / 2`, NOT box padding. Similarly, when every
+        // paragraph is single-line with a global `first_line_indent_pt`, `raw_min_left` equals
+        // `actual_inset + first_line_indent_pt`, so subtract `first_line_indent_pt` to avoid
+        // double-counting first-line indent as box padding.
         let all_body_centered = !body_blocks.is_empty()
             && body_blocks.iter().all(|b| match b {
                 BlockNode::Paragraph { style, .. } => style.align == HAlignIr::Center,
@@ -271,20 +283,49 @@ impl<'a> ExtractorContext<'a> {
                 }
                 _ => false,
             });
+        let para_blocks: Vec<f64> = body_blocks
+            .iter()
+            .filter_map(|b| match b {
+                BlockNode::Paragraph { style, .. } => Some(style.first_line_indent_pt),
+                _ => None,
+            })
+            .collect();
+        let single_line_first_indent = if !all_body_centered
+            && !para_blocks.is_empty()
+            && line_starts.len() <= para_blocks.len()
+            && para_blocks.iter().all(|&fl| fl > 0.5)
+        {
+            para_blocks.into_iter().reduce(f64::min).unwrap_or(0.0)
+        } else {
+            0.0
+        };
         let horiz_pad = if all_body_centered {
             inferred_pad.min(2.0)
+        } else if single_line_first_indent > 0.5 {
+            raw_min_left
+                .map(|lx| (lx - single_line_first_indent).max(0.0).min(24.0))
+                .unwrap_or(0.0)
         } else {
             inferred_pad
+        };
+        let eff_v_pad = if single_line_first_indent > 0.5 {
+            if horiz_pad < 2.0 {
+                0.0
+            } else {
+                v_pad.min(horiz_pad)
+            }
+        } else {
+            v_pad
         };
 
         let inset = SidesPtIr {
             top: if has_box_sides || top_border.is_some() {
-                v_pad
+                eff_v_pad
             } else {
                 0.0
             },
             bottom: if has_box_sides || bottom_border.is_some() {
-                v_pad
+                eff_v_pad
             } else {
                 0.0
             },
@@ -367,8 +408,13 @@ impl<'a> ExtractorContext<'a> {
                 )
             });
 
+        // Sharp-cornered breakable `#block(fill/stroke)[...]` containers should lower to native
+        // auto-height `BlockNode::Container` (`StyledContainer` `<w:tbl>`) so Word never clips
+        // tall CJK/math lines inside fixed-height DrawingML textboxes and can break across pages.
+        // Only rounded boxes (`corner_radius_pt > 0.5`) require DrawingML `roundRect`.
         let needs_table_container = !can_use_rounded_shape_box
-            && ((has_partial_border && stroke.is_none())
+            && (breakable
+                || (has_partial_border && stroke.is_none())
                 || body_blocks.iter().any(|b| {
                     !matches!(
                         b,
@@ -499,7 +545,7 @@ impl<'a> ExtractorContext<'a> {
                 return Some(BlockNode::Table(TableIr {
                     id,
                     kind: TableKindIr::StyledContainer,
-                    col_widths_pt: vec![width_pt],
+                    cols: vec![ir::TableColTrackIr::Fixed { width_pt }],
                     row_heights_pt,
                     header_rows: 0,
                     footer_rows: 0,

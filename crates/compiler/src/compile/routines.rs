@@ -14,7 +14,7 @@ use typst::layout::{
     AlignElem, BlockBody, BlockElem, BoxElem, ColbreakElem, ColumnsElem, HideElem, MoveElem,
     PadElem, RepeatElem, RotateElem, ScaleElem, SkewElem, StackChild, StackElem,
 };
-use typst::routines::{Arenas, Pair, RealizationKind, Routines};
+use typst::routines::{Arenas, FragmentKind, Pair, RealizationKind, Routines};
 use typst::syntax::{Span, VirtualRoot};
 use typst::text::LinebreakElem;
 use typst::visualize::{
@@ -391,10 +391,26 @@ fn custom_realize<'a>(
         content
     };
 
-    let raw_pairs = typst_realize::realize(kind, engine, locator, arenas, target_content, styles)?;
+    let (raw_pairs, is_inline_fragment) = match kind {
+        RealizationKind::Fragment { kind: frag_kind } => {
+            let pairs = typst_realize::realize(
+                RealizationKind::Fragment { kind: frag_kind },
+                engine,
+                locator,
+                arenas,
+                target_content,
+                styles,
+            )?;
+            (pairs, matches!(*frag_kind, FragmentKind::Inline))
+        }
+        other => (
+            typst_realize::realize(other, engine, locator, arenas, target_content, styles)?,
+            false,
+        ),
+    };
     let pairs = sanitize_synthetic_tag_flags(raw_pairs, arenas);
 
-    if is_par {
+    if is_par || is_inline_fragment {
         return realize_par_pairs(pairs, engine, locator, arenas);
     }
     if is_fragment {

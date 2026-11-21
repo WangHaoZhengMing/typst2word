@@ -16,7 +16,8 @@ use crate::color::paint_to_hex;
 use crate::ExtractorContext;
 use crate::frame_tree::TreeNode;
 use ir::{
-    HAlignIr, SemanticRoleIr, SidesPtIr, TableCellIr, TableIr, TableKindIr, TableRowIr, VAlignIr,
+    HAlignIr, SemanticRoleIr, SidesPtIr, TableCellIr, TableColTrackIr, TableIr, TableKindIr,
+    TableRowIr, VAlignIr,
 };
 
 pub(super) type CellNodeMap = HashMap<(usize, usize), (Content, Vec<TreeNode>, Size)>;
@@ -93,21 +94,41 @@ impl<'a> ExtractorContext<'a> {
             (self.content_left_pt, self.content_right_pt)
         };
 
+        // Block-level `#align(center/right)[#table(...)]` / `#set align(center)` realizes as a
+        // style on the element's `StyleChain` (without an enclosing `AlignElem` tag), so honor
+        // `AlignElem::alignment` when the caller only inherited `Left`.
+        let eff_inherited_align = if inherited_align == HAlignIr::Left {
+            let chain = self.scoped_style_chain(loc_opt);
+            let (style_align, _) = Self::alignment_to_ir(typst::foundations::Smart::Custom(
+                chain.get(typst::layout::AlignElem::alignment),
+            ));
+            if matches!(style_align, HAlignIr::Center | HAlignIr::Right) {
+                style_align
+            } else {
+                inherited_align
+            }
+        } else {
+            inherited_align
+        };
+
         // Capture untagged soft `#pad(...)` horizontal offsets (e.g. full-bleed `#pad(x: -36pt)`
         // slide header/footer grids or `#pad(left: ...)` inside `#show` / `context`).
-        let untagged_pad_offset_pt =
-            if self.scope.container_inset_pt <= 0.1 && list_level == 0 && !in_quote {
-                let raw_off = table_origin_x - left_bound;
-                if (-144.0..=-1.5).contains(&raw_off) || (2.0..=48.0).contains(&raw_off) {
-                    raw_off
-                } else {
-                    0.0
-                }
+        let untagged_pad_offset_pt = if eff_inherited_align == HAlignIr::Left
+            && self.scope.container_inset_pt <= 0.1
+            && list_level == 0
+            && !in_quote
+        {
+            let raw_off = table_origin_x - left_bound;
+            if (-144.0..=-1.5).contains(&raw_off) || (2.0..=48.0).contains(&raw_off) {
+                raw_off
             } else {
                 0.0
-            };
+            }
+        } else {
+            0.0
+        };
 
-        let left_indent_pt = if list_level > 0 && inherited_align == HAlignIr::Left {
+        let left_indent_pt = if list_level > 0 && eff_inherited_align == HAlignIr::Left {
             15.0 * list_level as f64
         } else {
             untagged_pad_offset_pt
@@ -138,11 +159,18 @@ impl<'a> ExtractorContext<'a> {
         };
 
         // 2. Resolve column widths and row heights from explicit sizings and laid-out frames.
+        let base_font_pt = Self::resolve_length_pt(
+            self.scoped_style_chain(loc_opt)
+                .get(typst::text::TextElem::size)
+                .0,
+            11.0,
+        );
         let mut dims = self.resolve_table_dimensions(
             grid,
             &cell_nodes_map,
             is_semantic_table,
             avail_w_pt,
+            base_font_pt,
             factor,
         );
 
@@ -218,7 +246,7 @@ impl<'a> ExtractorContext<'a> {
             let mut row_cells = self.extract_table_row_cells(
                 grid,
                 &cell_nodes_map,
-                &dims.col_widths_pt,
+                &dims.cols,
                 table_left_x,
                 avail_w_pt,
                 y,
@@ -270,10 +298,10 @@ impl<'a> ExtractorContext<'a> {
                     if col_has_bottom_border
                         && !next_col_has_bottom_border
                         && col_gutter_pt > 0.5
-                        && dims.col_widths_pt[x] > col_gutter_pt + 20.0
+                        && dims.cols[x].width_pt() > col_gutter_pt + 20.0
                     {
-                        dims.col_widths_pt[x] -= col_gutter_pt;
-                        dims.col_widths_pt[x + 1] += col_gutter_pt;
+                        *dims.cols[x].width_pt_mut() -= col_gutter_pt;
+                        *dims.cols[x + 1].width_pt_mut() += col_gutter_pt;
                         for r in &mut rows {
                             for c in &mut r.cells {
                                 if c.x == x + 1 {
@@ -283,7 +311,7 @@ impl<'a> ExtractorContext<'a> {
                         }
                     } else if !col_has_bottom_border
                         && col_gutter_pt >= 4.0
-                        && dims.col_widths_pt[x] > col_gutter_pt + 20.0
+                        && dims.cols[x].width_pt() > col_gutter_pt + 20.0
                     {
                         for r in &mut rows {
                             for c in &mut r.cells {
@@ -297,20 +325,32 @@ impl<'a> ExtractorContext<'a> {
             }
         }
 
-        let total_table_w: f64 = dims.col_widths_pt.iter().sum();
-        let is_right_flushed_narrow = inherited_align == HAlignIr::Left
+        let total_table_w: f64 = dims.cols.iter().map(|c| c.width_pt()).sum();
+        let left_gap = table_origin_x - left_bound;
+        let right_gap = right_bound - (table_origin_x + total_table_w);
+        let is_centered_narrow = eff_inherited_align == HAlignIr::Left
+            && list_level == 0
+            && left_indent_pt <= 0.5
+            && total_table_w < (right_bound - left_bound) - 24.0
+            && left_gap > 12.0
+            && right_gap > 12.0
+            && (left_gap - right_gap).abs() <= 12.0;
+        let is_right_flushed_narrow = eff_inherited_align == HAlignIr::Left
             && list_level == 0
             && left_indent_pt <= 0.5
             && !dims.inferred_center_align
+            && !is_centered_narrow
             && total_table_w < (right_bound - left_bound) - 24.0
-            && table_origin_x - left_bound > 12.0
-            && (right_bound - (table_origin_x + total_table_w)).abs() <= 4.0;
-        let align = if inherited_align == HAlignIr::Left && dims.inferred_center_align {
+            && left_gap > 12.0
+            && right_gap.abs() <= 4.0;
+        let align = if eff_inherited_align == HAlignIr::Left
+            && (dims.inferred_center_align || is_centered_narrow)
+        {
             HAlignIr::Center
         } else if is_right_flushed_narrow {
             HAlignIr::Right
         } else {
-            inherited_align
+            eff_inherited_align
         };
         let eff_left_indent_pt = if align != HAlignIr::Left {
             0.0
@@ -321,7 +361,7 @@ impl<'a> ExtractorContext<'a> {
         Some(TableIr {
             id: table_id,
             kind,
-            col_widths_pt: dims.col_widths_pt,
+            cols: dims.cols,
             row_heights_pt: dims.row_heights_pt,
             header_rows,
             footer_rows,
@@ -337,7 +377,7 @@ impl<'a> ExtractorContext<'a> {
         &mut self,
         grid: &CellGrid,
         cell_nodes_map: &CellNodeMap,
-        col_widths_pt: &[f64],
+        cols: &[TableColTrackIr],
         table_left_x: f64,
         avail_w_pt: f64,
         y: usize,
@@ -393,7 +433,7 @@ impl<'a> ExtractorContext<'a> {
                                 let table_base_x = table_left_x;
                                 ctx.scope.container_inset_pt += ins.left + ins.right + 1.0;
                                 let col_left: f64 =
-                                    table_base_x + col_widths_pt.iter().take(x).sum::<f64>();
+                                    table_base_x + cols.iter().take(x).map(|c| c.width_pt()).sum::<f64>();
                                 let gutter_pt = if grid.has_gutter && x + 1 < num_cols {
                                     match grid.cols.get(x * 2 + 1) {
                                         Some(Sizing::Rel(rel)) => {
@@ -406,10 +446,11 @@ impl<'a> ExtractorContext<'a> {
                                 } else {
                                     0.0
                                 };
-                                let span_w: f64 = col_widths_pt
+                                let span_w: f64 = cols
                                     .iter()
                                     .skip(x)
                                     .take(colspan.max(1))
+                                    .map(|c| c.width_pt())
                                     .sum::<f64>()
                                     - gutter_pt;
                                 if span_w > 12.0 {

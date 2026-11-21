@@ -309,7 +309,7 @@ pub fn build_word_document(ir: &DocumentIr) -> WordDocument {
             solve_container_and_figure_flow_spacing(blk_list, ir, &mut solved_nodes);
             lower_containers_in_blocks(blk_list, fallback_w);
             merge_split_styled_containers(blk_list);
-            refine_word_tables_in_blocks(blk_list, ir);
+            refine_word_tables_in_blocks(blk_list, ir, fallback_w);
             for block in blk_list.iter_mut() {
                 match block {
                     BlockNode::Paragraph {

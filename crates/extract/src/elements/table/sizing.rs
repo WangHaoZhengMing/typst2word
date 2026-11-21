@@ -5,9 +5,10 @@ use typst::layout::grid::resolve::CellGrid;
 
 use super::CellNodeMap;
 use crate::ExtractorContext;
+use ir::TableColTrackIr;
 
 pub(super) struct ResolvedTableDimensions {
-    pub(super) col_widths_pt: Vec<f64>,
+    pub(super) cols: Vec<TableColTrackIr>,
     pub(super) row_heights_pt: Vec<f64>,
     pub(super) row_has_explicit_height: Vec<bool>,
     pub(super) inferred_center_align: bool,
@@ -20,12 +21,14 @@ impl<'a> ExtractorContext<'a> {
         cell_nodes_map: &CellNodeMap,
         is_semantic_table: bool,
         avail_w_pt: f64,
+        base_font_pt: f64,
         factor: usize,
     ) -> ResolvedTableDimensions {
         let num_cols = grid.non_gutter_column_count();
         let num_rows = grid.non_gutter_row_count();
         let mut col_widths_pt = vec![0.0_f64; num_cols];
         let mut natural_col_w = vec![0.0_f64; num_cols];
+        let mut content_col_w = vec![0.0_f64; num_cols];
         let mut col_min_x = vec![f64::INFINITY; num_cols];
         let mut col_fr = vec![0.0_f64; num_cols];
         let mut row_heights_pt = vec![0.0_f64; num_rows];
@@ -63,10 +66,12 @@ impl<'a> ExtractorContext<'a> {
             } else {
                 6.0
             };
-            let w_pt = csize.x.to_pt().max(bbox_w + pad_w);
+            let content_w = bbox_w + pad_w;
+            let w_pt = csize.x.to_pt().max(content_w);
             let h_pt = csize.y.to_pt().max(bbox_h + 8.0);
             if colspan == 1 && cx < num_cols {
                 natural_col_w[cx] = natural_col_w[cx].max(w_pt);
+                content_col_w[cx] = content_col_w[cx].max(content_w);
                 if bbox_w > 0.5 && bbox_x.is_finite() {
                     col_min_x[cx] = col_min_x[cx].min(bbox_x);
                 }
@@ -80,7 +85,7 @@ impl<'a> ExtractorContext<'a> {
             let raw_x = x * factor;
             match grid.cols.get(raw_x) {
                 Some(Sizing::Rel(rel)) => {
-                    let abs_pt = Self::resolve_length_pt(rel.abs, 11.0);
+                    let abs_pt = Self::resolve_length_pt(rel.abs, base_font_pt);
                     let w = abs_pt + rel.rel.get() * avail_w_pt;
                     if w > 1.0 {
                         col_widths_pt[x] = w;
@@ -96,7 +101,7 @@ impl<'a> ExtractorContext<'a> {
             }
         }
 
-        // Resolve horizontal column gutters (`gutter: 1fr` or `gutter: 10pt`) and `Sizing::Fr` columns.
+        // Resolve horizontal column gutters (`gutter: 1fr`, `10pt`, or negative `-9cm`) and `Sizing::Fr` columns.
         let num_gutters = num_cols.saturating_sub(1);
         let mut gutter_abs_pt = vec![0.0_f64; num_gutters];
         let mut gutter_fr = vec![0.0_f64; num_gutters];
@@ -105,8 +110,8 @@ impl<'a> ExtractorContext<'a> {
                 let raw_g = x * 2 + 1;
                 match grid.cols.get(raw_g) {
                     Some(Sizing::Rel(rel)) => {
-                        let abs_pt = Self::resolve_length_pt(rel.abs, 11.0);
-                        gutter_abs_pt[x] = (abs_pt + rel.rel.get() * avail_w_pt).max(0.0);
+                        let abs_pt = Self::resolve_length_pt(rel.abs, base_font_pt);
+                        gutter_abs_pt[x] = abs_pt + rel.rel.get() * avail_w_pt;
                     }
                     Some(Sizing::Fr(fr)) => {
                         gutter_fr[x] = fr.get().max(0.0);
@@ -142,6 +147,11 @@ impl<'a> ExtractorContext<'a> {
         for x in 0..num_gutters {
             if gutter_abs_pt[x] > 0.0 {
                 col_widths_pt[x] += gutter_abs_pt[x];
+            } else if gutter_abs_pt[x] < 0.0 {
+                // Word `<w:tbl>` columns cannot overlap, so a negative column gutter pulls column
+                // `x + 1` left by reducing column `x`'s width down to its laid-out content floor.
+                let min_w = content_col_w[x].min(col_widths_pt[x]).max(24.0);
+                col_widths_pt[x] = (col_widths_pt[x] + gutter_abs_pt[x]).max(min_w);
             }
         }
 
@@ -209,7 +219,7 @@ impl<'a> ExtractorContext<'a> {
         for y in 0..num_rows {
             let raw_y = y * factor;
             if let Some(Sizing::Rel(rel)) = grid.rows.get(raw_y) {
-                let abs_pt = Self::resolve_length_pt(rel.abs, 11.0);
+                let abs_pt = Self::resolve_length_pt(rel.abs, base_font_pt);
                 if abs_pt > 1.0 && rel.rel.is_zero() {
                     row_heights_pt[y] = abs_pt;
                     row_has_explicit_height[y] = true;
@@ -250,8 +260,22 @@ impl<'a> ExtractorContext<'a> {
                 }
             });
 
+        let cols: Vec<TableColTrackIr> = (0..num_cols)
+            .map(|x| {
+                let width_pt = col_widths_pt[x];
+                match grid.cols.get(x * factor) {
+                    Some(Sizing::Rel(_)) => TableColTrackIr::Fixed { width_pt },
+                    Some(Sizing::Fr(fr)) => TableColTrackIr::Fraction {
+                        fr: fr.get().max(0.0),
+                        width_pt,
+                    },
+                    Some(Sizing::Auto) | None => TableColTrackIr::Auto { width_pt },
+                }
+            })
+            .collect();
+
         ResolvedTableDimensions {
-            col_widths_pt,
+            cols,
             row_heights_pt,
             row_has_explicit_height,
             inferred_center_align,

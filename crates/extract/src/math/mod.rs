@@ -27,7 +27,7 @@ use typst::foundations::{Content, NativeElement, Packed, SequenceElem, StyleChai
 use typst::introspection::TagElem;
 use typst::math::{
     AccentElem, AlignPointElem, AttachElem, BinomElem, CancelElem, CasesElem, ClassElem,
-    EquationElem, FracElem, LimitsElem, LrElem, MatElem, MidElem, RootElem, ScriptsElem,
+    EquationElem, FracElem, LimitsElem, LrElem, MatElem, MathSize, MidElem, RootElem, ScriptsElem,
     StretchElem, VecElem,
 };
 use typst::text::{LinebreakElem, SpaceElem, TextElem};
@@ -60,6 +60,17 @@ pub(crate) fn extract_equation_math_nodes<'a>(
     cjk_font: Option<&'a str>,
 ) -> Vec<MathNodeIr> {
     let is_block = eq.block.get(styles);
+    // Mirror Typst's math layouter: block equations default to `MathSize::Display`, inline
+    // equations to `MathSize::Text`, so `frac.rs` only marks explicit `inline(...)`/`display(...)`
+    // overrides rather than misclassifying every block fraction as `MathSize::Text`.
+    let size_style = EquationElem::size
+        .set(if is_block {
+            MathSize::Display
+        } else {
+            MathSize::Text
+        })
+        .wrap();
+    let eq_styles = styles.chain(&size_style);
     let ctx = MathStyleCtx {
         is_display: is_block,
         in_eq_arr: false,
@@ -68,9 +79,9 @@ pub(crate) fn extract_equation_math_nodes<'a>(
         math_font,
         cjk_font,
     };
-    let realized_body = realize_math_content_deep(compiled, world, &eq.body, styles, 0);
+    let realized_body = realize_math_content_deep(compiled, world, &eq.body, eq_styles, 0);
     let mut nodes = Vec::new();
-    extract_math_root(&realized_body, styles, ctx, &mut nodes);
+    extract_math_root(&realized_body, eq_styles, ctx, &mut nodes);
     nodes
 }
 

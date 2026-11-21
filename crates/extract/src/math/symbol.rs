@@ -52,9 +52,23 @@ pub(crate) fn extract_symbol_or_wrapper(
     if let Some(h) = content.to_packed::<HElem>() {
         if let Spacing::Rel(rel) = h.amount
             && !rel.is_zero()
-            && let Some(run) = build_math_run("\u{2009}", styles, ctx, true)
         {
-            out.push(MathNodeIr::Run(run));
+            let base_pt = ctx.base_font_size_pt.unwrap_or(11.0).max(1.0);
+            let em_val = rel.abs.em.get() + rel.abs.abs.to_pt() / base_pt;
+            let space_str = if em_val <= 0.20 {
+                "\u{2009}".to_string()
+            } else if em_val <= 0.35 {
+                "\u{2005}".to_string()
+            } else if em_val <= 0.70 {
+                "\u{2002}".to_string()
+            } else if em_val <= 1.40 {
+                "\u{2001}".to_string()
+            } else {
+                "\u{2001}".repeat((em_val.round() as usize).clamp(2, 6))
+            };
+            if let Some(run) = build_math_run(&space_str, styles, ctx, true) {
+                out.push(MathNodeIr::Run(run));
+            }
         }
         return;
     }

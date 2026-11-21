@@ -524,11 +524,6 @@ impl WordLineBox {
             {
                 276
             }
-            ParagraphInlineProfile::TextWithInlineEquation
-                if has_cjk_chars && s >= 14.0 && leading_pt.is_some_and(|ls| ls > 3.5) =>
-            {
-                240
-            }
             _ => {
                 // Priority 1: Exact uniform baseline-to-baseline step measured from Typst's frame
                 // (`uniform_baseline_step_pt`, e.g. `16.61pt` for 11pt `PingFang SC` + `0.65em`).

@@ -32,7 +32,9 @@ impl<'a> ExtractorContext<'a> {
                     pos: gpos,
                     children: gchildren,
                 } => {
-                    if Self::is_cetz_group_nodes(gchildren) {
+                    if Self::is_cetz_group_nodes(gchildren)
+                        || Self::is_vector_canvas_group(group, gchildren)
+                    {
                         if let Some(canvas) = self.extract_cetz_canvas(
                             gchildren,
                             Some(group.frame.size()),
@@ -150,6 +152,11 @@ impl<'a> ExtractorContext<'a> {
         } else {
             base_align
         };
+
+        if matches!(align, HAlignIr::Center | HAlignIr::Right) {
+            first_line_indent_pt = 0.0;
+            hanging_indent_pt = 0.0;
+        }
 
         let mut left_indent_pt = 0.0;
         let mut right_indent_pt = 0.0;

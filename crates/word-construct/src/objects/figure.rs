@@ -62,13 +62,13 @@ pub fn solve_indented_figure_table(
     let avail_w_pt = ((content_width_dxa as f64 / 20.0) - target_left_pt).max(80.0);
     let mut adjusted = tbl.clone();
     adjusted.align = HAlignIr::Left;
-    let mut total_col_w: f64 = adjusted.col_widths_pt.iter().sum();
+    let mut total_col_w: f64 = adjusted.total_width_pt();
     if total_col_w > avail_w_pt + 2.0 {
         let excess = total_col_w - avail_w_pt;
-        if let Some(last_w) = adjusted.col_widths_pt.last_mut()
-            && *last_w > excess + 40.0
+        if let Some(last_col) = adjusted.cols.last_mut()
+            && last_col.width_pt() > excess + 40.0
         {
-            *last_w -= excess;
+            *last_col.width_pt_mut() -= excess;
             total_col_w = avail_w_pt;
         }
     }

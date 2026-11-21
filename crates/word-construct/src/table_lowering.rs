@@ -3,7 +3,7 @@
 
 use ir::{
     BlockNode, ContainerIr, ContainerStyleIr, DocumentIr, HAlignIr, InlineNode, NodeId, ShapeKindIr,
-    SidesPtIr, TableCellIr, TableIr, TableKindIr, TableRowIr, VAlignIr,
+    SidesPtIr, TableCellIr, TableColTrackIr, TableIr, TableKindIr, TableRowIr, VAlignIr,
 };
 
 /// Promote standalone rectangular partial-border `InlineNode::ShapeInline` boxes
@@ -129,7 +129,11 @@ fn trim_edge_breaks(mut inlines: Vec<InlineNode>) -> Vec<InlineNode> {
 /// 3. In 1-row `LayoutGrid`s, let tight `auto`-width single-line cells borrow slack width from
 ///    adjacent empty `1fr` spacer cells (preserving total width & outer edges) so counters like
 ///    `"17 / 17"` never wrap onto 2 lines due to minor Typst-vs-Word glyph advance differences.
-pub(crate) fn refine_word_tables_in_blocks(blocks: &mut [BlockNode], ir: &DocumentIr) {
+pub(crate) fn refine_word_tables_in_blocks(
+    blocks: &mut [BlockNode],
+    ir: &DocumentIr,
+    avail_content_w_pt: f64,
+) {
     for block in blocks.iter_mut() {
         let BlockNode::Table(tbl) = block else {
             continue;
@@ -160,11 +164,11 @@ pub(crate) fn refine_word_tables_in_blocks(blocks: &mut [BlockNode], ir: &Docume
             .rows
             .iter()
             .any(|r| r.cells.iter().any(|c| c.colspan > 1));
-        if !has_colspan && tbl.col_widths_pt.len() > 1 {
-            let mut col = tbl.col_widths_pt.len();
+        if !has_colspan && tbl.cols.len() > 1 {
+            let mut col = tbl.cols.len();
             while col > 0 {
                 col -= 1;
-                if tbl.col_widths_pt.len() <= 1 || tbl.col_widths_pt[col] > 0.5 {
+                if tbl.cols.len() <= 1 || tbl.cols[col].width_pt() > 0.5 {
                     continue;
                 }
                 let all_empty = tbl.rows.iter().all(|r| {
@@ -174,7 +178,7 @@ pub(crate) fn refine_word_tables_in_blocks(blocks: &mut [BlockNode], ir: &Docume
                         .all(|c| c.blocks.is_empty())
                 });
                 if all_empty {
-                    tbl.col_widths_pt.remove(col);
+                    tbl.cols.remove(col);
                     for r in &mut tbl.rows {
                         r.cells.retain(|c| c.x != col);
                         for c in &mut r.cells {
@@ -190,7 +194,7 @@ pub(crate) fn refine_word_tables_in_blocks(blocks: &mut [BlockNode], ir: &Docume
         // 3. In 1-row `LayoutGrid`s, transfer slack from adjacent empty spacer cells to tight
         //    single-line `auto` cells while preserving total width and outer left/right edges.
         if tbl.kind == TableKindIr::LayoutGrid && tbl.rows.len() == 1 {
-            let n = tbl.col_widths_pt.len();
+            let n = tbl.cols.len();
             let row = &mut tbl.rows[0];
             let simple_grid = n >= 2
                 && row.cells.len() == n
@@ -204,30 +208,30 @@ pub(crate) fn refine_word_tables_in_blocks(blocks: &mut [BlockNode], ir: &Docume
                     c.blocks.is_empty() && c.fill.is_none() && !c.borders.has_any()
                 };
                 for idx in 0..n {
-                    let cur_w = tbl.col_widths_pt[idx];
+                    let cur_w = tbl.cols[idx].width_pt();
                     if !is_single_line_cell(&row.cells[idx], ir) {
                         continue;
                     }
                     let want = (cur_w * 0.12).clamp(18.0, 48.0);
                     if idx + 1 < n
                         && is_spacer(&row.cells[idx + 1])
-                        && tbl.col_widths_pt[idx + 1] > 48.0
+                        && tbl.cols[idx + 1].width_pt() > 48.0
                     {
                         let borrow =
-                            ((tbl.col_widths_pt[idx + 1] - 24.0) * 0.5).clamp(0.0, want);
+                            ((tbl.cols[idx + 1].width_pt() - 24.0) * 0.5).clamp(0.0, want);
                         if borrow > 1.0 {
-                            tbl.col_widths_pt[idx] += borrow;
-                            tbl.col_widths_pt[idx + 1] -= borrow;
+                            *tbl.cols[idx].width_pt_mut() += borrow;
+                            *tbl.cols[idx + 1].width_pt_mut() -= borrow;
                         }
                     } else if idx > 0
                         && is_spacer(&row.cells[idx - 1])
-                        && tbl.col_widths_pt[idx - 1] > 48.0
+                        && tbl.cols[idx - 1].width_pt() > 48.0
                     {
                         let borrow =
-                            ((tbl.col_widths_pt[idx - 1] - 24.0) * 0.5).clamp(0.0, want);
+                            ((tbl.cols[idx - 1].width_pt() - 24.0) * 0.5).clamp(0.0, want);
                         if borrow > 1.0 {
-                            tbl.col_widths_pt[idx - 1] -= borrow;
-                            tbl.col_widths_pt[idx] += borrow;
+                            *tbl.cols[idx - 1].width_pt_mut() -= borrow;
+                            *tbl.cols[idx].width_pt_mut() += borrow;
                             row.cells[idx].halign = HAlignIr::Right;
                             if let Some(BlockNode::Paragraph { style, .. }) =
                                 row.cells[idx].blocks.first_mut()
@@ -251,7 +255,222 @@ pub(crate) fn refine_word_tables_in_blocks(blocks: &mut [BlockNode], ir: &Docume
                 }
             }
         }
+
+        // 5. Enforce Word single-line width floor for fixed-layout tables/grids (`<w:tblLayout w:type="fixed"/>`):
+        //    Typst compresses fullwidth CJK punctuation (`：`, `，`, `。`, ...) to `0.5em` and uses
+        //    its own font shaping, whereas Word measures fullwidth punctuation at `1.0em` and applies
+        //    `<w:tcMar>` strictly inside `<w:tcW>`. Expand narrow single-line columns (into available
+        //    page slack, or by borrowing from wide/spacer columns) so 1-line Typst cells never wrap
+        //    onto 2 lines in Word.
+        ensure_single_line_cell_word_widths(tbl, ir, avail_content_w_pt);
     }
+}
+
+fn ensure_single_line_cell_word_widths(
+    tbl: &mut TableIr,
+    ir: &DocumentIr,
+    avail_content_w_pt: f64,
+) {
+    if tbl.kind == TableKindIr::StyledContainer || tbl.cols.is_empty() {
+        return;
+    }
+    let n = tbl.cols.len();
+    let num_rows = tbl.rows.len();
+    let metrics = crate::WordFontMetricsProvider::new();
+
+    let mut required_w = vec![0.0_f64; n];
+    let mut has_multiline = vec![false; n];
+    let mut is_empty_spacer = vec![true; n];
+
+    for (row_idx, row) in tbl.rows.iter().enumerate() {
+        for cell in &row.cells {
+            if cell.x >= n {
+                continue;
+            }
+            if !cell.blocks.is_empty() || cell.fill.is_some() || cell.borders.has_any() {
+                for slot in is_empty_spacer
+                    .iter_mut()
+                    .take((cell.x + cell.colspan.max(1)).min(n))
+                    .skip(cell.x)
+                {
+                    *slot = false;
+                }
+            }
+            if cell.colspan != 1 {
+                continue;
+            }
+            if !is_single_line_cell(cell, ir) {
+                if !cell.blocks.is_empty() {
+                    has_multiline[cell.x] = true;
+                }
+                continue;
+            }
+            let Some(text_w_pt) = estimate_single_line_cell_word_width_pt(cell, ir, &metrics)
+            else {
+                continue;
+            };
+            let cell_role = crate::table::resolve_table_cell_role(tbl.kind, &cell.blocks);
+            let margins = crate::WordCellMarginsDxa::solve_for_row(
+                cell.inset.top,
+                cell.inset.bottom,
+                cell.inset.left,
+                cell.inset.right,
+                cell_role,
+                false,
+                row_idx + 1 == num_rows,
+            );
+            let horiz_mar_pt = (margins.left_dxa + margins.right_dxa) as f64 / 20.0;
+            let cushion_pt = (text_w_pt * 0.02).clamp(2.0, 3.5);
+            required_w[cell.x] = required_w[cell.x].max(text_w_pt + horiz_mar_pt + cushion_pt);
+        }
+    }
+
+    let max_table_w = (avail_content_w_pt - tbl.left_indent_pt.max(0.0)).max(72.0);
+    let mut total_w: f64 = tbl.total_width_pt();
+
+    for col in 0..n {
+        let (cur_w, allow_page_slack_growth) = match tbl.cols[col] {
+            // `Auto` columns are content-sized by definition: expand into page slack or borrow
+            // from flexible siblings so Word never wraps single-line Typst cells.
+            TableColTrackIr::Auto { width_pt } => (width_pt, true),
+            // `Fixed` columns reflect explicit author lengths (`100pt`, `30%`, ...): preserve
+            // author-specified widths rather than distorting fixed tracks.
+            TableColTrackIr::Fixed { .. } => continue,
+            // `Fraction` columns (`1fr`, `2fr`) already consume remaining width: only rebalance
+            // against empty spacers or wider flexible siblings without expanding total table width.
+            TableColTrackIr::Fraction { width_pt, .. } => (width_pt, false),
+        };
+        let req_w = required_w[col];
+        if req_w <= cur_w + 0.5 {
+            continue;
+        }
+        let mut need = (req_w - cur_w).min((cur_w * 0.45).max(16.0));
+
+        // Phase A: Narrow table with `Auto` track -> grow directly into available page slack.
+        if allow_page_slack_growth {
+            let page_slack = (max_table_w - total_w).max(0.0);
+            if page_slack > 0.5 {
+                let grow = need.min(page_slack);
+                *tbl.cols[col].width_pt_mut() += grow;
+                total_w += grow;
+                need -= grow;
+            }
+        }
+
+        // Phase B: Borrow from empty spacers or flexible (`Fraction` / wide `Auto`) siblings,
+        // never stealing width from author-`Fixed` column tracks.
+        if need > 0.5 && n > 1 {
+            let mut donors: Vec<(usize, u8, f64)> = (0..n)
+                .filter(|&j| j != col)
+                .filter_map(|j| {
+                    let (wj, priority) = match tbl.cols[j] {
+                        TableColTrackIr::Fraction { width_pt, .. } if is_empty_spacer[j] => {
+                            (width_pt, 4)
+                        }
+                        TableColTrackIr::Auto { width_pt } if is_empty_spacer[j] => (width_pt, 3),
+                        TableColTrackIr::Fraction { width_pt, .. } => (width_pt, 2),
+                        TableColTrackIr::Auto { width_pt } => (width_pt, 1),
+                        TableColTrackIr::Fixed { .. } => return None,
+                    };
+                    let floor_j = if is_empty_spacer[j] {
+                        24.0
+                    } else if has_multiline[j] {
+                        (wj * 0.75).max(48.0)
+                    } else {
+                        required_w[j].max(24.0) + 12.0
+                    };
+                    let spare = (wj - floor_j).max(0.0);
+                    (spare > 2.0).then_some((j, priority, spare))
+                })
+                .collect();
+            donors.sort_by(|a, b| {
+                b.1.cmp(&a.1)
+                    .then_with(|| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal))
+            });
+            for (j, _, spare) in donors {
+                if need <= 0.5 {
+                    break;
+                }
+                let take = need.min(spare);
+                *tbl.cols[col].width_pt_mut() += take;
+                *tbl.cols[j].width_pt_mut() -= take;
+                need -= take;
+            }
+        }
+    }
+}
+
+fn estimate_single_line_cell_word_width_pt(
+    cell: &TableCellIr,
+    ir: &DocumentIr,
+    metrics: &crate::WordFontMetricsProvider,
+) -> Option<f64> {
+    if cell.blocks.len() != 1 {
+        return None;
+    }
+    let (id, content, default_size_pt) = match &cell.blocks[0] {
+        BlockNode::Paragraph {
+            id, content, style, ..
+        } => (
+            *id,
+            content.as_slice(),
+            style.resolved_font_size_pt.unwrap_or(11.0),
+        ),
+        BlockNode::Heading { id, content, .. } => (*id, content.as_slice(), 11.0),
+        _ => return None,
+    };
+    if content.is_empty() {
+        return None;
+    }
+    let word_w = estimate_inlines_word_advance_pt(content, default_size_pt, ir, metrics)?;
+    let typst_w = (!id.is_unset())
+        .then(|| {
+            ir.layout(id)
+                .and_then(|l| l.fragments.first())
+                .map(|f| f.width_pt)
+        })
+        .flatten()
+        .unwrap_or(0.0);
+    Some(word_w.max(typst_w))
+}
+
+fn estimate_inlines_word_advance_pt(
+    inlines: &[InlineNode],
+    default_size_pt: f64,
+    ir: &DocumentIr,
+    metrics: &crate::WordFontMetricsProvider,
+) -> Option<f64> {
+    let mut width_pt = 0.0;
+    for inl in inlines {
+        match inl {
+            InlineNode::Text(r) => {
+                let sz = r.font_size_pt.unwrap_or(default_size_pt);
+                let face = r
+                    .font_family
+                    .as_deref()
+                    .and_then(|fam| ir.font_metrics.get(fam));
+                width_pt +=
+                    metrics.text_advance_pt(r.font_family.as_deref(), face, sz, r.bold, &r.text);
+                if let Some(tr) = r.tracking_pt {
+                    let chars = r.text.chars().count();
+                    if chars > 1 {
+                        width_pt += tr * (chars - 1) as f64;
+                    }
+                }
+            }
+            InlineNode::HorizontalSpace { width_pt: w } => width_pt += *w,
+            InlineNode::Link { content, .. }
+            | InlineNode::Ref { content, .. }
+            | InlineNode::Citation { content, .. }
+            | InlineNode::Field { content, .. } => {
+                width_pt +=
+                    estimate_inlines_word_advance_pt(content, default_size_pt, ir, metrics)?;
+            }
+            InlineNode::LineBreak | InlineNode::Tab => return None,
+            _ => return None,
+        }
+    }
+    (width_pt > 0.5).then_some(width_pt)
 }
 
 fn deduplicate_styled_container_cell_indents(cell: &mut TableCellIr) {
@@ -536,7 +755,7 @@ fn lower_container_to_table(mut c: ContainerIr, fallback_width_pt: f64) -> Table
     TableIr {
         id: c.id,
         kind: TableKindIr::StyledContainer,
-        col_widths_pt: vec![width_pt],
+        cols: vec![TableColTrackIr::Fixed { width_pt }],
         row_heights_pt: vec![0.0],
         header_rows: 0,
         footer_rows: 0,

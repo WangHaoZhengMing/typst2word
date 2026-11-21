@@ -3,8 +3,8 @@
 use std::fmt::Write as _;
 
 use word_construct::table::{
-    RowSplitPolicy, TableCellSlotConstruct, TableConstruct, TableWidthConstruct, VMergeState,
-    resolve_table_cell_role, solve_table_cell_paragraph_style,
+    RowSplitPolicy, TableCellSlotConstruct, TableConstruct, TableLayoutMode, TableWidthConstruct,
+    VMergeState, resolve_table_cell_role, solve_table_cell_paragraph_style,
 };
 use crate::writer::DocxWriter;
 use word_construct::model::{
@@ -42,7 +42,10 @@ impl<'a> DocxWriter<'a> {
         match construct.width {
             TableWidthConstruct::ExactDxa(total_w_dxa) => {
                 let _ = write!(out, r#"<w:tblW w:w="{total_w_dxa}" w:type="dxa"/>"#);
-                out.push_str(r#"<w:tblLayout w:type="fixed"/>"#);
+                match construct.layout_mode {
+                    TableLayoutMode::Fixed => out.push_str(r#"<w:tblLayout w:type="fixed"/>"#),
+                    TableLayoutMode::Autofit => out.push_str(r#"<w:tblLayout w:type="autofit"/>"#),
+                }
             }
             TableWidthConstruct::FullWidthPct5000 => {
                 out.push_str(r#"<w:tblW w:w="5000" w:type="pct"/>"#);
