@@ -8,8 +8,7 @@ use std::collections::BTreeMap;
 
 use ir::{
     BlockNode, DocumentIr, DocumentSectionIr, EmbeddedFontFaceIr, FontFaceMetricsIr, InlineNode,
-    MetadataIr, NodeId, PageSetupIr, ShapeIr, merge_split_styled_containers, visit_block_list_mut,
-    visit_page_setup_blocks_mut,
+    MetadataIr, NodeId, PageSetupIr, ShapeIr, visit_block_list_mut, visit_page_setup_blocks_mut,
 };
 
 use crate::objects::paragraph::compute_line_spacing_dxa_with_metrics;
@@ -19,11 +18,12 @@ use crate::objects::shape::{
 };
 use crate::objects::text_run::run_has_cjk;
 use crate::pipeline::flow_spacing::{
-    resolve_paragraph_style_spacing, solve_container_and_figure_flow_spacing,
+    PageVerticalBand, resolve_adjacent_paragraph_spacing, resolve_paragraph_style_spacing,
+    solve_container_and_figure_flow_spacing,
 };
 use crate::table_lowering::{
-    lower_containers_in_blocks, promote_standalone_partial_border_inline_boxes,
-    refine_word_tables_in_blocks,
+    lower_containers_in_blocks, merge_split_styled_containers,
+    promote_standalone_partial_border_inline_boxes, refine_word_tables_in_blocks,
 };
 use crate::units::pt_to_dxa;
 
@@ -303,6 +303,7 @@ pub fn build_word_document(ir: &DocumentIr) -> WordDocument {
 
     let mut solve_section_lists = |ps: &mut PageSetupIr, sec_blocks: &mut Vec<BlockNode>| {
         let fallback_w = (ps.width_pt - ps.margin_left_pt - ps.margin_right_pt).max(72.0);
+        let page_band = PageVerticalBand::from_page_setup(ps);
         let mut resolve_blocks = |blk_list: &mut Vec<BlockNode>| {
             promote_standalone_partial_border_inline_boxes(blk_list, ir);
             solve_container_and_figure_flow_spacing(blk_list, ir, &mut solved_nodes);
@@ -322,7 +323,7 @@ pub fn build_word_document(ir: &DocumentIr) -> WordDocument {
                             content.pop();
                         }
                         let node_layout = ir.layout(*id);
-                        resolve_paragraph_style_spacing(style, node_layout);
+                        resolve_paragraph_style_spacing(style, node_layout, page_band);
                         let para_lines = node_layout.and_then(|l| l.paragraph_lines.as_ref());
                         let is_multiline = para_lines.is_some_and(|p| p.line_count >= 2);
                         let w_line = compute_line_spacing_dxa_with_metrics(
@@ -401,6 +402,7 @@ pub fn build_word_document(ir: &DocumentIr) -> WordDocument {
                     _ => {}
                 }
             }
+            resolve_adjacent_paragraph_spacing(blk_list);
         };
         visit_page_setup_blocks_mut(ps, &mut resolve_blocks);
         visit_block_list_mut(sec_blocks, &mut resolve_blocks);

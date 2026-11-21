@@ -141,6 +141,12 @@ impl<'a> DocxWriter<'a> {
         rel_id
     }
 
+    pub(crate) fn alloc_drawing_id(&mut self) -> u32 {
+        let id = self.next_drawing_id;
+        self.next_drawing_id += 1;
+        id
+    }
+
     pub(crate) fn register_image(&mut self, img: &ImageIr) -> (String, u32) {
         let rel_id = self.alloc_rel_id();
         let idx = self.media_assets.len() + 1;
@@ -152,8 +158,7 @@ impl<'a> DocxWriter<'a> {
             format: img.format,
             data: img.data.clone(),
         });
-        let drawing_id = self.next_drawing_id;
-        self.next_drawing_id += 1;
+        let drawing_id = self.alloc_drawing_id();
         (rel_id, drawing_id)
     }
 

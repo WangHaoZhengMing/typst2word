@@ -21,7 +21,6 @@ mod unsupported;
 
 use word_construct::BlockSequenceNeighborContext;
 use word_construct::model::BlockNode;
-use word_construct::paragraph::ParagraphConstruct;
 
 use crate::writer::DocxWriter;
 use crate::xml_helpers::{open_tiny_sect_carrier_p, write_exact_spacer_p, write_tiny_break_p};
@@ -63,12 +62,7 @@ impl<'a> DocxWriter<'a> {
                 bookmark,
             } = block
             {
-                let adj_style = ParagraphConstruct::solve_adjacent_paragraph_style(
-                    content,
-                    style,
-                    blocks.get(idx + 1),
-                );
-                self.render_paragraph(*id, content, &adj_style, bookmark.as_deref(), out);
+                self.render_paragraph(*id, content, style, bookmark.as_deref(), out);
                 continue;
             }
             if let BlockNode::Figure {

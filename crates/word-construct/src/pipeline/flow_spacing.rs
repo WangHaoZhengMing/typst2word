@@ -7,18 +7,150 @@ use std::collections::BTreeMap;
 
 use ir::{
     BlockLayoutSpanIr, BlockNode, DocumentIr, NextBlockKindIr, NextBlockLayoutMeasureIr, NodeId,
-    NodeReferenceLayout, ParagraphStyleIr, TableKindIr,
+    NodeReferenceLayout, PageSetupIr, ParagraphStyleIr, TableKindIr,
 };
 
 use crate::document::SolvedNodeLayout;
 use crate::units::pt_to_dxa;
 use crate::{InterBlockGapAction, NextBlockSpacingContext, WordParagraphConstruct};
 
-/// Resolve a single paragraph's `space_after_pt` from its semantic `StyleChain` properties
-/// and optional read-only [`NodeReferenceLayout`].
+/// How a lowered Word block participates in `compatibilityMode=15` vertical margin collapsing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlockMarginCarrier {
+    /// Paragraph-backed (`<w:p>`): adjacent `w:after` / `w:before` margins collapse via `max(after, before)`.
+    Paragraph,
+    /// Table-backed (`<w:tbl>`): does NOT collapse margins across its boundary; trailing gaps transfer onto
+    /// the following block's `w:before` (or a `40 dxa` separator `<w:p>` between consecutive tables).
+    TableBacked,
+}
+
+/// Unified vertical box metrics for any Word block in inter-block flow spacing.
+///
+/// Encapsulates Word's intrinsic top and bottom empty vertical air (`ink_top_offset_pt`,
+/// `ink_bottom_offset_pt`) relative to Typst's reference layout box plus its [`BlockMarginCarrier`],
+/// allowing every adjacent block pair `(A, B)` to share one additive gap formula:
+/// `needed_gap_pt(A, B, gap_pt) = (gap_pt - A.ink_bottom_offset_pt - B.ink_top_offset_pt).max(0.0)`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WordBlockVerticalBox {
+    pub carrier: BlockMarginCarrier,
+    /// Intrinsic Word vertical air (`pt`) above the block's first visible ink/cap-height edge.
+    pub ink_top_offset_pt: f64,
+    /// Intrinsic Word vertical air (`pt`) below the block's last visible baseline/ink edge.
+    pub ink_bottom_offset_pt: f64,
+}
+
+impl WordBlockVerticalBox {
+    /// Derive [`WordBlockVerticalBox`] for a [`BlockNode`] given a surrounding `fallback_font_pt`.
+    pub fn for_block(block: &BlockNode, fallback_font_pt: f64) -> Self {
+        let fb = fallback_font_pt.max(6.0);
+        match block {
+            BlockNode::Container(_) => Self {
+                carrier: BlockMarginCarrier::TableBacked,
+                ink_top_offset_pt: 0.0,
+                ink_bottom_offset_pt: 0.0,
+            },
+            BlockNode::Table(_) => Self {
+                carrier: BlockMarginCarrier::TableBacked,
+                ink_top_offset_pt: 0.0,
+                ink_bottom_offset_pt: 0.0,
+            },
+            BlockNode::CodeBlock { fill, stroke, .. } if fill.is_some() || stroke.is_some() => {
+                Self {
+                    carrier: BlockMarginCarrier::TableBacked,
+                    ink_top_offset_pt: 0.0,
+                    ink_bottom_offset_pt: 0.0,
+                }
+            }
+            BlockNode::HorizontalRule { .. } => Self {
+                carrier: BlockMarginCarrier::Paragraph,
+                ink_top_offset_pt: 0.0,
+                ink_bottom_offset_pt: 0.0,
+            },
+            BlockNode::ShapeBlock(_) | BlockNode::CetzCanvas(_) | BlockNode::ImageBlock(_) => {
+                Self {
+                    carrier: BlockMarginCarrier::Paragraph,
+                    ink_top_offset_pt: 0.02 * fb,
+                    ink_bottom_offset_pt: 0.02 * fb,
+                }
+            }
+            BlockNode::Figure { .. } => Self {
+                carrier: BlockMarginCarrier::Paragraph,
+                ink_top_offset_pt: 0.0,
+                ink_bottom_offset_pt: 0.24 * fb,
+            },
+            BlockNode::EquationBlock(eq) => {
+                let sz = eq.font_size_pt.unwrap_or(fb).max(6.0);
+                let carrier = if eq.numbering_text.is_some() {
+                    BlockMarginCarrier::TableBacked
+                } else {
+                    BlockMarginCarrier::Paragraph
+                };
+                Self {
+                    carrier,
+                    ink_top_offset_pt: 0.18 * sz,
+                    ink_bottom_offset_pt: 0.18 * sz,
+                }
+            }
+            BlockNode::Paragraph { style, .. } => {
+                let sz = style.resolved_font_size_pt.unwrap_or(fb).max(6.0);
+                Self {
+                    carrier: BlockMarginCarrier::Paragraph,
+                    ink_top_offset_pt: 0.20 * sz,
+                    ink_bottom_offset_pt: 0.18 * sz,
+                }
+            }
+            BlockNode::Heading { content, .. } | BlockNode::Title { content, .. } => {
+                let sz = ir::dominant_inline_font_size_pt(content, fb).max(6.0);
+                Self {
+                    carrier: BlockMarginCarrier::Paragraph,
+                    ink_top_offset_pt: 0.20 * sz,
+                    ink_bottom_offset_pt: 0.18 * sz,
+                }
+            }
+            _ => Self {
+                carrier: BlockMarginCarrier::Paragraph,
+                ink_top_offset_pt: 0.20 * fb,
+                ink_bottom_offset_pt: 0.18 * fb,
+            },
+        }
+    }
+
+    /// Unified inter-block spacing formula subtracting both blocks' intrinsic Word vertical air.
+    #[inline]
+    pub fn needed_gap_pt(prev: Self, next: Self, measured_gap_pt: f64) -> f64 {
+        (measured_gap_pt - prev.ink_bottom_offset_pt - next.ink_top_offset_pt).max(0.0)
+    }
+}
+
+/// Active section's vertical content band (`pt`) derived from [`PageSetupIr`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PageVerticalBand {
+    pub content_top_pt: f64,
+    pub content_bottom_pt: f64,
+}
+
+impl PageVerticalBand {
+    pub fn from_page_setup(ps: &PageSetupIr) -> Self {
+        let content_top_pt = ps.margin_top_pt.max(0.0);
+        let content_bottom_pt = (ps.height_pt - ps.margin_bottom_pt).max(content_top_pt + 1.0);
+        Self {
+            content_top_pt,
+            content_bottom_pt,
+        }
+    }
+
+    #[inline]
+    pub fn content_height_pt(self) -> f64 {
+        (self.content_bottom_pt - self.content_top_pt).max(1.0)
+    }
+}
+
+/// Resolve a single paragraph's `space_after_pt` from its semantic `StyleChain` properties,
+/// optional read-only [`NodeReferenceLayout`], and the active section's [`PageVerticalBand`].
 pub fn resolve_paragraph_style_spacing(
     style: &mut ParagraphStyleIr,
     node_layout: Option<&NodeReferenceLayout>,
+    page_band: PageVerticalBand,
 ) {
     let flow = node_layout.and_then(|l| l.flow.as_ref());
 
@@ -125,7 +257,7 @@ pub fn resolve_paragraph_style_spacing(
 
     // 3. Resolve any additional trailing transitions (e.g. list item sibling gaps or outer block gaps).
     for &(span_a, measure) in &flow.trailing_transitions {
-        apply_trailing_transition(&mut style.space_after_pt, span_a, measure);
+        apply_trailing_transition(&mut style.space_after_pt, span_a, measure, page_band);
     }
 
     if style.pad_bottom_pt > 0.1 {
@@ -233,138 +365,86 @@ pub fn solve_container_and_figure_flow_spacing(
             continue;
         }
 
-        // Solve pre-gap onto `blocks[idx + 1]` when `blocks[idx + 1]` is an `EquationBlock`.
-        if let Some(eq_font_pt) = match &blocks[idx + 1] {
-            BlockNode::EquationBlock(eq_b) => Some((
-                eq_b.font_size_pt.unwrap_or(11.0).max(6.0),
-                eq_b.numbering_text.is_some(),
-            )),
-            _ => None,
-        } {
-            let (eq_sz_pt, is_numbered_b) = eq_font_pt;
-            let prev_bot_air_pt = match &blocks[idx] {
-                BlockNode::Container(_) | BlockNode::Table(_) => 0.0,
-                BlockNode::EquationBlock(eq_a) if eq_a.numbering_text.is_some() => 0.0,
-                BlockNode::CodeBlock { fill, stroke, .. }
-                    if fill.is_some() || stroke.is_some() =>
-                {
-                    0.0
+        let box_a = WordBlockVerticalBox::for_block(&blocks[idx], next_font_pt);
+        let box_b = WordBlockVerticalBox::for_block(&blocks[idx + 1], next_font_pt);
+        let needed_gap_pt = WordBlockVerticalBox::needed_gap_pt(box_a, box_b, gap_pt);
+
+        // 1. Solve pre-gap onto `blocks[idx + 1]` when `blocks[idx + 1]` is an `EquationBlock`
+        //    or `HorizontalRule` (`#line(...)`).
+        match &blocks[idx + 1] {
+            BlockNode::EquationBlock(eq_b) => {
+                let is_numbered_b = eq_b.numbering_text.is_some();
+                // For consecutive numbered equation -> equation, table row boundary zeroes bottom air.
+                let eff_box_a = if matches!(blocks[idx], BlockNode::EquationBlock(ref eq_a) if eq_a.numbering_text.is_some()) {
+                    WordBlockVerticalBox {
+                        ink_bottom_offset_pt: 0.0,
+                        ..box_a
+                    }
+                } else {
+                    box_a
+                };
+                let needed_before_pt =
+                    WordBlockVerticalBox::needed_gap_pt(eff_box_a, box_b, gap_pt);
+                if !is_numbered_b && !id_b.is_unset() {
+                    solved_nodes.entry(id_b).or_default().before_dxa =
+                        Some(pt_to_dxa(needed_before_pt));
                 }
-                BlockNode::ShapeBlock(_) => 0.02 * eq_sz_pt,
-                _ => 0.18 * eq_sz_pt,
-            };
-            let needed_before_pt = (gap_pt - prev_bot_air_pt - 0.18 * eq_sz_pt).max(0.0);
-            if !is_numbered_b && !id_b.is_unset() {
-                solved_nodes.entry(id_b).or_default().before_dxa =
-                    Some(pt_to_dxa(needed_before_pt));
-            }
-            if let BlockNode::Paragraph { style, .. } = &mut blocks[idx] {
-                if is_numbered_b {
-                    style.space_after_pt = needed_before_pt;
-                } else if style.space_after_pt > needed_before_pt {
-                    style.space_after_pt = needed_before_pt;
+                if let BlockNode::Paragraph { style, .. } = &mut blocks[idx] {
+                    if is_numbered_b {
+                        style.space_after_pt = needed_before_pt;
+                    } else if style.space_after_pt > needed_before_pt {
+                        style.space_after_pt = needed_before_pt;
+                    }
                 }
             }
+            BlockNode::HorizontalRule { .. } if !id_b.is_unset() => {
+                solved_nodes.entry(id_b).or_default().before_dxa = Some(pt_to_dxa(needed_gap_pt));
+            }
+            _ => {}
         }
 
-        // Solve pre-gap onto `blocks[idx + 1]` when `blocks[idx + 1]` is a `HorizontalRule` (`#line(...)`).
-        if matches!(blocks[idx + 1], BlockNode::HorizontalRule { .. }) && !id_b.is_unset() {
-            let prev_bot_air_pt = match &blocks[idx] {
-                BlockNode::Container(_) | BlockNode::Table(_) | BlockNode::HorizontalRule { .. } => {
-                    0.0
-                }
-                BlockNode::CodeBlock { fill, stroke, .. }
-                    if fill.is_some() || stroke.is_some() =>
-                {
-                    0.0
-                }
-                _ => 0.18 * next_font_pt,
-            };
-            let needed_before_pt = (gap_pt - prev_bot_air_pt).max(0.0);
-            solved_nodes.entry(id_b).or_default().before_dxa = Some(pt_to_dxa(needed_before_pt));
+        // 2. Solve post-gap after `blocks[idx]` using its unified `WordBlockVerticalBox` & carrier.
+        let is_non_layout_table = match &blocks[idx] {
+            BlockNode::Table(t) => t.kind != TableKindIr::LayoutGrid || is_graphic_object_row(t),
+            _ => true,
+        };
+        if !is_non_layout_table {
+            continue;
         }
 
         match &blocks[idx] {
-            BlockNode::HorizontalRule { .. } => {
-                // `HorizontalRule` is a 1pt-tall empty `<w:p>` with bottom border (`w:line="20"`),
-                // so only the following block's internal top leading (`~0.20 * next_font`) needs subtraction.
-                let next_top_air = match &blocks[idx + 1] {
-                    BlockNode::Container(_)
-                    | BlockNode::Table(_)
-                    | BlockNode::ShapeBlock(_)
-                    | BlockNode::HorizontalRule { .. } => 0.0,
-                    BlockNode::Paragraph { style, .. } => {
-                        let sz = style.resolved_font_size_pt.unwrap_or(next_font_pt);
-                        0.20 * sz
-                    }
-                    BlockNode::Heading { content, .. } | BlockNode::Title { content, .. } => {
-                        let sz = ir::dominant_inline_font_size_pt(content, next_font_pt);
-                        0.20 * sz
-                    }
-                    _ => 0.20 * next_font_pt,
-                };
-                let needed_after_pt = (gap_pt - next_top_air).max(0.0);
-                solved_nodes.entry(id_a).or_default().after_dxa = Some(pt_to_dxa(needed_after_pt));
+            BlockNode::HorizontalRule { .. } | BlockNode::Figure { .. } => {
+                solved_nodes.entry(id_a).or_default().after_dxa = Some(pt_to_dxa(needed_gap_pt));
             }
             BlockNode::ShapeBlock(_) => {
-                // Wrapper `<w:p>` uses a 1pt paragraph mark (`~0.02 * font` descent), leaving only
-                // the following block's `~0.20 * next_font` internal top leading to subtract
-                // (or `~0.02 * next_font` when followed by another `ShapeBlock`).
-                let next_top_air = if matches!(blocks[idx + 1], BlockNode::ShapeBlock(_)) {
-                    0.04 * next_font_pt
-                } else {
-                    0.22 * next_font_pt
-                };
-                let needed_after_pt = (gap_pt - next_top_air).max(0.0);
-                let needed_dxa = pt_to_dxa(needed_after_pt);
+                let needed_dxa = pt_to_dxa(needed_gap_pt);
                 solved_nodes.entry(id_a).or_default().after_dxa = Some(needed_dxa);
                 if matches!(blocks[idx + 1], BlockNode::ShapeBlock(_)) && !id_b.is_unset() {
                     solved_nodes.entry(id_b).or_default().before_dxa = Some(needed_dxa);
                 }
             }
-            BlockNode::Figure { .. } => {
-                let needed_after_pt = (gap_pt - 0.44 * next_font_pt).max(0.0);
-                solved_nodes.entry(id_a).or_default().after_dxa = Some(pt_to_dxa(needed_after_pt));
-            }
-            BlockNode::EquationBlock(eq_a) => {
-                let eq_sz_pt = eq_a.font_size_pt.unwrap_or(11.0).max(6.0);
-                let next_top_air_pt = match &blocks[idx + 1] {
-                    BlockNode::Container(_) | BlockNode::Table(_) => 0.0,
-                    BlockNode::EquationBlock(eq_b) if eq_b.numbering_text.is_some() => {
-                        0.18 * next_font_pt
-                    }
-                    BlockNode::EquationBlock(_) => 0.18 * next_font_pt,
-                    _ => 0.20 * next_font_pt,
-                };
-                let needed_after_pt = (gap_pt - 0.18 * eq_sz_pt - next_top_air_pt).max(0.0);
-                if eq_a.numbering_text.is_some() {
+            BlockNode::EquationBlock(_)
+            | BlockNode::Container(_)
+            | BlockNode::Table(_) => {
+                if box_a.carrier == BlockMarginCarrier::TableBacked {
                     apply_table_backed_post_gap(
                         id_a,
                         &mut blocks[idx + 1],
-                        needed_after_pt,
+                        needed_gap_pt,
                         solved_nodes,
                     );
                 } else {
                     solved_nodes.entry(id_a).or_default().after_dxa =
-                        Some(pt_to_dxa(needed_after_pt));
+                        Some(pt_to_dxa(needed_gap_pt));
                 }
             }
-            BlockNode::Container(_) => {
-                let needed_before_pt = (gap_pt - 0.20 * next_font_pt).max(0.0);
-                apply_table_backed_post_gap(id_a, &mut blocks[idx + 1], needed_before_pt, solved_nodes);
-            }
             BlockNode::CodeBlock { fill, stroke, .. } if fill.is_some() || stroke.is_some() => {
-                let needed_before_pt = (gap_pt - 0.20 * next_font_pt).max(0.0);
-                apply_table_backed_post_gap(id_a, &mut blocks[idx + 1], needed_before_pt, solved_nodes);
-            }
-            BlockNode::Table(t) if t.kind != TableKindIr::LayoutGrid || is_graphic_object_row(t) => {
-                let next_top_air_pt = if is_graphic_block(&blocks[idx + 1]) {
-                    0.0
-                } else {
-                    0.20 * next_font_pt
-                };
-                let needed_before_pt = (gap_pt - next_top_air_pt).max(0.0);
-                apply_table_backed_post_gap(id_a, &mut blocks[idx + 1], needed_before_pt, solved_nodes);
+                apply_table_backed_post_gap(
+                    id_a,
+                    &mut blocks[idx + 1],
+                    needed_gap_pt,
+                    solved_nodes,
+                );
             }
             _ => {}
         }
@@ -437,34 +517,38 @@ fn apply_direct_paragraph_transition(
     }
 
     let gap_pt = top_b - bottom_a;
-    if next.kind == NextBlockKindIr::TightList && gap_pt <= 10.0 {
-        if let InterBlockGapAction::ZeroSpaceAfter =
-            WordParagraphConstruct::solve_inter_block_gap(
-                gap_pt,
-                11.0,
-                11.0,
-                NextBlockSpacingContext::TightList,
-            )
-        {
-            *space_after_pt = 0.0;
+    let ctx = match next.kind {
+        NextBlockKindIr::TightList => NextBlockSpacingContext::TightList,
+        NextBlockKindIr::Paragraph => NextBlockSpacingContext::Paragraph,
+        _ => NextBlockSpacingContext::Other,
+    };
+    match WordParagraphConstruct::solve_inter_block_gap_with_bounds(
+        gap_pt,
+        next.prev_font_pt,
+        next.next_font_pt,
+        ctx,
+        48.0,
+        500.0,
+    ) {
+        InterBlockGapAction::ZeroSpaceAfter => *space_after_pt = 0.0,
+        InterBlockGapAction::SetExactSpaceAfter(target_pt) => *space_after_pt = target_pt,
+        InterBlockGapAction::AddExtraSpaceAfter(extra_pt) => *space_after_pt += extra_pt,
+        InterBlockGapAction::KeepDefault => {}
+    }
+}
+
+/// Resolve adjacent-paragraph font-size transition spacing inside `word-construct` so `docx-writer`
+/// never mutates paragraph `space_after_pt` during OpenXML serialization.
+pub fn resolve_adjacent_paragraph_spacing(blocks: &mut [BlockNode]) {
+    for idx in 0..blocks.len().saturating_sub(1) {
+        let (left, right) = blocks.split_at_mut(idx + 1);
+        if let BlockNode::Paragraph { content, style, .. } = &mut left[idx] {
+            *style = crate::objects::paragraph::ParagraphConstruct::solve_adjacent_paragraph_style(
+                content,
+                style,
+                right.first(),
+            );
         }
-    } else if next.kind == NextBlockKindIr::Paragraph
-        && (next.prev_font_pt >= 15.0 || next.next_font_pt >= 15.0)
-        && gap_pt > 10.0
-        && gap_pt < 60.0
-    {
-        if let InterBlockGapAction::SetExactSpaceAfter(target_pt) =
-            WordParagraphConstruct::solve_inter_block_gap(
-                gap_pt,
-                next.prev_font_pt,
-                next.next_font_pt,
-                NextBlockSpacingContext::Paragraph,
-            )
-        {
-            *space_after_pt = target_pt;
-        }
-    } else if gap_pt > 48.0 && gap_pt < 500.0 {
-        *space_after_pt += (gap_pt - 12.0).max(0.0);
     }
 }
 
@@ -472,6 +556,7 @@ fn apply_trailing_transition(
     space_after_pt: &mut f64,
     span_a: BlockLayoutSpanIr,
     measure: NextBlockLayoutMeasureIr,
+    page_band: PageVerticalBand,
 ) {
     let (Some((pa, bottom_a)), Some((pb, top_b))) = (
         span_a.end_page_and_bottom_y(),
@@ -479,6 +564,11 @@ fn apply_trailing_transition(
     ) else {
         return;
     };
+
+    let content_top = page_band.content_top_pt;
+    let content_bottom = page_band.content_bottom_pt;
+    let content_h = page_band.content_height_pt();
+    let max_gap_pt = (content_h * 0.75).max(120.0);
 
     if let NextBlockKindIr::ListItemSibling {
         list_level,
@@ -489,20 +579,22 @@ fn apply_trailing_transition(
     {
         if pa == pb && top_b >= bottom_a - 2.0 {
             let gap_pt = top_b - bottom_a;
-            if gap_pt > 48.0 && gap_pt < 500.0 {
+            if gap_pt > 48.0 && gap_pt < max_gap_pt {
                 *space_after_pt += (gap_pt - 10.0).max(0.0);
             }
         } else if pb == pa + 1
             && list_level == 0
             && active_columns <= 1
             && prev_item_block_count <= 2
-            && bottom_a > 100.0
-            && bottom_a < 660.0
             && next_item_starts_with_paragraph
         {
-            let gap_pt = (760.0 - bottom_a) + (top_b - 71.0).max(0.0);
-            if gap_pt > 60.0 && gap_pt < 500.0 {
-                *space_after_pt += (gap_pt - 15.0).max(0.0);
+            let effective_bottom =
+                (content_bottom - measure.prev_font_pt.max(11.0)).max(content_top);
+            if bottom_a > content_top + 24.0 && bottom_a < effective_bottom - 100.0 {
+                let gap_pt = (effective_bottom - bottom_a) + (top_b - content_top).max(0.0);
+                if gap_pt > 60.0 && gap_pt < max_gap_pt {
+                    *space_after_pt += (gap_pt - 15.0).max(0.0);
+                }
             }
         }
         return;
@@ -515,8 +607,73 @@ fn apply_trailing_transition(
             && (measure.prev_font_pt >= 15.0 || measure.next_font_pt >= 15.0)
             && gap_pt > 10.0
             && gap_pt < 60.0;
-        if !is_tight_list && !is_display_par && gap_pt > 48.0 && gap_pt < 500.0 {
+        if !is_tight_list && !is_display_par && gap_pt > 48.0 && gap_pt < max_gap_pt {
             *space_after_pt += (gap_pt - 12.0).max(0.0);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ir::{FlowMeasureIr, NodeReferenceLayout};
+
+    #[test]
+    fn cross_page_list_gap_uses_actual_page_setup_dimensions() {
+        let small_page = PageSetupIr {
+            width_pt: 419.53,
+            height_pt: 595.28, // A5
+            margin_top_pt: 40.0,
+            margin_bottom_pt: 40.0,
+            ..Default::default()
+        };
+        let band = PageVerticalBand::from_page_setup(&small_page);
+        let span_a = BlockLayoutSpanIr::SinglePage {
+            page_idx: 0,
+            top_y_pt: 250.0,
+            bottom_y_pt: 300.0,
+            x_pt: 40.0,
+        };
+        let span_b = BlockLayoutSpanIr::SinglePage {
+            page_idx: 1,
+            top_y_pt: 45.0,
+            bottom_y_pt: 60.0,
+            x_pt: 40.0,
+        };
+        let layout = NodeReferenceLayout {
+            flow: Some(FlowMeasureIr {
+                self_span: span_a,
+                next: None,
+                trailing_transitions: vec![(
+                    span_a,
+                    NextBlockLayoutMeasureIr {
+                        span: span_b,
+                        kind: NextBlockKindIr::ListItemSibling {
+                            list_level: 0,
+                            active_columns: 1,
+                            prev_item_block_count: 1,
+                            next_item_starts_with_paragraph: true,
+                        },
+                        prev_font_pt: 11.0,
+                        next_font_pt: 11.0,
+                    },
+                )],
+                in_multi_block_group_tail: false,
+            }),
+            ..Default::default()
+        };
+
+        let mut style = ParagraphStyleIr {
+            space_after_pt: 0.0,
+            ..Default::default()
+        };
+        resolve_paragraph_style_spacing(&mut style, Some(&layout), band);
+        // effective_bottom = (595.28 - 40.0) - 11.0 = 544.28
+        // gap_pt = (544.28 - 300.0) + (45.0 - 40.0) = 249.28 => + (249.28 - 15.0) = 234.28
+        assert!(
+            (style.space_after_pt - 234.28).abs() < 0.05,
+            "expected ~234.28pt on A5 page, got {}",
+            style.space_after_pt
+        );
     }
 }

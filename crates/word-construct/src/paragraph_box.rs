@@ -125,6 +125,26 @@ impl WordParagraphConstruct {
         font_size_b_pt: f64,
         next_context: NextBlockSpacingContext,
     ) -> InterBlockGapAction {
+        Self::solve_inter_block_gap_with_bounds(
+            gap_pt,
+            font_size_a_pt,
+            font_size_b_pt,
+            next_context,
+            24.0,
+            500.0,
+        )
+    }
+
+    /// Declaratively solve inter-block spacing with explicit large-gap `#v(...)` detection bounds
+    /// `(min_large_gap_pt, max_large_gap_pt)` so callers never duplicate guard conditions.
+    pub fn solve_inter_block_gap_with_bounds(
+        gap_pt: f64,
+        font_size_a_pt: f64,
+        font_size_b_pt: f64,
+        next_context: NextBlockSpacingContext,
+        min_large_gap_pt: f64,
+        max_large_gap_pt: f64,
+    ) -> InterBlockGapAction {
         match (
             next_context,
             font_size_a_pt >= 15.0,
@@ -149,7 +169,7 @@ impl WordParagraphConstruct {
                 let target_after_pt = (g - below_a_pt - above_b_pt).max(0.0);
                 InterBlockGapAction::SetExactSpaceAfter(target_after_pt)
             }
-            (_, _, _, g) if g > 24.0 && g < 500.0 => {
+            (_, _, _, g) if g > min_large_gap_pt && g < max_large_gap_pt => {
                 InterBlockGapAction::AddExtraSpaceAfter((g - 12.0).max(0.0))
             }
             _ => InterBlockGapAction::KeepDefault,

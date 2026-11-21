@@ -3,7 +3,7 @@
 
 use typst::foundations::{NativeElement as _, Smart, StyleChain, StyledElem, Styles};
 use typst::introspection::Tag;
-use typst::layout::{AlignElem, BlockElem, Dir, Frame, FrameItem, PadElem, PageElem};
+use typst::layout::{AlignElem, BlockElem, Dir, Frame, FrameItem, PadElem, PageElem, Point};
 use typst::model::{Document, Numbering};
 use typst::pdf::{ArtifactElem, ArtifactKind};
 use typst::text::TextElem;
@@ -243,10 +243,42 @@ impl<'a> ExtractorContext<'a> {
             self.zero_header_footer_paragraph_spacing(&mut setup.header);
             self.zero_header_footer_paragraph_spacing(&mut setup.footer);
 
-            setup.header_margin_pt = (!setup.header.is_empty())
-                .then(|| self.find_artifact_y_bounds(page_nodes, ArtifactKind::Header))
-                .flatten()
-                .map(|(min_y, _)| min_y.clamp(0.0, (setup.margin_top_pt - 4.0).max(0.0)))
+            let header_bounds = (!setup.header.is_empty())
+                .then(|| {
+                    self.find_artifact_content_bounds(
+                        page_nodes,
+                        Point::zero(),
+                        ArtifactKind::Header,
+                    )
+                })
+                .flatten();
+            let footer_bounds = (!setup.footer.is_empty())
+                .then(|| {
+                    self.find_artifact_content_bounds(
+                        page_nodes,
+                        Point::zero(),
+                        ArtifactKind::Footer,
+                    )
+                })
+                .flatten();
+
+            if let Some((vis_min_x, _, _, _)) = header_bounds {
+                Self::reconcile_furniture_left_indent(
+                    &mut setup.header,
+                    vis_min_x,
+                    setup.margin_left_pt,
+                );
+            }
+            if let Some((vis_min_x, _, _, _)) = footer_bounds {
+                Self::reconcile_furniture_left_indent(
+                    &mut setup.footer,
+                    vis_min_x,
+                    setup.margin_left_pt,
+                );
+            }
+
+            setup.header_margin_pt = header_bounds
+                .map(|(_, min_y, _, _)| min_y.clamp(0.0, (setup.margin_top_pt - 4.0).max(0.0)))
                 .unwrap_or_else(|| {
                     if setup.margin_top_pt < 48.0 {
                         (setup.margin_top_pt * 0.5).clamp(0.0, setup.margin_top_pt)
@@ -254,10 +286,8 @@ impl<'a> ExtractorContext<'a> {
                         (setup.margin_top_pt * 0.58).max(28.0).min(setup.margin_top_pt)
                     }
                 });
-            setup.footer_margin_pt = (!setup.footer.is_empty())
-                .then(|| self.find_artifact_y_bounds(page_nodes, ArtifactKind::Footer))
-                .flatten()
-                .map(|(_, max_y)| {
+            setup.footer_margin_pt = footer_bounds
+                .map(|(_, _, _, max_y)| {
                     let dist_bottom = (setup.height_pt - max_y).max(0.0);
                     dist_bottom.clamp(0.0, (setup.margin_bottom_pt - 4.0).max(0.0))
                 })
@@ -440,29 +470,103 @@ impl<'a> ExtractorContext<'a> {
         }
     }
 
-    pub(crate) fn find_artifact_y_bounds(
+    /// When an outer transparent full-bleed wrapper `Group` at `x = 0` pulls a header/footer
+    /// table or paragraph all the way to `-margin_left_pt` even though its visible content starts
+    /// further right (e.g. `#pad(x: 20pt)` inside `#pad(x: -40pt)`), restore `left_indent_pt` to
+    /// match the actual laid-out `vis_min_x`.
+    fn reconcile_furniture_left_indent(
+        blocks: &mut [BlockNode],
+        vis_min_x: f64,
+        margin_left_pt: f64,
+    ) {
+        if !vis_min_x.is_finite() || vis_min_x < 0.0 {
+            return;
+        }
+        for block in blocks.iter_mut() {
+            match block {
+                BlockNode::Table(t) if t.align == HAlignIr::Left => {
+                    let mut col0_has_content = false;
+                    let mut col0_left_aligned = true;
+                    let mut col0_inset_left = f64::INFINITY;
+                    for row in &t.rows {
+                        if let Some(cell) = row.cells.first().filter(|c| c.x == 0 && !c.blocks.is_empty()) {
+                            col0_has_content = true;
+                            if !matches!(cell.halign, HAlignIr::Left | HAlignIr::Justify) {
+                                col0_left_aligned = false;
+                            }
+                            col0_inset_left = col0_inset_left.min(cell.inset.left);
+                        }
+                    }
+                    if col0_has_content && col0_left_aligned {
+                        let inset = if col0_inset_left.is_finite() {
+                            col0_inset_left
+                        } else {
+                            0.0
+                        };
+                        let expected_indent = (vis_min_x - inset).max(0.0) - margin_left_pt;
+                        if t.left_indent_pt < expected_indent - 1.5 {
+                            t.left_indent_pt = expected_indent;
+                        }
+                    }
+                }
+                BlockNode::Paragraph { style, .. }
+                    if matches!(style.align, HAlignIr::Left | HAlignIr::Justify) =>
+                {
+                    let expected_indent = vis_min_x.max(0.0) - margin_left_pt;
+                    if style.left_indent_pt < expected_indent - 1.5 {
+                        style.left_indent_pt = expected_indent;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Measure the visual bounding box `(min_x, min_y, max_x, max_y)` of the actual visible leaf
+    /// items (text, visible shapes, images) inside a header/footer `ArtifactElem`, descending
+    /// through transparent wrapper `Group`s rather than stopping at their outer `(0, 0)` box.
+    pub(crate) fn find_artifact_content_bounds(
         &self,
         nodes: &[TreeNode],
+        offset: Point,
         target_kind: ArtifactKind,
-    ) -> Option<(f64, f64)> {
+    ) -> Option<(f64, f64, f64, f64)> {
         for node in nodes {
             match node {
                 TreeNode::Element { elem, children, .. } => {
                     if let Some(artifact) = elem.to_packed::<ArtifactElem>()
                         && artifact.kind.get(StyleChain::default()) == target_kind
                     {
-                        let (_, min_y, width, height) = Self::estimate_nodes_bbox(children);
-                        if (width > 0.0 || height > 0.0) && min_y.is_finite() && height.is_finite()
+                        let mut min_x = f64::INFINITY;
+                        let mut min_y = f64::INFINITY;
+                        let mut max_x = f64::NEG_INFINITY;
+                        let mut max_y = f64::NEG_INFINITY;
+                        Self::accumulate_visible_leaf_bbox(
+                            children,
+                            offset,
+                            &mut min_x,
+                            &mut min_y,
+                            &mut max_x,
+                            &mut max_y,
+                        );
+                        if min_x.is_finite()
+                            && min_y.is_finite()
+                            && max_x.is_finite()
+                            && max_y.is_finite()
                         {
-                            return Some((min_y, min_y + height));
+                            return Some((min_x, min_y, max_x, max_y));
                         }
                     }
-                    if let Some(bounds) = self.find_artifact_y_bounds(children, target_kind) {
+                    if let Some(bounds) =
+                        self.find_artifact_content_bounds(children, offset, target_kind)
+                    {
                         return Some(bounds);
                     }
                 }
-                TreeNode::Group { children, .. } => {
-                    if let Some(bounds) = self.find_artifact_y_bounds(children, target_kind) {
+                TreeNode::Group { pos, children, .. } => {
+                    if let Some(bounds) =
+                        self.find_artifact_content_bounds(children, offset + *pos, target_kind)
+                    {
                         return Some(bounds);
                     }
                 }
@@ -470,6 +574,86 @@ impl<'a> ExtractorContext<'a> {
             }
         }
         None
+    }
+
+    fn accumulate_visible_leaf_bbox(
+        nodes: &[TreeNode],
+        offset: Point,
+        min_x: &mut f64,
+        min_y: &mut f64,
+        max_x: &mut f64,
+        max_y: &mut f64,
+    ) {
+        for node in nodes {
+            match node {
+                TreeNode::Text { text, pos, .. } => {
+                    if text.text.trim().is_empty() {
+                        continue;
+                    }
+                    let x = (offset.x + pos.x).to_pt();
+                    let y = (offset.y + pos.y - text.size * 0.85).to_pt();
+                    *min_x = min_x.min(x);
+                    *min_y = min_y.min(y);
+                    *max_x = max_x.max(x + text.width().to_pt());
+                    *max_y = max_y.max(y + text.size.to_pt() * 1.15);
+                }
+                TreeNode::Group {
+                    group,
+                    pos,
+                    children,
+                } => {
+                    if !children.is_empty() {
+                        Self::accumulate_visible_leaf_bbox(
+                            children,
+                            offset + *pos,
+                            min_x,
+                            min_y,
+                            max_x,
+                            max_y,
+                        );
+                    } else {
+                        let gx = (offset.x + pos.x).to_pt();
+                        let gy = (offset.y + pos.y).to_pt();
+                        let gsz = group.frame.size();
+                        if gsz.x.to_pt() > 0.0 && gsz.y.to_pt() > 0.0 {
+                            *min_x = min_x.min(gx);
+                            *min_y = min_y.min(gy);
+                            *max_x = max_x.max(gx + gsz.x.to_pt());
+                            *max_y = max_y.max(gy + gsz.y.to_pt());
+                        }
+                    }
+                }
+                TreeNode::Element { elem, children, .. } => {
+                    if elem.is::<typst::layout::HideElem>() {
+                        continue;
+                    }
+                    Self::accumulate_visible_leaf_bbox(
+                        children, offset, min_x, min_y, max_x, max_y,
+                    );
+                }
+                TreeNode::Image { size, pos, .. } => {
+                    let x = (offset.x + pos.x).to_pt();
+                    let y = (offset.y + pos.y).to_pt();
+                    *min_x = min_x.min(x);
+                    *min_y = min_y.min(y);
+                    *max_x = max_x.max(x + size.x.to_pt());
+                    *max_y = max_y.max(y + size.y.to_pt());
+                }
+                TreeNode::Shape { shape, pos, .. } => {
+                    if shape.fill.is_none() && shape.stroke.is_none() {
+                        continue;
+                    }
+                    let b = shape.geometry.bbox(None);
+                    let x = (offset.x + pos.x + b.min.x).to_pt();
+                    let y = (offset.y + pos.y + b.min.y).to_pt();
+                    *min_x = min_x.min(x);
+                    *min_y = min_y.min(y);
+                    *max_x = max_x.max(x + b.size().x.to_pt());
+                    *max_y = max_y.max(y + b.size().y.to_pt());
+                }
+                _ => {}
+            }
+        }
     }
 
     pub(crate) fn collect_header_footer_artifacts(

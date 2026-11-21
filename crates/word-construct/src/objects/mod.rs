@@ -30,7 +30,10 @@ pub enum WordBlockObjectKind {
     Table,
     Quote,
     CodeBlock { is_table_backed: bool },
-    Figure,
+    Figure {
+        starts_with_table: bool,
+        ends_with_table: bool,
+    },
     EquationBlock { is_table_backed: bool },
     ShapeBlock,
     CetzCanvas,
@@ -47,7 +50,7 @@ pub enum WordBlockObjectKind {
 impl WordBlockObjectKind {
     /// Classify a [`BlockNode`] into its exhaustive [`WordBlockObjectKind`].
     #[inline]
-    pub const fn classify(block: &BlockNode) -> Self {
+    pub fn classify(block: &BlockNode) -> Self {
         match block {
             BlockNode::Title { .. } => Self::Title,
             BlockNode::Heading { .. } => Self::Heading,
@@ -60,7 +63,29 @@ impl WordBlockObjectKind {
             BlockNode::CodeBlock { fill, stroke, .. } => Self::CodeBlock {
                 is_table_backed: fill.is_some() || stroke.is_some(),
             },
-            BlockNode::Figure { .. } => Self::Figure,
+            BlockNode::Figure {
+                body,
+                caption,
+                caption_pos,
+                ..
+            } => {
+                let has_top_caption =
+                    caption.is_some() && *caption_pos == ir::CaptionPositionIr::Top;
+                let has_bottom_caption =
+                    caption.is_some() && *caption_pos == ir::CaptionPositionIr::Bottom;
+                let starts_with_table = !has_top_caption
+                    && body
+                        .first()
+                        .is_some_and(|b| Self::classify(b).starts_with_table());
+                let ends_with_table = !has_bottom_caption
+                    && body
+                        .last()
+                        .is_some_and(|b| Self::classify(b).ends_with_table());
+                Self::Figure {
+                    starts_with_table,
+                    ends_with_table,
+                }
+            }
             BlockNode::EquationBlock(eq) => Self::EquationBlock {
                 is_table_backed: eq.numbering_text.is_some(),
             },
@@ -77,11 +102,9 @@ impl WordBlockObjectKind {
         }
     }
 
-    /// Whether this Word block object is emitted as a top-level `<w:tbl>` (requiring a minimal
-    /// separator `<w:p>` if immediately followed by another `<w:tbl>`-backed block so Word
-    /// does not merge the two tables).
+    /// Whether this Word block object starts with a `<w:tbl>` element.
     #[inline]
-    pub const fn is_table_backed(self) -> bool {
+    pub const fn starts_with_table(self) -> bool {
         matches!(
             self,
             Self::Table
@@ -92,7 +115,39 @@ impl WordBlockObjectKind {
                 | Self::CodeBlock {
                     is_table_backed: true
                 }
+                | Self::Figure {
+                    starts_with_table: true,
+                    ..
+                }
         )
+    }
+
+    /// Whether this Word block object ends with a `<w:tbl>` element.
+    #[inline]
+    pub const fn ends_with_table(self) -> bool {
+        matches!(
+            self,
+            Self::Table
+                | Self::UnsupportedBlock
+                | Self::EquationBlock {
+                    is_table_backed: true
+                }
+                | Self::CodeBlock {
+                    is_table_backed: true
+                }
+                | Self::Figure {
+                    ends_with_table: true,
+                    ..
+                }
+        )
+    }
+
+    /// Whether this Word block object is emitted as a top-level `<w:tbl>` (requiring a minimal
+    /// separator `<w:p>` if immediately followed by another `<w:tbl>`-backed block so Word
+    /// does not merge the two tables).
+    #[inline]
+    pub const fn is_table_backed(self) -> bool {
+        self.starts_with_table() || self.ends_with_table()
     }
 }
 
@@ -172,12 +227,12 @@ impl BlockSequenceNeighborContext {
             };
 
         let enum_after_table_block =
-            prev.is_some_and(|b| WordBlockObjectKind::classify(b).is_table_backed());
+            prev.is_some_and(|b| WordBlockObjectKind::classify(b).ends_with_table());
 
-        let cur_is_table = WordBlockObjectKind::classify(block).is_table_backed();
-        let next_is_table =
-            next.is_some_and(|b| WordBlockObjectKind::classify(b).is_table_backed());
-        let table_to_table_separator_after_dxa = if cur_is_table && next_is_table {
+        let cur_ends_with_table = WordBlockObjectKind::classify(block).ends_with_table();
+        let next_starts_with_table =
+            next.is_some_and(|b| WordBlockObjectKind::classify(b).starts_with_table());
+        let table_to_table_separator_after_dxa = if cur_ends_with_table && next_starts_with_table {
             Some(doc.solved_after_dxa(id).unwrap_or(40))
         } else {
             None

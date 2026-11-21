@@ -26,6 +26,14 @@ impl<'a> DocxWriter<'a> {
         let construct = TableConstruct::solve(table);
         let table_kind = construct.kind;
 
+        // OOXML invariant: two consecutive `<w:tbl>` elements without an intervening `<w:p>`
+        // are merged by Word into a single table (crushing a wider grid/table into the previous
+        // table's column grid). Guarantee a minimal separator paragraph whenever the preceding
+        // XML ended with `</w:tbl>` (e.g. `Figure(Table)` followed by `LayoutGrid`).
+        if out.ends_with("</w:tbl>") {
+            crate::xml_helpers::write_exact_spacer_p(40, 40, false, out);
+        }
+
         out.push_str("<w:tbl><w:tblPr>");
         Self::render_table_jc(construct.align, out);
         if let Some(ind_dxa) = construct.indent_dxa {
@@ -34,6 +42,7 @@ impl<'a> DocxWriter<'a> {
         match construct.width {
             TableWidthConstruct::ExactDxa(total_w_dxa) => {
                 let _ = write!(out, r#"<w:tblW w:w="{total_w_dxa}" w:type="dxa"/>"#);
+                out.push_str(r#"<w:tblLayout w:type="fixed"/>"#);
             }
             TableWidthConstruct::FullWidthPct5000 => {
                 out.push_str(r#"<w:tblW w:w="5000" w:type="pct"/>"#);

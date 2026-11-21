@@ -129,11 +129,19 @@ impl HeadingConstruct {
                     }
                 })
                 .or_else(|| Some("Libertinus Serif".to_string()));
+            let color = content.iter().find_map(|inl| {
+                if let InlineNode::Text(r) = inl {
+                    r.color.clone()
+                } else {
+                    None
+                }
+            });
             TextRunIr {
                 text,
                 font_family,
                 font_size_pt: Some(sz_pt),
                 bold: true,
+                color,
                 ..Default::default()
             }
         });

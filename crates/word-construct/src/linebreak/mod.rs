@@ -18,7 +18,7 @@ pub use first_fit::FirstFitBreaker;
 pub use knuth_plass::KnuthPlassBreaker;
 pub use ptls7::{
     LineBreakCause, Ptls7BreakClass, Ptls7PairAction, WordScriptOverridePolicy,
-    is_aat_only_cjk_font_triggering_dflt_override,
+    is_aat_only_cjk_font_triggering_dflt_override, is_aat_only_cjk_font_with_metrics,
 };
 
 /// Semantic kind of an inline token during line-breaking.

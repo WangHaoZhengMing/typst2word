@@ -1,6 +1,12 @@
 //! Page-margin policies calibrated from binary OpenType font tables (`OS/2.sCapHeight`
 //! vs `usWinAscent`/`hhea.ascent`) and Microsoft Word's 300-DPI PDF `Tm` first-line baselines.
 
+use std::collections::BTreeMap;
+
+use ir::FontFaceMetricsIr;
+
+use crate::font_metrics::FontMetricsResolver;
+
 /// Measured 12pt first-line baseline deltas (`Word PDF Tm baseline - Typst OS/2.sCapHeight`, in `pt`):
 /// - `Times New Roman` (`11.280 - 7.945 = 3.335 pt`)
 pub const TIMES_LATIN_12PT_TOP_DELTA_PT: f64 = 3.335;
@@ -107,13 +113,35 @@ impl PageMarginCalibration {
         font_size_pt: Option<f64>,
         first_block_is_cjk: bool,
     ) -> (f64, f64) {
+        self.margins_for_first_line_with_metrics(
+            top_pt,
+            bottom_pt,
+            font_family,
+            font_size_pt,
+            first_block_is_cjk,
+            &BTreeMap::new(),
+        )
+    }
+
+    /// Calibrate page top/bottom margins preferring extracted binary OpenType tables
+    /// (`font_metrics`) via [`FontMetricsResolver::first_line_top_overhang_pt`], falling back
+    /// to measured 12pt deltas when binary font metrics are unavailable.
+    pub fn margins_for_first_line_with_metrics(
+        self,
+        top_pt: f64,
+        bottom_pt: f64,
+        font_family: Option<&str>,
+        font_size_pt: Option<f64>,
+        first_block_is_cjk: bool,
+        font_metrics: &BTreeMap<String, FontFaceMetricsIr>,
+    ) -> (f64, f64) {
         match self {
             Self::Preserve => (top_pt, bottom_pt),
             Self::LegacyWord => {
                 // Never inflate explicit zero margins (`margin: 0pt`) into 18pt, and never emit
                 // negative `w:top` (which Word interprets as fixed-margin mode and pushes down).
-                let top_offset =
-                    measured_first_line_top_delta_pt(font_family, font_size_pt, first_block_is_cjk);
+                let top_offset = FontMetricsResolver::new(font_metrics)
+                    .first_line_top_overhang_pt(font_family, font_size_pt, first_block_is_cjk);
                 let top = if top_pt <= 0.5 {
                     top_pt.max(0.0)
                 } else {

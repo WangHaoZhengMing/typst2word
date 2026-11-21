@@ -27,7 +27,7 @@ impl<'a> DocxWriter<'a> {
                     r#"<w:hyperlink w:anchor="{}" w:history="1">"#,
                     escape_xml(a)
                 );
-                self.render_link_styled_inlines(content, out);
+                self.render_inlines(content, out);
                 out.push_str("</w:hyperlink>");
             }
             None => {
@@ -51,15 +51,18 @@ impl<'a> DocxWriter<'a> {
         for inline in inlines {
             if let InlineNode::Text(run) = inline {
                 let mut styled = run.clone();
+                // Only apply default Word hyperlink blue + underline when Typst did not
+                // explicitly style the link run's color; preserve explicit Typst colors
+                // without forcing unwanted underlines.
                 if styled.color.is_none() {
                     styled.color = Some("0563C1".to_string());
-                }
-                if styled.underline.is_none() {
-                    styled.underline = Some(StrokeIr {
-                        color: "0563C1".to_string(),
-                        thickness_pt: 0.75,
-                        ..Default::default()
-                    });
+                    if styled.underline.is_none() {
+                        styled.underline = Some(StrokeIr {
+                            color: "0563C1".to_string(),
+                            thickness_pt: 0.75,
+                            ..Default::default()
+                        });
+                    }
                 }
                 self.render_text_run(&styled, out);
             } else {

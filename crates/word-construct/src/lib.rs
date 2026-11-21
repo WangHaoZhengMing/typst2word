@@ -39,16 +39,18 @@ pub use equation_box::{
     EquationBoxInput, EquationVerticalProfile, FractionScaleMode, WordEquationBox,
 };
 pub use font_metrics::{
-    FontMetricsProvider, FontParadigm, ParagraphInlineProfile, RawFontMetrics, ShapingWorkaround,
-    WORD_CJK_FACTOR, WordFontClass, WordFontMetricsProvider, WordLineBox, WordLineBoxSpec,
-    estimate_text_advance_pt, is_cjk_or_fullwidth_char, lookup_known_font, str_has_cjk_chars,
+    FontMetricsProvider, FontMetricsResolver, FontParadigm, ParagraphInlineProfile, RawFontMetrics,
+    ShapingWorkaround, WORD_CJK_FACTOR, WordFontClass, WordFontMetricsProvider, WordLineBox,
+    WordLineBoxSpec, estimate_text_advance_pt, is_cjk_or_fullwidth_char, lookup_known_font,
+    str_has_cjk_chars,
 };
 pub use linebreak::{
     BrokenLine, FirstFitBreaker, InlineSpan, InlineToken, KnuthPlassBreaker, LineBreakCause,
     LineBreaker, Ptls7BreakClass, Ptls7PairAction, TokenKind, WordScriptOverridePolicy,
-    break_paragraph_with_policy, is_aat_only_cjk_font_triggering_dflt_override, tokenize_spans,
-    tokenize_spans_with_script_policy,
+    break_paragraph_with_policy, is_aat_only_cjk_font_triggering_dflt_override,
+    is_aat_only_cjk_font_with_metrics, tokenize_spans, tokenize_spans_with_script_policy,
 };
+pub use pipeline::flow_spacing::{BlockMarginCarrier, PageVerticalBand, WordBlockVerticalBox};
 pub use list_box::{
     EnumMarkerWidthKind, FollowingBlockKind, ListItemLayoutInput, WordListItemLayout,
 };
@@ -716,5 +718,138 @@ mod tests {
                 mark_sz_half_pt: 19,
             }
         );
+    }
+
+    #[test]
+    fn test_p1_font_metrics_resolver_binary_first_and_unified_cjk() {
+        use std::collections::BTreeMap;
+
+        // 1. Unified CJK character predicate includes Hangul and CJK Ext B (previously missed).
+        assert!(is_cjk_or_fullwidth_char('中'));
+        assert!(is_cjk_or_fullwidth_char('한'));
+        assert!(is_cjk_or_fullwidth_char('𠀀'));
+        assert!(!is_cjk_or_fullwidth_char('A'));
+
+        // 2. WordFontMetricsProvider aligns with WordLineBox on PingFang SC (`1.82x`) & SimSun/宋体 (`1.30x`).
+        let provider = WordFontMetricsProvider::new();
+        assert!((provider.single_line_height_pt(Some("PingFang SC"), 10.0) - 18.2).abs() < 0.05);
+        assert!((provider.single_line_height_pt(Some("SimSun"), 10.0) - 13.0).abs() < 0.05);
+        assert!((provider.single_line_height_pt(Some("宋体"), 10.0) - 13.0).abs() < 0.05);
+
+        // 3. Binary OpenType metrics drive first-line overhang & AAT detection for unknown fonts.
+        let mut faces = BTreeMap::new();
+        faces.insert(
+            "CustomCjkAat".to_string(),
+            ir::FontFaceMetricsIr {
+                upem: 1000,
+                hhea_ascender: 900,
+                hhea_descender: -200,
+                hhea_line_gap: 0,
+                s_cap_height: Some(750),
+                s_typo_ascender: Some(880),
+                s_typo_descender: Some(-120),
+                us_win_ascent: Some(900),
+                us_win_descent: Some(200),
+                has_cjk_codepage: true,
+                has_gsub_hani: false,
+                is_monospaced: false,
+                is_system_installed: true,
+            },
+        );
+        faces.insert(
+            "CustomLatinSans".to_string(),
+            ir::FontFaceMetricsIr {
+                upem: 2048,
+                hhea_ascender: 1854,
+                hhea_descender: -434,
+                hhea_line_gap: 67,
+                s_cap_height: Some(1467),
+                s_typo_ascender: Some(1491),
+                s_typo_descender: Some(-431),
+                us_win_ascent: Some(1854),
+                us_win_descent: Some(434),
+                has_cjk_codepage: false,
+                has_gsub_hani: false,
+                is_monospaced: false,
+                is_system_installed: true,
+            },
+        );
+
+        let resolver = FontMetricsResolver::new(&faces);
+        assert!(resolver.is_cjk_font(Some("CustomCjkAat")));
+        assert!(!resolver.is_cjk_font(Some("CustomLatinSans")));
+        assert!(is_aat_only_cjk_font_with_metrics(Some("CustomCjkAat"), &faces));
+        assert!(!is_aat_only_cjk_font_with_metrics(
+            Some("CustomLatinSans"),
+            &faces
+        ));
+
+        // CustomCjkAat at 12pt: base_asc=0.90, hhea_span=1.10, word_baseline=0.90 + 0.15*1.10 = 1.065
+        // overhang = 12 * (1.065 - 0.750) = 3.78pt (NOT fallback 4.80pt!)
+        let cjk_delta = resolver.first_line_top_overhang_pt(Some("CustomCjkAat"), Some(12.0), true);
+        assert!(
+            (cjk_delta - 3.78).abs() < 0.02,
+            "expected ~3.78pt binary overhang, got {cjk_delta}"
+        );
+
+        // CustomLatinSans (Arial binary metrics) at 12pt: (1854+67)/2048 - 1467/2048 = 0.22168 => 2.66pt
+        let latin_delta =
+            resolver.first_line_top_overhang_pt(Some("CustomLatinSans"), Some(12.0), false);
+        assert!(
+            (latin_delta - 2.66).abs() < 0.05,
+            "expected ~2.66pt binary overhang, got {latin_delta}"
+        );
+    }
+
+    #[test]
+    fn test_p1_word_block_vertical_box_unifies_inter_block_air() {
+        let para = ir::BlockNode::Paragraph {
+            id: ir::NodeId::UNSET,
+            content: Vec::new(),
+            style: ir::ParagraphStyleIr {
+                resolved_font_size_pt: Some(10.0),
+                ..Default::default()
+            },
+            bookmark: None,
+        };
+        let shape = ir::BlockNode::ShapeBlock(ir::ShapeIr {
+            id: ir::NodeId::UNSET,
+            kind: ir::ShapeKindIr::Rect,
+            width_pt: 100.0,
+            height_pt: 20.0,
+            fill: None,
+            fill_rule_even_odd: false,
+            stroke: None,
+            borders: Default::default(),
+            corner_radius_pt: None,
+            inset: Default::default(),
+            rotation_deg: 0.0,
+            scale_x: 1.0,
+            scale_y: 1.0,
+            body: Vec::new(),
+            align: ir::HAlignIr::Left,
+            placed_offset_pt: None,
+            baseline_shift_pt: None,
+        });
+        let hr = ir::BlockNode::HorizontalRule {
+            id: ir::NodeId::UNSET,
+            stroke: Default::default(),
+            length_pt: 200.0,
+            align: ir::HAlignIr::Left,
+            left_indent_pt: 0.0,
+        };
+
+        let box_para = WordBlockVerticalBox::for_block(&para, 10.0);
+        let box_shape = WordBlockVerticalBox::for_block(&shape, 10.0);
+        let box_hr = WordBlockVerticalBox::for_block(&hr, 10.0);
+
+        // Shape -> Shape subtracts 0.02 + 0.02 = 0.04 * 10 = 0.4pt
+        assert!((WordBlockVerticalBox::needed_gap_pt(box_shape, box_shape, 10.0) - 9.6).abs() < 1e-6);
+        // Shape -> Paragraph subtracts 0.02 + 0.20 = 0.22 * 10 = 2.2pt
+        assert!((WordBlockVerticalBox::needed_gap_pt(box_shape, box_para, 10.0) - 7.8).abs() < 1e-6);
+        // HorizontalRule -> Paragraph subtracts 0.0 + 0.20 = 2.0pt
+        assert!((WordBlockVerticalBox::needed_gap_pt(box_hr, box_para, 10.0) - 8.0).abs() < 1e-6);
+        // Paragraph -> HorizontalRule subtracts 0.18 + 0.0 = 1.8pt
+        assert!((WordBlockVerticalBox::needed_gap_pt(box_para, box_hr, 10.0) - 8.2).abs() < 1e-6);
     }
 }

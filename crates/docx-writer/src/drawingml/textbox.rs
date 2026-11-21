@@ -1,7 +1,7 @@
 //! Shape / label body blocks -> `<w:txbxContent>` paragraphs, tables, and runs.
 
 use crate::inlines::text::render_text_run_xml;
-use crate::math::{render_equation_omml, render_equation_omml_with_font};
+use crate::math::render_equation_omml_with_font;
 use crate::writer::DocxWriter;
 use word_construct::model::{BlockNode, HAlignIr, InlineNode, TextRunIr};
 use word_construct::shape::FirstParaExactLayout;
@@ -40,6 +40,7 @@ pub(crate) fn render_textbox_blocks_with_first_override(
                         exact.line_dxa,
                         true,
                         exact.after_dxa,
+                        writer.doc.math_font_family.as_deref(),
                     ));
                     continue;
                 }
@@ -58,6 +59,7 @@ pub(crate) fn render_textbox_blocks_with_first_override(
                     style.align,
                     line_dxa,
                     after_dxa,
+                    writer.doc.math_font_family.as_deref(),
                 ));
             }
             BlockNode::Heading { content, align, .. }
@@ -73,6 +75,7 @@ pub(crate) fn render_textbox_blocks_with_first_override(
                     *align,
                     line_dxa,
                     after_dxa,
+                    writer.doc.math_font_family.as_deref(),
                 ));
             }
             BlockNode::EquationBlock(eq) => {
@@ -158,6 +161,7 @@ pub(crate) fn render_textbox_blocks_with_first_override(
                         exact.line_dxa,
                         true,
                         exact.after_dxa,
+                        writer.doc.math_font_family.as_deref(),
                     ));
                     continue;
                 }
@@ -174,6 +178,7 @@ pub(crate) fn render_textbox_blocks_with_first_override(
                         line_dxa,
                         is_exact,
                         0,
+                        writer.doc.math_font_family.as_deref(),
                     ));
                 }
             }
@@ -188,6 +193,7 @@ pub(crate) fn render_textbox_blocks_with_first_override(
                     &[InlineNode::Text(run)],
                     HAlignIr::Left,
                     None,
+                    writer.doc.math_font_family.as_deref(),
                 ));
             }
             _ => {}
@@ -205,8 +211,9 @@ pub(crate) fn render_inline_nodes_as_txbx_para(
     inlines: &[InlineNode],
     align: HAlignIr,
     line_spacing_pt: Option<f64>,
+    math_font: Option<&str>,
 ) -> String {
-    render_inline_nodes_as_txbx_para_with_after(inlines, align, line_spacing_pt, 0)
+    render_inline_nodes_as_txbx_para_with_after(inlines, align, line_spacing_pt, 0, math_font)
 }
 
 pub(crate) fn render_inline_nodes_as_txbx_para_with_after(
@@ -214,9 +221,10 @@ pub(crate) fn render_inline_nodes_as_txbx_para_with_after(
     align: HAlignIr,
     line_spacing_pt: Option<f64>,
     after_dxa: i64,
+    math_font: Option<&str>,
 ) -> String {
     let line_dxa = word_construct::paragraph::compute_line_spacing_dxa(inlines, line_spacing_pt);
-    render_inline_nodes_as_txbx_para_with_line_dxa(inlines, align, line_dxa, after_dxa)
+    render_inline_nodes_as_txbx_para_with_line_dxa(inlines, align, line_dxa, after_dxa, math_font)
 }
 
 pub(crate) fn render_inline_nodes_as_txbx_para_with_line_dxa(
@@ -224,8 +232,11 @@ pub(crate) fn render_inline_nodes_as_txbx_para_with_line_dxa(
     align: HAlignIr,
     line_dxa: i64,
     after_dxa: i64,
+    math_font: Option<&str>,
 ) -> String {
-    render_inline_nodes_as_txbx_para_with_spacing(inlines, align, line_dxa, false, after_dxa)
+    render_inline_nodes_as_txbx_para_with_spacing(
+        inlines, align, line_dxa, false, after_dxa, math_font,
+    )
 }
 
 pub(crate) fn render_inline_nodes_as_txbx_para_with_spacing(
@@ -234,6 +245,7 @@ pub(crate) fn render_inline_nodes_as_txbx_para_with_spacing(
     line_dxa: i64,
     line_rule_exact: bool,
     after_dxa: i64,
+    math_font: Option<&str>,
 ) -> String {
     let jc = match align {
         HAlignIr::Left => "left",
@@ -248,25 +260,29 @@ pub(crate) fn render_inline_nodes_as_txbx_para_with_spacing(
         .map(crate::xml_helpers::format_mark_rpr_half_pt)
         .unwrap_or_default();
     let mut runs_xml = String::new();
-    render_inline_nodes_to_wml(inlines, &mut runs_xml);
+    render_inline_nodes_to_wml(inlines, math_font, &mut runs_xml);
     format!(
         r#"<w:p><w:pPr><w:jc w:val="{jc}"/><w:spacing w:before="0" w:after="{after_dxa}" w:line="{line_dxa}" w:lineRule="{line_rule}"/>{mark_rpr}</w:pPr>{runs_xml}</w:p>"#
     )
 }
 
-pub(crate) fn render_inline_nodes_to_wml(inlines: &[InlineNode], out: &mut String) {
+pub(crate) fn render_inline_nodes_to_wml(
+    inlines: &[InlineNode],
+    math_font: Option<&str>,
+    out: &mut String,
+) {
     for node in inlines {
         match node {
             InlineNode::Text(run) => {
                 render_text_run_xml(run, out);
             }
             InlineNode::EquationInline(eq) => {
-                render_equation_omml(eq, out);
+                render_equation_omml_with_font(eq, math_font, out);
             }
             InlineNode::Link { content, .. }
             | InlineNode::Ref { content, .. }
             | InlineNode::Citation { content, .. } => {
-                render_inline_nodes_to_wml(content, out);
+                render_inline_nodes_to_wml(content, math_font, out);
             }
             InlineNode::LineBreak => {
                 out.push_str("<w:r><w:br/></w:r>");

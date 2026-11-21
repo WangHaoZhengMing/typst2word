@@ -11,16 +11,13 @@ pub(crate) fn render_text_run_xml(run: &TextRunIr, out: &mut String) {
     render_text_run_xml_with_spacing(run, None, out);
 }
 
-pub(crate) fn render_text_run_xml_with_spacing(
+pub(crate) fn render_text_run_rpr_xml(
     run: &TextRunIr,
     extra_char_spacing_dxa: Option<i32>,
     out: &mut String,
 ) {
-    if run.text.is_empty() {
-        return;
-    }
     let construct = TextRunConstruct::solve_with_spacing(run, extra_char_spacing_dxa);
-    out.push_str("<w:r><w:rPr>");
+    out.push_str("<w:rPr>");
     if let Some(fam) = construct.font_family {
         let esc = escape_xml(fam);
         let hint_attr = construct.east_asia_hint.as_xml_attr();
@@ -104,7 +101,20 @@ pub(crate) fn render_text_run_xml_with_spacing(
             outline.color
         );
     }
-    out.push_str("</w:rPr><w:t xml:space=\"preserve\">");
+    out.push_str("</w:rPr>");
+}
+
+pub(crate) fn render_text_run_xml_with_spacing(
+    run: &TextRunIr,
+    extra_char_spacing_dxa: Option<i32>,
+    out: &mut String,
+) {
+    if run.text.is_empty() {
+        return;
+    }
+    out.push_str("<w:r>");
+    render_text_run_rpr_xml(run, extra_char_spacing_dxa, out);
+    out.push_str("<w:t xml:space=\"preserve\">");
     out.push_str(&escape_xml(&run.text));
     out.push_str("</w:t></w:r>");
 }

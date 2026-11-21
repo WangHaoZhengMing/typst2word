@@ -57,8 +57,7 @@ impl<'a> DocxWriter<'a> {
             )
             + &format!(
                 r#"
-  <w:characterSpacingControl w:val="doNotCompress"/>
-  <w:doNotExpandShiftReturn/>{mirror_pr}{even_odd_pr}{fn_pr}
+  <w:characterSpacingControl w:val="doNotCompress"/>{mirror_pr}{even_odd_pr}{fn_pr}
   <w:compat>
     <w:useFELayout/>
     <w:doNotExpandShiftReturn/>
@@ -91,8 +90,7 @@ impl<'a> DocxWriter<'a> {
   <w:defaultTabStop w:val="720"/>
   <w:characterSpacingControl w:val="doNotCompress"/>
   <w:autoSpaceDE w:val="1"/>
-  <w:autoSpaceDN w:val="1"/>
-  <w:doNotExpandShiftReturn/>{mirror_pr}{even_odd_pr}{fn_pr}
+  <w:autoSpaceDN w:val="1"/>{mirror_pr}{even_odd_pr}{fn_pr}
   <w:compat>
     <w:doNotExpandShiftReturn/>
     <w:noColumnBalance/>

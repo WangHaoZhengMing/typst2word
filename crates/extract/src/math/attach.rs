@@ -27,15 +27,21 @@ pub(crate) fn extract_attach(
     script_ctx.force_limits = None;
 
     let core_base = extract_math_child(&merged.base, styles, ctx);
-    let base_node = if tl.is_some() || bl.is_some() {
+    let bl_ir = bl
+        .as_ref()
+        .map(|c| extract_math_child(c, styles, script_ctx))
+        .filter(|n| !is_empty_math_node(n))
+        .map(Box::new);
+    let tl_ir = tl
+        .as_ref()
+        .map(|c| extract_math_child(c, styles, script_ctx))
+        .filter(|n| !is_empty_math_node(n))
+        .map(Box::new);
+    let base_node = if tl_ir.is_some() || bl_ir.is_some() {
         MathNodeIr::PreSubSup {
             base: Box::new(core_base),
-            sub: bl
-                .as_ref()
-                .map(|c| Box::new(extract_math_child(c, styles, script_ctx))),
-            sup: tl
-                .as_ref()
-                .map(|c| Box::new(extract_math_child(c, styles, script_ctx))),
+            sub: bl_ir,
+            sup: tl_ir,
         }
     } else {
         core_base
@@ -44,10 +50,14 @@ pub(crate) fn extract_attach(
     if base_limits {
         let lower = sub
             .as_ref()
-            .map(|c| Box::new(extract_math_child(c, styles, script_ctx)));
+            .map(|c| extract_math_child(c, styles, script_ctx))
+            .filter(|n| !is_empty_math_node(n))
+            .map(Box::new);
         let upper = sup
             .as_ref()
-            .map(|c| Box::new(extract_math_child(c, styles, script_ctx)));
+            .map(|c| extract_math_child(c, styles, script_ctx))
+            .filter(|n| !is_empty_math_node(n))
+            .map(Box::new);
         if lower.is_some() || upper.is_some() {
             out.push(MathNodeIr::Limit {
                 base: Box::new(base_node),
@@ -62,10 +72,14 @@ pub(crate) fn extract_attach(
 
     let sub_ir = sub
         .as_ref()
-        .map(|c| Box::new(extract_math_child(c, styles, script_ctx)));
+        .map(|c| extract_math_child(c, styles, script_ctx))
+        .filter(|n| !is_empty_math_node(n))
+        .map(Box::new);
     let sup_ir = sup
         .as_ref()
-        .map(|c| Box::new(extract_math_child(c, styles, script_ctx)));
+        .map(|c| extract_math_child(c, styles, script_ctx))
+        .filter(|n| !is_empty_math_node(n))
+        .map(Box::new);
 
     if sub_ir.is_some() || sup_ir.is_some() {
         out.push(MathNodeIr::SubSup {
@@ -75,6 +89,14 @@ pub(crate) fn extract_attach(
         });
     } else {
         out.push(base_node);
+    }
+}
+
+fn is_empty_math_node(node: &MathNodeIr) -> bool {
+    match node {
+        MathNodeIr::Sequence(children) => children.iter().all(is_empty_math_node),
+        MathNodeIr::Run(run) => run.text.is_empty(),
+        _ => false,
     }
 }
 

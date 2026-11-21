@@ -46,7 +46,7 @@ pub use list::{EnumItemIr, ListItemIr, TermItemIr};
 pub use locale::{LocaleIr, TextDirIr};
 pub use normalize::{
     canonicalize_bookmark_anchors, clean_redundant_pagebreaks, coalesce_adjacent_text_runs,
-    merge_split_containers, merge_split_styled_containers, normalize_document_ir,
+    merge_split_containers, normalize_document_ir,
     visit_block_list_mut, visit_document_block_lists_mut, visit_document_inline_lists_mut,
     visit_page_setup_blocks_mut,
 };
@@ -419,10 +419,11 @@ impl BlockNode {
 }
 
 /// Dynamic document field (`counter(page)`, page-ref), with a cached display value retained from Typst.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FieldKindIr {
     Page,
     NumPages,
+    SectionPages,
     PageRef { bookmark: String },
 }
 

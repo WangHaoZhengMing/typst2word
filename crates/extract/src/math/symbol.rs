@@ -5,7 +5,8 @@ use typst::layout::{AlignElem, BoxElem, HElem, HideElem, PadElem, Spacing};
 use typst::math::{EquationElem, OpElem, PrimesElem};
 use typst::model::{EmphElem, LinkMarker, RefElem, StrongElem};
 use typst::text::{
-    HighlightElem, RawElem, SmartQuoteElem, SpaceElem, StrikeElem, SubElem, SuperElem, TextElem,
+    FontStyle, HighlightElem, RawElem, SmartQuoteElem, SpaceElem, StrikeElem, SubElem, SuperElem,
+    TextElem,
 };
 use typst::visualize::Paint;
 
@@ -66,8 +67,15 @@ pub(crate) fn extract_symbol_or_wrapper(
         return;
     }
     if let Some(txt) = content.to_packed::<TextElem>() {
-        let is_quoted_word = txt.text.chars().count() > 1;
-        if let Some(run) = build_math_run(&txt.text, styles, ctx, is_quoted_word) {
+        // In Typst math layout (`typst-layout/src/math/text.rs`), every `TextElem`
+        // (quoted strings including single-letter upright symbols like `"H"`, `"O"`, `"S"`,
+        // numbers, and text runs) disables math auto-italic unless explicitly italicized.
+        // Bare single-letter math variables (`$x$`, `$H$`) are `SymbolElem`, not `TextElem`.
+        let is_explicit_italic_text = matches!(
+            styles.get(TextElem::style),
+            FontStyle::Italic | FontStyle::Oblique
+        );
+        if let Some(run) = build_math_run(&txt.text, styles, ctx, !is_explicit_italic_text) {
             out.push(MathNodeIr::Run(run));
         }
         return;

@@ -13,6 +13,58 @@ export interface LocalFontData {
 
 const CJK_REGEX = /[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff]/;
 
+const CJK_FONT_FAMILY_HINTS = [
+  'song',
+  'pingfang',
+  'heiti',
+  'simsun',
+  'simhei',
+  'yahei',
+  'kaiti',
+  'fangsong',
+  'dengxian',
+  'youyuan',
+  'lishu',
+  'mingliu',
+  'mincho',
+  'meiryo',
+  'hiragino',
+  'malgun',
+  'batang',
+  'gulim',
+  'dotum',
+  'cjk',
+  'source han',
+  'noto serif sc',
+  'noto sans sc',
+  'noto serif tc',
+  'noto sans tc',
+  'noto serif hk',
+  'noto sans hk',
+  'noto serif jp',
+  'noto sans jp',
+  'noto serif kr',
+  'noto sans kr',
+  'fandol',
+  'wenkai',
+  'lxgw',
+  'sarasa',
+  'wqy',
+  'ar pl',
+];
+
+/**
+ * Determine whether a font family name is likely a CJK font without false-matching
+ * Latin families containing substrings like `"sc"` (e.g. `Cascadia`, `Script`, `EB Garamond SC`).
+ */
+export function isLikelyCjkFontFamily(family: string): boolean {
+  if (CJK_REGEX.test(family)) {
+    return true;
+  }
+  const lower = family.trim().toLowerCase();
+  return CJK_FONT_FAMILY_HINTS.some((hint) => lower.includes(hint));
+}
+
 const FAMILY_ALIASES: Record<string, string[]> = {
   宋体: ['SimSun', 'Songti SC', 'STSong', 'NSimSun'],
   simsun: ['SimSun', '宋体', 'Songti SC'],
@@ -183,22 +235,7 @@ export async function loadMatchingLocalFonts(
 
   // If document contains CJK text and no CJK family was matched yet, pick one native local CJK family.
   const hasCjkText = typSources.some((s) => CJK_REGEX.test(s));
-  const hasMatchedCjk = Array.from(matchedFamilies).some((f) => {
-    const l = f.toLowerCase();
-    return (
-      l.includes('song') ||
-      l.includes('pingfang') ||
-      l.includes('heiti') ||
-      l.includes('simsun') ||
-      l.includes('simhei') ||
-      l.includes('yahei') ||
-      l.includes('kaiti') ||
-      l.includes('fangsong') ||
-      l.includes('cjk') ||
-      l.includes('han') ||
-      l.includes('sc')
-    );
-  });
+  const hasMatchedCjk = Array.from(matchedFamilies).some(isLikelyCjkFontFamily);
   if (hasCjkText && !hasMatchedCjk) {
     for (const fallback of DEFAULT_LOCAL_CJK_FALLBACKS) {
       if (trySelectFamily(fallback, 2)) {

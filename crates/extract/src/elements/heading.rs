@@ -316,11 +316,37 @@ impl<'a> ExtractorContext<'a> {
         loc_opt: Option<Location>,
         children: &[TreeNode],
     ) -> (Option<String>, Vec<InlineNode>) {
-        let all_inlines = self.extract_inlines_flat_with_bold(children, true);
+        let mut all_inlines = self.extract_inlines_flat_with_bold(children, true);
         let chain = self.scoped_style_chain(loc_opt);
         if heading.numbering.get_ref(chain).is_none() {
             return (None, all_inlines);
         }
+
+        // Propagate resolved non-black `TextElem::fill` onto uncolored runs while keeping the
+        // structured `BlockNode::Heading.numbering` prefix intact (downstream `HeadingConstruct`
+        // inherits the heading body's color for `prefix_run`). Only keep the prefix inline when
+        // the prefix itself carries a distinct explicit color from the heading body.
+        let heading_fill_color = paint_to_hex(chain.get_ref(typst::text::TextElem::fill))
+            .filter(|c| c != "000000");
+        let inline_color = all_inlines.iter().find_map(|inl| match inl {
+            InlineNode::Text(r) => r.color.as_deref().filter(|&c| c != "000000").map(str::to_string),
+            _ => None,
+        });
+        let effective_color = heading_fill_color.or(inline_color);
+        if let Some(color_hex) = effective_color {
+            for inl in &mut all_inlines {
+                if let InlineNode::Text(r) = inl
+                    && r.color.is_none()
+                {
+                    r.color = Some(color_hex.clone());
+                }
+            }
+        }
+
+        let prefix_color = all_inlines.iter().find_map(|inl| match inl {
+            InlineNode::Text(r) if !r.text.trim().is_empty() => r.color.as_deref(),
+            _ => None,
+        });
 
         // First check synthesized `heading.numbers` if populated by Typst synthesis.
         if let Some(ref synth_eco) = heading.numbers {
@@ -329,7 +355,12 @@ impl<'a> ExtractorContext<'a> {
                 if let Some(stripped) =
                     Self::strip_leading_prefix_from_inlines(&all_inlines, synth_num)
                 {
-                    if !stripped.is_empty() {
+                    let body_color = stripped.iter().find_map(|inl| match inl {
+                        InlineNode::Text(r) if !r.text.trim().is_empty() => r.color.as_deref(),
+                        _ => None,
+                    });
+                    if !stripped.is_empty() && (prefix_color.is_none() || prefix_color == body_color)
+                    {
                         return (Some(synth_num.to_string()), stripped);
                     }
                 }
@@ -343,7 +374,14 @@ impl<'a> ExtractorContext<'a> {
                     .trim()
                     .to_string();
                 let body_inlines = all_inlines[idx + 1..].to_vec();
-                if !prefix_str.is_empty() && !body_inlines.is_empty() {
+                let body_color = body_inlines.iter().find_map(|inl| match inl {
+                    InlineNode::Text(r) if !r.text.trim().is_empty() => r.color.as_deref(),
+                    _ => None,
+                });
+                if !prefix_str.is_empty()
+                    && !body_inlines.is_empty()
+                    && (prefix_color.is_none() || prefix_color == body_color)
+                {
                     return (Some(prefix_str), body_inlines);
                 }
             }

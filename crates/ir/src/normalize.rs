@@ -11,8 +11,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::{
     BlockLayoutSpanIr, BlockNode, DocumentIr, FieldKindIr, InlineNode, LinkTargetIr, NodeId,
-    NodeOrigin, NodeReferenceLayout, PageSetupIr, ParagraphStyleIr, SemanticRoleIr, TableKindIr,
-    TableRowIr,
+    NodeOrigin, NodeReferenceLayout, PageSetupIr, ParagraphStyleIr, SemanticRoleIr,
 };
 
 /// Normalize `DocumentIr` structure (coalesce adjacent text runs, collapse `#show heading: none`
@@ -22,7 +21,6 @@ pub fn normalize_document_ir(doc: &mut DocumentIr) {
     visit_document_inline_lists_mut(doc, &mut coalesce_adjacent_text_runs);
     collapse_hidden_empty_headings(doc);
     merge_split_containers(doc);
-    visit_document_block_lists_mut(doc, &mut merge_split_styled_containers);
     clean_redundant_pagebreaks(&mut doc.blocks);
     for section in &mut doc.sections {
         clean_redundant_pagebreaks(&mut section.blocks);
@@ -710,105 +708,6 @@ fn normalize_code_lines_font(lines: &mut [Vec<crate::TextRunIr>]) {
                 if run.font_family.is_none() {
                     run.font_family = fam.clone();
                 }
-            }
-        }
-    }
-}
-
-/// Merge adjacent lowered 1-cell `TableKindIr::StyledContainer` tables if present.
-pub fn merge_split_styled_containers(blocks: &mut Vec<BlockNode>) {
-    let mut i = 1;
-    while i < blocks.len() {
-        let merge_mode = match (&blocks[i - 1], &blocks[i]) {
-            (BlockNode::Table(a), BlockNode::Table(b))
-                if a.kind == TableKindIr::StyledContainer
-                    && b.kind == TableKindIr::StyledContainer
-                    && (1..=2).contains(&a.rows.len())
-                    && b.rows.len() == 1
-                    && a.rows.iter().all(|r| r.cells.len() == 1)
-                    && b.rows[0].cells.len() == 1 =>
-            {
-                let a_last = &a.rows.last().unwrap().cells[0];
-                let b_cell = &b.rows[0].cells[0];
-                if a_last.fill == b_cell.fill && a_last.borders == b_cell.borders {
-                    Some(true)
-                } else if a.rows.len() == 1
-                    && a_last.borders.left == b_cell.borders.left
-                    && a_last.borders.right == b_cell.borders.right
-                    && a_last.blocks.len() == 1
-                    && matches!(b_cell.blocks.first(), Some(BlockNode::CodeBlock { .. }))
-                {
-                    Some(false)
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        };
-        let Some(append_into_last_row) = merge_mode else {
-            i += 1;
-            continue;
-        };
-
-        let BlockNode::Table(mut b) = blocks.remove(i) else {
-            unreachable!()
-        };
-        if let BlockNode::Table(a) = &mut blocks[i - 1] {
-            if !append_into_last_row {
-                let mut body_row = b.rows.remove(0);
-                body_row.cells[0].y = 1;
-                a.rows.push(body_row);
-                a.row_heights_pt.push(0.0);
-                continue;
-            }
-            let b_cell = &mut b.rows[0].cells[0];
-            let mut b_blocks = std::mem::take(&mut b_cell.blocks);
-            let starts_with_single_list_item = a.rows.len() == 1
-                && matches!(
-                    b_blocks.first(),
-                    Some(BlockNode::List { items, .. }) if items.len() == 1
-                );
-            if starts_with_single_list_item && b_blocks.len() > 1 {
-                let a_inset_l = a.rows[0].cells[0].inset.left;
-                let a_inset_r = a.rows[0].cells[0].inset.right;
-                a.rows[0].cells[0].inset.bottom = 16.0;
-                let first_blk = b_blocks.remove(0);
-                let mut row1_cell = b_cell.clone();
-                row1_cell.borders.bottom = None;
-                row1_cell.inset.top = 1.5;
-                row1_cell.inset.bottom = 0.0;
-                row1_cell.inset.left = a_inset_l;
-                row1_cell.inset.right = a_inset_r;
-                row1_cell.blocks = vec![first_blk];
-                let mut row2_cell = b_cell.clone();
-                row2_cell.borders.top = None;
-                row2_cell.inset.top = 0.0;
-                row2_cell.inset.bottom += 11.0;
-                row2_cell.inset.left = a_inset_l;
-                row2_cell.inset.right = a_inset_r;
-                row2_cell.blocks = b_blocks;
-                a.rows.push(TableRowIr {
-                    height_pt: Some(1.0),
-                    is_header: false,
-                    is_footer: false,
-                    cells: vec![row1_cell],
-                });
-                a.rows.push(TableRowIr {
-                    height_pt: None,
-                    is_header: false,
-                    is_footer: false,
-                    cells: vec![row2_cell],
-                });
-            } else {
-                let empty_origins = BTreeMap::new();
-                let mut empty_layouts = BTreeMap::new();
-                let a_blocks = &mut a.rows.last_mut().unwrap().cells[0].blocks;
-                merge_continuation_child_blocks(
-                    a_blocks,
-                    b_blocks,
-                    &empty_origins,
-                    &mut empty_layouts,
-                );
             }
         }
     }

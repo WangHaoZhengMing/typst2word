@@ -126,18 +126,18 @@ pub enum FractionScaleMode {
 impl FractionScaleMode {
     #[inline]
     pub fn classify(input: &EquationBoxInput, base_pt: f64) -> Self {
-        let rows = input.row_count.max(1);
         match (
             input.max_fraction_depth,
             input.is_block,
-            rows,
             input.typst_min_glyph_pt.filter(|&s| s > 1.0),
         ) {
-            (0, _, _, _) | (_, _, _, None) => Self::NativeOmml,
-            (_, false, _, Some(min_g)) if min_g >= base_pt * 0.92 => {
-                Self::InlineDisplayCompensated
-            }
-            (1, true, 1, Some(min_g)) if min_g <= base_pt * 0.76 => Self::BlockInlineCompensated,
+            (0, _, _) | (_, _, None) => Self::NativeOmml,
+            (_, false, Some(min_g)) if min_g >= base_pt * 0.92 => Self::InlineDisplayCompensated,
+            // Note: do NOT infer `BlockInlineCompensated` from `typst_min_glyph_pt <= 0.76 * base_pt`
+            // on block equations, because any ordinary subscript or superscript (e.g. `K_p`, `10^-3`,
+            // `L^-1`) lowers `typst_min_glyph_pt` to ~0.70 * base_pt while display fractions remain at
+            // 100% display size. Explicit `$ inline(a/b) $` inside block equations is handled per-node
+            // via `MathNodeIr::Fraction { display_style: Some(false), .. }` in `calibrate_math_node_inner`.
             _ => Self::NativeOmml,
         }
     }

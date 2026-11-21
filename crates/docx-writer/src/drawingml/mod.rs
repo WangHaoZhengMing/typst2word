@@ -13,11 +13,3 @@ mod textbox;
 
 pub(crate) use cetz::cetz_canvas_to_drawingml_run;
 pub(crate) use shape::{shape_to_drawingml_run, shape_to_inline_drawingml_run};
-
-use std::sync::atomic::{AtomicU32, Ordering};
-
-static NEXT_DOC_PR_ID: AtomicU32 = AtomicU32::new(1000);
-
-pub(crate) fn next_drawing_id() -> u32 {
-    NEXT_DOC_PR_ID.fetch_add(1, Ordering::Relaxed)
-}

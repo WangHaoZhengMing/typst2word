@@ -202,7 +202,7 @@ fn estimate_inlines_width_pt(content: &[InlineNode]) -> f64 {
                 let sz = r.font_size_pt.unwrap_or(11.0);
                 r.text
                     .chars()
-                    .map(|ch| if ch as u32 > 0x2E80 { sz } else { sz * 0.52 })
+                    .map(|ch| if ir::is_cjk_char(ch) { sz } else { sz * 0.52 })
                     .sum::<f64>()
             }
             InlineNode::HorizontalSpace { width_pt } => *width_pt,
@@ -331,13 +331,10 @@ fn dominant_inline_font_family<'a>(
         return None;
     }
 
-    let is_cjk_font = |f: &str| {
-        font_metrics.get(f).is_some_and(|m| m.has_cjk_codepage)
-            || crate::WordFontMetricsProvider::is_cjk_codepage_font(Some(f))
-    };
+    let resolver = crate::font_metrics::FontMetricsResolver::new(font_metrics);
     if let Some((cjk_fam, _)) = weights
         .iter()
-        .filter(|(f, _)| is_cjk_font(f))
+        .filter(|(f, _)| resolver.is_cjk_font(Some(*f)))
         .max_by_key(|(_, w)| *w)
     {
         return Some(*cjk_fam);
@@ -377,14 +374,8 @@ fn tallest_line_box_run<'a>(
                     }
                     let sz = r.font_size_pt.unwrap_or(11.0).max(6.0);
                     let fam = r.font_family.as_deref();
-                    let face = fam.and_then(|f| {
-                        font_metrics.get(f).or_else(|| {
-                            let fl = f.trim().to_ascii_lowercase();
-                            font_metrics
-                                .iter()
-                                .find_map(|(k, v)| k.trim().eq_ignore_ascii_case(&fl).then_some(v))
-                        })
-                    });
+                    let resolver = crate::font_metrics::FontMetricsResolver::new(font_metrics);
+                    let face = fam.and_then(|f| resolver.lookup_face(f));
                     let run_cjk = crate::objects::text_run::run_has_cjk(r);
                     let eff_fam = if run_cjk && fam.is_none() {
                         Some("PingFang SC")
@@ -450,14 +441,8 @@ pub fn compute_line_spacing_dxa_with_metrics(
         .any(|inl| matches!(inl, InlineNode::EquationInline(_)));
     let only_inline_eq =
         has_inline_eq && !content.iter().any(|inl| matches!(inl, InlineNode::Text(_)));
-    let font_face = eff_font.and_then(|f| {
-        font_metrics.get(f).or_else(|| {
-            let fl = f.trim().to_ascii_lowercase();
-            font_metrics
-                .iter()
-                .find_map(|(k, v)| k.trim().eq_ignore_ascii_case(&fl).then_some(v))
-        })
-    });
+    let resolver = crate::font_metrics::FontMetricsResolver::new(font_metrics);
+    let font_face = eff_font.and_then(|f| resolver.lookup_face(f));
     crate::WordLineBox::from_paragraph_metrics(
         eff_font,
         font_face,

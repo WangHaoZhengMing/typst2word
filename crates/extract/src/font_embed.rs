@@ -79,9 +79,15 @@ impl<'a> ExtractorContext<'a> {
             let (sfnt_data, is_subset) = if embed_mode == FontEmbedMode::Subset {
                 let mut glyph_ids = item.used_glyph_ids;
                 glyph_ids.insert(0); // `.notdef` is required as glyph 0
-                // Ensure ASCII space and every used character's cmap glyph are included.
+                // Ensure ASCII space, digits `0-9` (for dynamic Word `PAGE`/`NUMPAGES`/`PAGEREF`
+                // and list-numbering fields), and every used character's cmap glyph are included.
                 if let Some(gid) = ttf_face.glyph_index(' ') {
                     glyph_ids.insert(gid.0);
+                }
+                for digit in '0'..='9' {
+                    if let Some(gid) = ttf_face.glyph_index(digit) {
+                        glyph_ids.insert(gid.0);
+                    }
                 }
                 for ch in &item.used_chars {
                     if let Some(gid) = ttf_face.glyph_index(*ch) {

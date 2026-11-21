@@ -12,6 +12,7 @@ const EMPTY_MATH_RUN: &str = "<m:r><m:t>&#x200B;</m:t></m:r>";
 
 /// Calibrate an `EquationIr` via [`word_construct::equation::calibrate_equation_body`]
 /// and serialize `<m:oMath>...</m:oMath>`.
+#[allow(dead_code)]
 pub(crate) fn render_equation_omml(eq: &EquationIr, out: &mut String) {
     render_equation_omml_with_font(eq, None, out);
 }

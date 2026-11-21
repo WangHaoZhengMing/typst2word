@@ -146,7 +146,7 @@ impl<'a> ExtractorContext<'a> {
             factor,
         );
 
-        let header_rows = grid
+        let raw_header_rows = grid
             .headers
             .iter()
             .map(|h| h.range.end / factor)
@@ -156,19 +156,70 @@ impl<'a> ExtractorContext<'a> {
             .footer
             .as_ref()
             .map(|f| (f.start / factor)..((f.end + factor - 1) / factor));
-        let footer_rows = footer_range
-            .as_ref()
-            .map_or(0, |r| r.end.saturating_sub(r.start));
+
+        // Filter out rows that were not laid out in this fragment (e.g. a table split across
+        // Word sections where trailing rows spilled onto the next section/page), while preserving
+        // rows that either have at least one laid-out cell in `cell_nodes_map` OR are pure
+        // `Entry::Merged` continuations of an already-kept row's `rowspan`.
+        let kept_rows: Vec<usize> = if cell_nodes_map.is_empty() {
+            (0..num_rows).collect()
+        } else {
+            let mut kept = Vec::with_capacity(num_rows);
+            let mut row_present = vec![false; num_rows];
+            for y in 0..num_rows {
+                let has_laid_out_cell = (0..num_cols).any(|x| cell_nodes_map.contains_key(&(x, y)));
+                if has_laid_out_cell {
+                    row_present[y] = true;
+                    kept.push(y);
+                    continue;
+                }
+                let raw_y = y * factor;
+                let has_own_cell = (0..num_cols).any(|x| {
+                    matches!(grid.entry(x * factor, raw_y), Some(Entry::Cell(_)))
+                });
+                let covered_by_kept_rowspan = !has_own_cell
+                    && (0..num_cols).any(|x| {
+                        grid.parent_cell_position(x * factor, raw_y)
+                            .is_some_and(|p| {
+                                let py = p.y / factor;
+                                py < y && row_present[py]
+                            })
+                    });
+                if covered_by_kept_rowspan {
+                    row_present[y] = true;
+                    kept.push(y);
+                }
+            }
+            kept
+        };
+        if kept_rows.is_empty() {
+            self.parent_node_stack.pop();
+            return None;
+        }
+
+        let table_left_x = if table_origin_x.is_finite() && table_origin_x > 0.5 {
+            table_origin_x
+        } else if bbox_w > 0.5 && bbox_x.is_finite() {
+            bbox_x
+        } else {
+            self.scope
+                .active_group_bounds_pt
+                .map(|(l, _)| l)
+                .unwrap_or(self.content_left_pt)
+        };
 
         // 3. Extract rows and cells.
-        let mut rows = Vec::with_capacity(num_rows);
-        for y in 0..num_rows {
-            let is_header = y < header_rows;
+        let kept_len = kept_rows.len();
+        let mut rows = Vec::with_capacity(kept_len);
+        let mut row_heights_pt = Vec::with_capacity(kept_len);
+        for (new_y, &y) in kept_rows.iter().enumerate() {
+            let is_header = y < raw_header_rows;
             let is_footer = footer_range.as_ref().is_some_and(|r| r.contains(&y));
-            let row_cells = self.extract_table_row_cells(
+            let mut row_cells = self.extract_table_row_cells(
                 grid,
                 &cell_nodes_map,
                 &dims.col_widths_pt,
+                table_left_x,
                 avail_w_pt,
                 y,
                 num_cols,
@@ -177,6 +228,11 @@ impl<'a> ExtractorContext<'a> {
                 is_header,
                 is_semantic_table,
             );
+            for cell in &mut row_cells {
+                cell.y = new_y;
+                cell.rowspan = cell.rowspan.min(kept_len - new_y).max(1);
+            }
+            row_heights_pt.push(dims.row_heights_pt[y]);
             rows.push(TableRowIr {
                 height_pt: if dims.row_has_explicit_height[y] && dims.row_heights_pt[y] > 1.0 {
                     Some(dims.row_heights_pt[y])
@@ -188,6 +244,9 @@ impl<'a> ExtractorContext<'a> {
                 cells: row_cells,
             });
         }
+        dims.row_heights_pt = row_heights_pt;
+        let header_rows = rows.iter().take_while(|r| r.is_header).count();
+        let footer_rows = rows.iter().filter(|r| r.is_footer).count();
         self.parent_node_stack.pop();
 
         // Shift horizontal column gutter from a bottom-bordered field column `x` to the next column `x + 1`'s left inset.
@@ -279,6 +338,7 @@ impl<'a> ExtractorContext<'a> {
         grid: &CellGrid,
         cell_nodes_map: &CellNodeMap,
         col_widths_pt: &[f64],
+        table_left_x: f64,
         avail_w_pt: f64,
         y: usize,
         num_cols: usize,
@@ -330,11 +390,7 @@ impl<'a> ExtractorContext<'a> {
                             let (mut ins, ha, va, ih) =
                                 Self::extract_cell_props(cell_elem, is_header, is_semantic_table);
                             let mut blks = self.with_scope(|ctx| {
-                                let table_base_x = ctx
-                                    .scope
-                                    .active_group_bounds_pt
-                                    .map(|(l, _)| l)
-                                    .unwrap_or(ctx.content_left_pt);
+                                let table_base_x = table_left_x;
                                 ctx.scope.container_inset_pt += ins.left + ins.right + 1.0;
                                 let col_left: f64 =
                                     table_base_x + col_widths_pt.iter().take(x).sum::<f64>();

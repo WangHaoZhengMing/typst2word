@@ -24,7 +24,7 @@ impl<'a> DocxWriter<'a> {
             .doc
             .solved_before_dxa(canvas.id)
             .map_or(construct.before_dxa, |b| b.max(0));
-        let run_xml = cetz_canvas_to_drawingml_run(canvas);
+        let run_xml = cetz_canvas_to_drawingml_run(self, canvas);
         out.push_str("<w:p><w:pPr>");
         if keep_with_next {
             out.push_str("<w:keepNext/>");

@@ -2,9 +2,10 @@
 
 use crate::drawingml::geometry::{build_cust_geom_xml, compute_segments_bbox};
 use crate::drawingml::line::build_ln_xml;
-use crate::drawingml::next_drawing_id;
 use crate::drawingml::shape::build_wsp_xml;
 use crate::drawingml::textbox::render_inline_nodes_as_txbx_para;
+use crate::writer::DocxWriter;
+use word_construct::cetz::CetzLabelConstruct;
 use word_construct::model::{
     CetzCanvasIr, CetzLabelDrawableIr, CetzPathDrawableIr, HAlignIr, ShapeIr, ShapeKindIr,
 };
@@ -12,8 +13,11 @@ use word_construct::units::pt_to_emu;
 
 /// Build a `<w:r><w:drawing>...</w:drawing></w:r>` XML fragment for a `CetzCanvasIr`
 /// using a native WordprocessingGroup (`<wpg:wgp>`).
-pub fn cetz_canvas_to_drawingml_run(canvas: &CetzCanvasIr) -> String {
-    let group_id = next_drawing_id();
+pub(crate) fn cetz_canvas_to_drawingml_run(
+    writer: &mut DocxWriter<'_>,
+    canvas: &CetzCanvasIr,
+) -> String {
+    let group_id = writer.alloc_drawing_id();
     let cx = pt_to_emu(canvas.width_pt.max(10.0)).max(12700);
     let cy = pt_to_emu(canvas.height_pt.max(10.0)).max(12700);
 
@@ -40,17 +44,21 @@ pub fn cetz_canvas_to_drawingml_run(canvas: &CetzCanvasIr) -> String {
             placed_offset_pt: None,
             baseline_shift_pt: None,
         };
-        children_xml.push_str(&build_wsp_xml(None, &bg_shape, Some((0, 0)), cx, cy, None));
+        children_xml.push_str(&build_wsp_xml(writer, &bg_shape, Some((0, 0)), cx, cy, None));
     }
 
     // 2. Vector path/curve drawables
     for path_drawable in &canvas.paths {
-        children_xml.push_str(&build_cetz_path_wsp(path_drawable));
+        children_xml.push_str(&build_cetz_path_wsp(writer, path_drawable));
     }
 
     // 3. Positioned text/formula label drawables
     for label_drawable in &canvas.labels {
-        children_xml.push_str(&build_cetz_label_wsp(label_drawable, canvas.height_pt));
+        children_xml.push_str(&build_cetz_label_wsp(
+            writer,
+            label_drawable,
+            canvas.height_pt,
+        ));
     }
 
     // Ensure `<wpg:wgp>` has at least one child shape so Word never complains about an empty group
@@ -74,7 +82,14 @@ pub fn cetz_canvas_to_drawingml_run(canvas: &CetzCanvasIr) -> String {
             placed_offset_pt: None,
             baseline_shift_pt: None,
         };
-        children_xml.push_str(&build_wsp_xml(None, &empty_shape, Some((0, 0)), cx, cy, None));
+        children_xml.push_str(&build_wsp_xml(
+            writer,
+            &empty_shape,
+            Some((0, 0)),
+            cx,
+            cy,
+            None,
+        ));
     }
 
     format!(
@@ -119,8 +134,11 @@ pub fn cetz_canvas_to_drawingml_run(canvas: &CetzCanvasIr) -> String {
     )
 }
 
-pub(crate) fn build_cetz_path_wsp(drawable: &CetzPathDrawableIr) -> String {
-    let sp_id = next_drawing_id();
+pub(crate) fn build_cetz_path_wsp(
+    writer: &mut DocxWriter<'_>,
+    drawable: &CetzPathDrawableIr,
+) -> String {
+    let sp_id = writer.alloc_drawing_id();
 
     // Compute exact bounding box of segments so negative relative coordinates inside
     // a CeTZ path are shifted into non-negative local path coordinates `[0..w_emu, 0..h_emu]`.
@@ -186,50 +204,23 @@ pub(crate) fn build_cetz_path_wsp(drawable: &CetzPathDrawableIr) -> String {
     )
 }
 
-pub(crate) fn build_cetz_label_wsp(label: &CetzLabelDrawableIr, canvas_height_pt: f64) -> String {
-    let sp_id = next_drawing_id();
-    let nobreak_content: Vec<word_construct::model::InlineNode> = label
-        .content
-        .iter()
-        .map(|node| match node {
-            word_construct::model::InlineNode::Text(run) => {
-                let mut r = run.clone();
-                r.text = r.text.replace(' ', "\u{00A0}");
-                word_construct::model::InlineNode::Text(r)
-            }
-            other => other.clone(),
-        })
-        .collect();
-    let para_xml = render_inline_nodes_as_txbx_para(&nobreak_content, HAlignIr::Left, None);
-    let y_shift_pt = if para_xml.contains("<m:oMath") {
-        if para_xml.contains("<m:sSub") {
-            3.5
-        } else {
-            2.6
-        }
-    } else {
-        1.2
-    };
-    // Give the label textbox generous width so Word never wraps single-line labels,
-    // while clamping height so `off_y + cy` never overflows `canvas_height_pt` (`<wp:extent cy>`).
-    let w_pt = (label.width_pt * 2.0 + 48.0).max(72.0);
-    let top_pt = (label.y_pt - y_shift_pt).max(0.0);
-    let max_avail_h_pt = (canvas_height_pt - top_pt).max(11.0);
-    let h_pt = if label.rotation_deg.abs() > 0.01 {
-        (label.height_pt + 14.0).max(28.0)
-    } else {
-        (label.height_pt + 2.0).clamp(11.0, max_avail_h_pt)
-    };
-    let off_x = pt_to_emu((label.x_pt - 0.5).max(0.0));
-    let off_y = pt_to_emu(top_pt);
-    let cx = pt_to_emu(w_pt);
-    let cy = pt_to_emu(h_pt);
+pub(crate) fn build_cetz_label_wsp(
+    writer: &mut DocxWriter<'_>,
+    label: &CetzLabelDrawableIr,
+    canvas_height_pt: f64,
+) -> String {
+    let sp_id = writer.alloc_drawing_id();
+    let solved = CetzLabelConstruct::solve(label, canvas_height_pt);
+    let para_xml = render_inline_nodes_as_txbx_para(
+        &solved.nobreak_content,
+        HAlignIr::Left,
+        None,
+        writer.doc.math_font_family.as_deref(),
+    );
 
-    let mut xfrm_attrs = String::new();
-    if label.rotation_deg.abs() > 0.01 {
-        let rot = (label.rotation_deg * 60000.0).round() as i64;
-        xfrm_attrs.push_str(&format!(r#" rot="{rot}""#));
-    }
+    let xfrm_attrs = solved
+        .rot_60000
+        .map_or_else(String::new, |rot| format!(r#" rot="{rot}""#));
 
     format!(
         concat!(
@@ -253,10 +244,10 @@ pub(crate) fn build_cetz_label_wsp(label: &CetzLabelDrawableIr, canvas_height_pt
         ),
         id = sp_id,
         xfrm_attrs = xfrm_attrs,
-        off_x = off_x,
-        off_y = off_y,
-        cx = cx,
-        cy = cy,
+        off_x = solved.off_x_emu,
+        off_y = solved.off_y_emu,
+        cx = solved.cx_emu,
+        cy = solved.cy_emu,
         para = para_xml,
     )
 }

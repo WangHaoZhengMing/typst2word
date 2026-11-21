@@ -2,7 +2,6 @@
 
 use crate::drawingml::geometry::build_cust_geom_xml;
 use crate::drawingml::line::build_ln_xml;
-use crate::drawingml::next_drawing_id;
 use crate::drawingml::textbox::render_textbox_blocks_with_first_override;
 use crate::writer::DocxWriter;
 use word_construct::model::{BlockNode, CurveSegmentIr, ShapeIr, ShapeKindIr};
@@ -29,7 +28,7 @@ fn shape_to_drawingml_run_inner(
     is_inline: bool,
 ) -> String {
     let solved = writer.doc.resolve_shape_geometry(shape, is_inline);
-    let draw_id = next_drawing_id();
+    let draw_id = writer.alloc_drawing_id();
     let (w_pt, h_pt) = effective_shape_dimensions(shape);
     let cx = pt_to_emu(w_pt * shape.scale_x.abs().max(0.05)).max(12700);
     let cy = pt_to_emu(h_pt * shape.scale_y.abs().max(0.05)).max(12700);
@@ -50,7 +49,7 @@ fn shape_to_drawingml_run_inner(
         });
 
     let wsp_xml = build_wsp_xml(
-        Some(writer),
+        writer,
         shape,
         None,
         cx,
@@ -152,14 +151,14 @@ pub(crate) fn effective_shape_dimensions(shape: &ShapeIr) -> (f64, f64) {
 }
 
 pub(crate) fn build_wsp_xml(
-    writer: Option<&mut DocxWriter<'_>>,
+    writer: &mut DocxWriter<'_>,
     shape: &ShapeIr,
     group_offset_emu: Option<(i64, i64)>,
     cx: i64,
     cy: i64,
     solved_geom: Option<SolvedShapeGeometry>,
 ) -> String {
-    let sp_id = next_drawing_id();
+    let sp_id = writer.alloc_drawing_id();
     let (off_x, off_y) = group_offset_emu.unwrap_or((0, 0));
 
     let mut xfrm_attrs = String::new();
@@ -289,12 +288,8 @@ pub(crate) fn build_wsp_xml(
         } else {
             "<a:noAutofit/>"
         };
-        let inner_paras = match writer {
-            Some(w) => {
-                render_textbox_blocks_with_first_override(w, &shape.body, first_para_exact)
-            }
-            None => r#"<w:p><w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr></w:p>"#.to_string(),
-        };
+        let inner_paras =
+            render_textbox_blocks_with_first_override(writer, &shape.body, first_para_exact);
         format!(
             concat!(
                 r#"<wps:txbx><w:txbxContent>{paras}</w:txbxContent></wps:txbx>"#,

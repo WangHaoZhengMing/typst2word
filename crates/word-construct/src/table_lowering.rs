@@ -240,6 +240,86 @@ pub(crate) fn refine_word_tables_in_blocks(blocks: &mut [BlockNode], ir: &Docume
                 }
             }
         }
+
+        // 4. In `StyledContainer` cells (e.g. `#showybox` body rows), deduplicate horizontal
+        //    double-indentation where both `cell.inset.left`/`right` (measured from the inner
+        //    content bbox) and every direct indented child block carry the same horizontal inset.
+        if tbl.kind == TableKindIr::StyledContainer {
+            for row in &mut tbl.rows {
+                for cell in &mut row.cells {
+                    deduplicate_styled_container_cell_indents(cell);
+                }
+            }
+        }
+    }
+}
+
+fn deduplicate_styled_container_cell_indents(cell: &mut TableCellIr) {
+    if cell.inset.left >= 1.0 {
+        let mut min_left: Option<f64> = None;
+        for block in &cell.blocks {
+            let block_left = match block {
+                BlockNode::Paragraph { style, .. } => Some(style.left_indent_pt),
+                BlockNode::Heading { left_indent_pt, .. } => Some(*left_indent_pt),
+                BlockNode::List { indent_pt, .. } | BlockNode::Enum { indent_pt, .. } => {
+                    Some(*indent_pt)
+                }
+                BlockNode::Table(t) => Some(t.left_indent_pt),
+                BlockNode::Container(c) => Some(c.left_indent_pt),
+                _ => None,
+            };
+            if let Some(l) = block_left {
+                min_left = Some(min_left.map_or(l, |cur| cur.min(l)));
+            }
+        }
+        if let Some(shared_left) = min_left
+            && shared_left >= 1.0
+            && shared_left >= cell.inset.left - 1.5
+        {
+            let deduct = cell.inset.left.min(shared_left);
+            for block in &mut cell.blocks {
+                match block {
+                    BlockNode::Paragraph { style, .. } => {
+                        style.left_indent_pt = (style.left_indent_pt - deduct).max(0.0);
+                    }
+                    BlockNode::Heading { left_indent_pt, .. } => {
+                        *left_indent_pt = (*left_indent_pt - deduct).max(0.0);
+                    }
+                    BlockNode::List { indent_pt, .. } | BlockNode::Enum { indent_pt, .. } => {
+                        *indent_pt = (*indent_pt - deduct).max(0.0);
+                    }
+                    BlockNode::Table(t) => {
+                        t.left_indent_pt = (t.left_indent_pt - deduct).max(0.0);
+                    }
+                    BlockNode::Container(c) => {
+                        c.left_indent_pt = (c.left_indent_pt - deduct).max(0.0);
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    if cell.inset.right >= 1.0 {
+        let mut min_right: Option<f64> = None;
+        for block in &cell.blocks {
+            if let BlockNode::Paragraph { style, .. } = block {
+                min_right = Some(min_right.map_or(style.right_indent_pt, |cur| {
+                    cur.min(style.right_indent_pt)
+                }));
+            }
+        }
+        if let Some(shared_right) = min_right
+            && shared_right >= 1.0
+            && shared_right >= cell.inset.right - 1.5
+        {
+            let deduct = cell.inset.right.min(shared_right);
+            for block in &mut cell.blocks {
+                if let BlockNode::Paragraph { style, .. } = block {
+                    style.right_indent_pt = (style.right_indent_pt - deduct).max(0.0);
+                }
+            }
+        }
     }
 }
 
@@ -323,6 +403,116 @@ pub fn lower_containers_in_blocks(blocks: &mut [BlockNode], fallback_width_pt: f
             *block = BlockNode::Table(lower_container_to_table(c, fallback_width_pt));
         }
     }
+}
+
+/// Merge adjacent lowered 1-column [`TableKindIr::StyledContainer`] tables (e.g. a header bar
+/// followed by a matching body box or cross-page split styled container fragments) into a single
+/// Word `<w:tbl>`.
+pub(crate) fn merge_split_styled_containers(blocks: &mut Vec<BlockNode>) {
+    let mut i = 1;
+    while i < blocks.len() {
+        let merge_mode = match (&blocks[i - 1], &blocks[i]) {
+            (BlockNode::Table(a), BlockNode::Table(b))
+                if a.kind == TableKindIr::StyledContainer
+                    && b.kind == TableKindIr::StyledContainer
+                    && (1..=2).contains(&a.rows.len())
+                    && b.rows.len() == 1
+                    && a.rows.iter().all(|r| r.cells.len() == 1)
+                    && b.rows[0].cells.len() == 1 =>
+            {
+                let a_last = &a.rows.last().unwrap().cells[0];
+                let b_cell = &b.rows[0].cells[0];
+                if a_last.fill == b_cell.fill && a_last.borders == b_cell.borders {
+                    Some(true)
+                } else if a.rows.len() == 1
+                    && a_last.borders.left == b_cell.borders.left
+                    && a_last.borders.right == b_cell.borders.right
+                    && a_last.blocks.len() == 1
+                    && matches!(b_cell.blocks.first(), Some(BlockNode::CodeBlock { .. }))
+                {
+                    Some(false)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+        let Some(append_into_last_row) = merge_mode else {
+            i += 1;
+            continue;
+        };
+
+        let BlockNode::Table(mut b) = blocks.remove(i) else {
+            unreachable!()
+        };
+        if let BlockNode::Table(a) = &mut blocks[i - 1] {
+            if !append_into_last_row {
+                let mut body_row = b.rows.remove(0);
+                body_row.cells[0].y = 1;
+                a.rows.push(body_row);
+                a.row_heights_pt.push(0.0);
+                continue;
+            }
+            let b_blocks = std::mem::take(&mut b.rows[0].cells[0].blocks);
+            let a_blocks = &mut a.rows.last_mut().unwrap().cells[0].blocks;
+            merge_styled_container_child_blocks(a_blocks, b_blocks);
+        }
+    }
+}
+
+fn merge_styled_container_child_blocks(
+    a_blocks: &mut Vec<BlockNode>,
+    mut b_blocks: Vec<BlockNode>,
+) {
+    if !b_blocks.is_empty() {
+        if let (
+            Some(BlockNode::Enum {
+                items: a_items,
+                level: a_lvl,
+                ..
+            }),
+            Some(BlockNode::Enum { level: b_lvl, .. }),
+        ) = (a_blocks.last_mut(), b_blocks.first())
+            && *a_lvl == *b_lvl
+        {
+            if let BlockNode::Enum { items: b_items, .. } = b_blocks.remove(0) {
+                a_items.extend(b_items);
+            }
+        } else if let (
+            Some(BlockNode::List {
+                items: a_items,
+                level: a_lvl,
+                ..
+            }),
+            Some(BlockNode::List { level: b_lvl, .. }),
+        ) = (a_blocks.last_mut(), b_blocks.first())
+            && *a_lvl == *b_lvl
+        {
+            if let BlockNode::List { items: b_items, .. } = b_blocks.remove(0) {
+                a_items.extend(b_items);
+            }
+        } else if let (
+            Some(BlockNode::CodeBlock {
+                lines: a_lines,
+                fill: a_fill,
+                stroke: a_stroke,
+                ..
+            }),
+            Some(BlockNode::CodeBlock {
+                fill: b_fill,
+                stroke: b_stroke,
+                ..
+            }),
+        ) = (a_blocks.last_mut(), b_blocks.first())
+            && *a_fill == *b_fill
+            && *a_stroke == *b_stroke
+        {
+            if let BlockNode::CodeBlock { lines: b_lines, .. } = b_blocks.remove(0) {
+                a_lines.extend(b_lines);
+            }
+        }
+    }
+    a_blocks.extend(b_blocks);
 }
 
 fn lower_container_to_table(mut c: ContainerIr, fallback_width_pt: f64) -> TableIr {

@@ -545,10 +545,16 @@ impl<'a> ExtractorContext<'a> {
                 &mut inner_y,
                 &mut inner_x,
             );
+            // `state.underline` emits `<w:u>` on `TextRunIr`, whereas OMML `EquationInline`
+            // ignores `<w:u>`; wrap inline equations inside a bottom-stroked `#box` with an
+            // OMML bottom bar (`<m:bar><m:barPr><m:pos m:val="bot"/></m:barPr>`) so the
+            // fill-in underline continues smoothly under inline math and `#ce(...)` formulas.
+            Self::apply_bottom_bar_to_equations(&mut box_inlines);
             let sz_pt = box_inlines
                 .iter()
                 .find_map(|n| match n {
                     InlineNode::Text(r) => r.font_size_pt,
+                    InlineNode::EquationInline(eq) => eq.font_size_pt,
                     _ => None,
                 })
                 .unwrap_or(9.0);
@@ -655,6 +661,36 @@ impl<'a> ExtractorContext<'a> {
                 }
                 TreeNode::Group { children, pos, .. } => {
                     Self::collect_box_line_ys(children, offset + *pos, ys, first_sz);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn apply_bottom_bar_to_equations(inlines: &mut [InlineNode]) {
+        for inline in inlines {
+            match inline {
+                InlineNode::EquationInline(eq) if !eq.body.is_empty() => {
+                    let already_underlined = matches!(
+                        eq.body.as_slice(),
+                        [ir::MathNodeIr::Bar {
+                            pos_bottom: true,
+                            ..
+                        }]
+                    );
+                    if !already_underlined {
+                        let inner = ir::MathNodeIr::Sequence(std::mem::take(&mut eq.body));
+                        eq.body.push(ir::MathNodeIr::Bar {
+                            pos_bottom: true,
+                            body: Box::new(inner),
+                        });
+                    }
+                }
+                InlineNode::Link { content, .. }
+                | InlineNode::Ref { content, .. }
+                | InlineNode::Citation { content, .. }
+                | InlineNode::Field { content, .. } => {
+                    Self::apply_bottom_bar_to_equations(content);
                 }
                 _ => {}
             }

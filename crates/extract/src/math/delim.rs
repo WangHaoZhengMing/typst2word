@@ -4,11 +4,12 @@ use typst::foundations::{Content, Packed, SequenceElem, StyleChain, SymbolElem};
 use typst::math::{LrElem, MidElem};
 use typst::text::TextElem;
 
+use crate::math::node::extract_math_node;
 use crate::math::{
     MathStyleCtx, extract_sequence_as_node, extract_sequence_slice,
     flatten_sequence_preserving_styles,
 };
-use ir::MathNodeIr;
+use ir::{MathFracStyleIr, MathNodeIr};
 
 pub(crate) fn extract_lr(
     lr: &Packed<LrElem>,
@@ -64,10 +65,35 @@ pub(crate) fn extract_lr(
         }
     }
 
-    let elements = segments
+    let elements: Vec<MathNodeIr> = segments
         .iter()
         .map(|seg| extract_sequence_as_node(seg, ctx))
         .collect();
+
+    // Typst automatically wraps every matched `(...)`, `[...]`, `{...}` in `LrElem` (with default
+    // `size: 100%`), only stretching glyphs when the inner content is tall enough to exceed the
+    // base delimiter height. Word's OMML `<m:d>` aggressively stretches delimiters even around
+    // simple superscripts (e.g. `c(Ca²⁺)`, `[Ca²⁺]`), inflating line height. Only emit stretchy
+    // `MathNodeIr::Delimited` (`<m:d>`) when sizing is explicit, a `mid(...)` separator is used,
+    // a fence is one-sided, or the inner expression contains a tall 2D construct.
+    let explicit_size = !lr.size.get(styles).is_one();
+    let needs_stretch = explicit_size
+        || !separator.is_empty()
+        || open.is_empty()
+        || close.is_empty()
+        || elements.iter().any(node_needs_stretchy_delimiter);
+
+    if !needs_stretch {
+        extract_math_node(&flat[0].0, flat[0].1, ctx, out);
+        for el in elements {
+            match el {
+                MathNodeIr::Sequence(children) => out.extend(children),
+                other => out.push(other),
+            }
+        }
+        extract_math_node(&flat[end_idx].0, flat[end_idx].1, ctx, out);
+        return;
+    }
 
     out.push(MathNodeIr::Delimited {
         open,
@@ -75,6 +101,47 @@ pub(crate) fn extract_lr(
         separator,
         elements,
     });
+}
+
+fn node_needs_stretchy_delimiter(node: &MathNodeIr) -> bool {
+    match node {
+        MathNodeIr::Sequence(children) => children.iter().any(node_needs_stretchy_delimiter),
+        MathNodeIr::Fraction {
+            num, denom, style, ..
+        } => {
+            matches!(style, MathFracStyleIr::Vertical | MathFracStyleIr::NoBar)
+                || node_needs_stretchy_delimiter(num)
+                || node_needs_stretchy_delimiter(denom)
+        }
+        MathNodeIr::Matrix { rows, .. } => {
+            rows.len() > 1
+                || rows
+                    .iter()
+                    .any(|row| row.iter().any(node_needs_stretchy_delimiter))
+        }
+        MathNodeIr::EquationArray { rows } => {
+            rows.len() > 1 || rows.iter().any(node_needs_stretchy_delimiter)
+        }
+        MathNodeIr::Nary { .. } | MathNodeIr::GroupChar { .. } | MathNodeIr::Delimited { .. } => {
+            true
+        }
+        MathNodeIr::Limit { base, lower, upper } => {
+            lower.is_some() || upper.is_some() || node_needs_stretchy_delimiter(base)
+        }
+        MathNodeIr::Radical { degree, radicand } => {
+            degree.as_deref().is_some_and(node_needs_stretchy_delimiter)
+                || node_needs_stretchy_delimiter(radicand)
+        }
+        MathNodeIr::SubSup { base, sub, sup } | MathNodeIr::PreSubSup { base, sub, sup } => {
+            node_needs_stretchy_delimiter(base)
+                || sub.as_deref().is_some_and(node_needs_stretchy_delimiter)
+                || sup.as_deref().is_some_and(node_needs_stretchy_delimiter)
+        }
+        MathNodeIr::Accent { base, .. }
+        | MathNodeIr::Bar { body: base, .. }
+        | MathNodeIr::Cancel { body: base, .. } => node_needs_stretchy_delimiter(base),
+        MathNodeIr::AlignPoint | MathNodeIr::Run(_) => false,
+    }
 }
 
 pub(crate) fn extract_delimiter_char(content: &Content, is_open: bool) -> Option<char> {

@@ -55,9 +55,14 @@
 //!        executes **emergency mid-word character truncation** (`ForcedBreak`) at the last character
 //!        boundary `<= avail_width_pt`, ignoring Kinsoku and slicing through multi-digit numbers.
 
+use std::collections::BTreeMap;
+
+use ir::FontFaceMetricsIr;
 use serde::{Deserialize, Serialize};
 
-use crate::font_metrics::{ShapingWorkaround, is_cjk_or_fullwidth_char, lookup_known_font};
+use crate::font_metrics::{
+    FontMetricsResolver, ShapingWorkaround, is_cjk_or_fullwidth_char, lookup_known_font,
+};
 use crate::policy::KinsokuSet;
 pub use crate::policy::WordScriptOverridePolicy;
 
@@ -68,6 +73,16 @@ pub fn resolve_script_policy_for_font(
     font_family: Option<&str>,
 ) -> WordScriptOverridePolicy {
     policy.resolve_for_aat_font(is_aat_only_cjk_font_triggering_dflt_override(font_family))
+}
+
+/// Check whether `font_family` is an AAT-only CJK font lacking OpenType `'hani'` `GSUB`/`GPOS`
+/// tables using extracted binary [`FontFaceMetricsIr`] first, falling back to `lookup_known_font`.
+#[inline]
+pub fn is_aat_only_cjk_font_with_metrics(
+    font_family: Option<&str>,
+    font_metrics: &BTreeMap<String, FontFaceMetricsIr>,
+) -> bool {
+    FontMetricsResolver::new(font_metrics).is_aat_only_cjk_font(font_family)
 }
 
 /// Check whether `font_family` is a macOS Apple AAT-only CJK font (containing `feat`/`morx`

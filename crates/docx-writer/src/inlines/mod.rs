@@ -35,6 +35,7 @@ impl<'a> DocxWriter<'a> {
                 let mut instruction = match kind {
                     word_construct::model::FieldKindIr::Page => "PAGE".to_string(),
                     word_construct::model::FieldKindIr::NumPages => "NUMPAGES".to_string(),
+                    word_construct::model::FieldKindIr::SectionPages => "SECTIONPAGES".to_string(),
                     word_construct::model::FieldKindIr::PageRef { bookmark } => {
                         format!("PAGEREF {bookmark}")
                     }
@@ -55,13 +56,42 @@ impl<'a> DocxWriter<'a> {
                 } else {
                     r#" w:dirty="true""#
                 };
-                let _ = write!(
-                    out,
-                    r#"<w:fldSimple w:instr="{}"{dirty_attr}>"#,
-                    crate::xml::escape_xml(&instruction)
-                );
-                self.render_inlines(content, out);
-                out.push_str("</w:fldSimple>");
+                // Emit complex field (`begin`/`instrText`/`separate`/`end`) with `\* CHARFORMAT`
+                // and the cached run's `<w:rPr>` on `<w:instrText>` so Word preserves the exact
+                // font family, size, weight, and color when recalculating `PAGE`/`NUMPAGES`
+                // instead of falling back to the paragraph default style.
+                let template_run = content.iter().find_map(|inl| match inl {
+                    InlineNode::Text(r) => Some(r),
+                    _ => None,
+                });
+                if let Some(tpl) = template_run {
+                    instruction.push_str(" \\* CHARFORMAT");
+                    out.push_str("<w:r>");
+                    text::render_text_run_rpr_xml(tpl, None, out);
+                    let _ = write!(out, r#"<w:fldChar w:fldCharType="begin"{dirty_attr}/></w:r>"#);
+                    out.push_str("<w:r>");
+                    text::render_text_run_rpr_xml(tpl, None, out);
+                    let _ = write!(
+                        out,
+                        r#"<w:instrText xml:space="preserve"> {} </w:instrText></w:r>"#,
+                        crate::xml::escape_xml(&instruction)
+                    );
+                    out.push_str("<w:r>");
+                    text::render_text_run_rpr_xml(tpl, None, out);
+                    out.push_str(r#"<w:fldChar w:fldCharType="separate"/></w:r>"#);
+                    self.render_inlines(content, out);
+                    out.push_str("<w:r>");
+                    text::render_text_run_rpr_xml(tpl, None, out);
+                    out.push_str(r#"<w:fldChar w:fldCharType="end"/></w:r>"#);
+                } else {
+                    let _ = write!(
+                        out,
+                        r#"<w:fldSimple w:instr="{}"{dirty_attr}>"#,
+                        crate::xml::escape_xml(&instruction)
+                    );
+                    self.render_inlines(content, out);
+                    out.push_str("</w:fldSimple>");
+                }
             }
             InlineNode::Text(run) => {
                 self.render_text_run(run, out);
@@ -78,7 +108,7 @@ impl<'a> DocxWriter<'a> {
                 out.push_str(&run_xml);
             }
             InlineNode::CetzInline(canvas) => {
-                let run_xml = cetz_canvas_to_drawingml_run(canvas);
+                let run_xml = cetz_canvas_to_drawingml_run(self, canvas);
                 out.push_str(&run_xml);
             }
             InlineNode::ImageInline(img) => {

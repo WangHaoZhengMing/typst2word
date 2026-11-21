@@ -2,7 +2,6 @@
 
 use std::fmt::Write as _;
 
-use crate::drawingml::next_drawing_id;
 use crate::writer::DocxWriter;
 use word_construct::model::{BlockNode, InlineNode, PageNumberFormatIr, VAlignIr};
 use word_construct::units::{pt_to_dxa, pt_to_emu};
@@ -90,12 +89,18 @@ impl<'a> DocxWriter<'a> {
             let bg_hex = self
                 .current_setup
                 .fill
-                .as_deref()
-                .unwrap_or("FFFFFF");
+                .clone()
+                .unwrap_or_else(|| "FFFFFF".to_string());
+            let width_pt = self.current_setup.width_pt;
+            let height_pt = self.current_setup.height_pt;
+            let doc_pr_id = self.alloc_drawing_id();
+            let sp_id = self.alloc_drawing_id();
             let bg_run = Self::build_full_page_background_run_xml(
-                self.current_setup.width_pt,
-                self.current_setup.height_pt,
-                bg_hex,
+                doc_pr_id,
+                sp_id,
+                width_pt,
+                height_pt,
+                &bg_hex,
             );
             if out.ends_with("</w:p>") {
                 let insert_pos = out.len() - "</w:p>".len();
@@ -113,8 +118,13 @@ impl<'a> DocxWriter<'a> {
         out
     }
 
-    fn build_full_page_background_run_xml(width_pt: f64, height_pt: f64, fill_hex: &str) -> String {
-        let id = next_drawing_id();
+    fn build_full_page_background_run_xml(
+        doc_pr_id: u32,
+        sp_id: u32,
+        width_pt: f64,
+        height_pt: f64,
+        fill_hex: &str,
+    ) -> String {
         let cx = pt_to_emu(width_pt.max(72.0));
         let cy = pt_to_emu(height_pt.max(72.0));
         format!(
@@ -127,10 +137,10 @@ impl<'a> DocxWriter<'a> {
                 r#"<wp:extent cx="{cx}" cy="{cy}"/>"#,
                 r#"<wp:effectExtent l="0" t="0" r="0" b="0"/>"#,
                 r#"<wp:wrapNone/>"#,
-                r#"<wp:docPr id="{id}" name="SectionPageBg_{id}"/>"#,
+                r#"<wp:docPr id="{doc_pr_id}" name="SectionPageBg_{doc_pr_id}"/>"#,
                 r#"<wp:cNvGraphicFramePr/>"#,
                 r#"<a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">"#,
-                r#"<wps:wsp><wps:cNvPr id="{id}" name="SectionPageBg_{id}"/><wps:cNvSpPr/>"#,
+                r#"<wps:wsp><wps:cNvPr id="{sp_id}" name="SectionPageBg_{sp_id}"/><wps:cNvSpPr/>"#,
                 r#"<wps:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm>"#,
                 r#"<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>"#,
                 r#"<a:solidFill><a:srgbClr val="{fill_hex}"/></a:solidFill>"#,
@@ -141,7 +151,8 @@ impl<'a> DocxWriter<'a> {
             ),
             cx = cx,
             cy = cy,
-            id = id,
+            doc_pr_id = doc_pr_id,
+            sp_id = sp_id,
             fill_hex = fill_hex,
         )
     }
@@ -168,22 +179,12 @@ impl<'a> DocxWriter<'a> {
         let Some(inlines) = inlines else {
             return (None, None, false);
         };
-        let is_cjk_family = |fam: &str| {
-            let fl = fam.to_ascii_lowercase();
-            fl.contains("song")
-                || fl.contains("hei")
-                || fl.contains("kai")
-                || fl.contains("fang")
-                || fl.contains("pingfang")
-                || fl.contains("sim")
-                || fl.contains("yahei")
-                || fl.contains("宋体")
-                || fl.contains("黑体")
-                || fl.contains("楷体")
-                || fl.contains("微软雅黑")
-        };
+        let resolver = word_construct::FontMetricsResolver::new(&self.doc.font_metrics);
         let cjk_font = inlines.iter().find_map(|inl| match inl {
-            InlineNode::Text(r) => r.font_family.as_deref().filter(|f| is_cjk_family(f)),
+            InlineNode::Text(r) => r
+                .font_family
+                .as_deref()
+                .filter(|f| resolver.is_cjk_font(Some(*f))),
             _ => None,
         });
         let first_font = cjk_font.or_else(|| {
@@ -211,6 +212,12 @@ impl<'a> DocxWriter<'a> {
         out: &mut String,
     ) {
         let ps = &self.current_setup;
+        let doc_has_odd_even = self.doc.page_setup.different_odd_even
+            || self
+                .doc
+                .sections
+                .iter()
+                .any(|s| s.page_setup.different_odd_even);
         out.push_str("<w:sectPr>");
         if let Some(hid) = &self.header_rel_id {
             let _ = write!(out, r#"<w:headerReference w:type="default" r:id="{hid}"/>"#);
@@ -219,7 +226,11 @@ impl<'a> DocxWriter<'a> {
             if let Some(fhid) = &self.first_header_rel_id {
                 let _ = write!(out, r#"<w:headerReference w:type="first" r:id="{fhid}"/>"#);
             }
-            if let Some(ehid) = &self.even_header_rel_id {
+            if let Some(ehid) = self.even_header_rel_id.as_ref().or_else(|| {
+                doc_has_odd_even
+                    .then_some(self.header_rel_id.as_ref())
+                    .flatten()
+            }) {
                 let _ = write!(out, r#"<w:headerReference w:type="even" r:id="{ehid}"/>"#);
             }
         }
@@ -230,7 +241,11 @@ impl<'a> DocxWriter<'a> {
             if let Some(ffid) = &self.first_footer_rel_id {
                 let _ = write!(out, r#"<w:footerReference w:type="first" r:id="{ffid}"/>"#);
             }
-            if let Some(efid) = &self.even_footer_rel_id {
+            if let Some(efid) = self.even_footer_rel_id.as_ref().or_else(|| {
+                doc_has_odd_even
+                    .then_some(self.footer_rel_id.as_ref())
+                    .flatten()
+            }) {
                 let _ = write!(out, r#"<w:footerReference w:type="even" r:id="{efid}"/>"#);
             }
         }
@@ -249,12 +264,13 @@ impl<'a> DocxWriter<'a> {
             let (first_font, first_sz_pt, first_is_cjk) = self.first_block_first_line_metrics();
             self.options
                 .page_margin_calibration
-                .margins_for_first_line(
+                .margins_for_first_line_with_metrics(
                     ps.margin_top_pt,
                     ps.margin_bottom_pt,
                     first_font,
                     first_sz_pt,
                     first_is_cjk,
+                    &self.doc.font_metrics,
                 )
         } else {
             (ps.margin_top_pt, ps.margin_bottom_pt)

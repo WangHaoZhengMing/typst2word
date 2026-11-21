@@ -22,6 +22,24 @@ pub fn run_has_cjk(run: &TextRunIr) -> bool {
         || classify_font_family(run.font_family.as_deref(), run.is_code).is_cjk_font()
 }
 
+/// Single-source-of-truth Word `<w:sz>` font size (`pt`) for a [`TextRunIr`], including
+/// `DejaVu Sans Mono` -> `Consolas` inline-code width compensation (`9.5pt` at `8.8pt`, or `sz * 1.09`).
+pub fn effective_word_run_font_size_pt(run: &TextRunIr, fallback_sz_pt: f64) -> f64 {
+    let raw_sz = run.font_size_pt.unwrap_or(fallback_sz_pt).clamp(6.0, 72.0);
+    let is_consolas_fallback = run.is_code
+        && matches!(
+            run.font_family.as_deref(),
+            None | Some("Consolas" | "DejaVu Sans Mono")
+        );
+    if is_consolas_fallback && (raw_sz - 8.8).abs() < 0.15 {
+        9.5
+    } else if is_consolas_fallback {
+        (((raw_sz * 1.09 * 2.0).round() as u32).clamp(10, 288) as f64) * 0.5
+    } else {
+        raw_sz
+    }
+}
+
 /// Exhaustive East Asian font hint policy for `<w:rFonts>`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EastAsiaHintPolicy {

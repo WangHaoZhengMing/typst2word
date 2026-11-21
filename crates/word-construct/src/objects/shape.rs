@@ -11,10 +11,9 @@ use ir::{
     ShapeIr, ShapeKindIr, SidesPtIr,
 };
 
-use crate::font_metrics::{FontParadigm, RawFontMetrics, lookup_known_font};
+use crate::font_metrics::FontMetricsResolver;
 use crate::objects::paragraph::compute_line_spacing_dxa_with_metrics;
-use crate::objects::text_run::run_has_cjk;
-use crate::page_calibration::measured_first_line_top_delta_pt;
+use crate::objects::text_run::{effective_word_run_font_size_pt, run_has_cjk};
 use crate::pipeline::lang_script::TextScriptClassIr;
 
 /// ECMA-376 Part 1 §20.1.9.18 `prstGeom="roundRect"` inscribed text-rectangle factor:
@@ -225,6 +224,7 @@ fn solve_shape_body_inset_pt(
             //      `tIns = 0` and solve exact `(w:line, w:after)` in twips from OpenType
             //      ascent/total ratios so neither `b_0` nor `b_1` drifts downward to clip the
             //      final line at the bottom of the fixed-height shape.
+            let resolver = FontMetricsResolver::new(font_metrics);
             let first_sample = shape
                 .body
                 .first()
@@ -233,8 +233,11 @@ fn solve_shape_body_inset_pt(
                 first_sample
                     .as_ref()
                     .map_or(0.0, |(fam, sz, is_cjk, w_line)| {
-                        let delta =
-                            measured_first_line_top_delta_pt(fam.as_deref(), Some(*sz), *is_cjk);
+                        let delta = resolver.first_line_top_overhang_pt(
+                            fam.as_deref(),
+                            Some(*sz),
+                            *is_cjk,
+                        );
                         let w_scale = (*w_line as f64 / 240.0).clamp(0.75, 1.0);
                         delta * w_scale
                     });
@@ -244,12 +247,11 @@ fn solve_shape_body_inset_pt(
                     (local_baselines, first_sample.as_ref())
             {
                 let b_y = lb.first_baseline_pt;
-                let (a_word, _, _) = word_line_ascent_descent_total_pt(
+                let (a_word, _, _) = resolver.word_line_ascent_descent_total_pt(
                     fam.as_deref(),
                     *sz,
                     *is_cjk,
                     *w_line,
-                    font_metrics,
                 );
                 if lb.first_is_single_line_para && b_y < inscribed_pt + a_word - 0.2 {
                     // In Word `PTLS7`, `w:lineRule="exact"` anchors the paragraph's natural
@@ -281,13 +283,13 @@ fn solve_shape_body_inset_pt(
                                         (step_pt - d1_exact).max(sz1 * 0.50)
                                     }
                                     None => {
-                                        let (a1_auto, _, _) = word_line_ascent_descent_total_pt(
-                                            fam1.as_deref(),
-                                            sz1,
-                                            is_cjk1,
-                                            w_line1,
-                                            font_metrics,
-                                        );
+                                        let (a1_auto, _, _) = resolver
+                                            .word_line_ascent_descent_total_pt(
+                                                fam1.as_deref(),
+                                                sz1,
+                                                is_cjk1,
+                                                w_line1,
+                                            );
                                         a1_auto
                                     }
                                 };
@@ -440,24 +442,23 @@ fn solve_inline_line_clearances_pt(
     let shift_pt = shape.baseline_shift_pt.unwrap_or(0.0);
     let box_ascent_pt = (shape.height_pt - shift_pt).max(0.0);
 
+    let resolver = FontMetricsResolver::new(font_metrics);
     let extra_top_pt = ctx.prev_line.as_ref().map_or(0.0, |prev: &AdjacentTextLineIr| {
-        let (_, d_prev, _) = word_line_ascent_descent_total_pt(
+        let (_, d_prev, _) = resolver.word_line_ascent_descent_total_pt(
             prev.font_family.as_deref(),
             prev.font_size_pt,
             prev.is_cjk,
             w_line,
-            font_metrics,
         );
         (prev.gap_pt - d_prev).clamp(0.0, 24.0)
     });
 
     let extra_bottom_pt = if let Some(next) = ctx.next_line.as_ref() {
-        let (a_next, _, h_next) = word_line_ascent_descent_total_pt(
+        let (a_next, _, h_next) = resolver.word_line_ascent_descent_total_pt(
             next.font_family.as_deref(),
             next.font_size_pt,
             next.is_cjk,
             w_line,
-            font_metrics,
         );
         let d_box_line = shift_pt.max(0.0).max((h_next - box_ascent_pt).max(0.0));
         (next.gap_pt - (d_box_line + a_next)).clamp(0.0, 24.0)
@@ -473,7 +474,8 @@ fn solve_inline_line_clearances_pt(
         } else {
             (None, 11.0, false)
         };
-        let (_, d_par, h_par) = word_line_ascent_descent_total_pt(fam, sz, is_cjk, w_line, font_metrics);
+        let (_, d_par, h_par) =
+            resolver.word_line_ascent_descent_total_pt(fam, sz, is_cjk, w_line);
         let d_box_line = shift_pt.max(0.0).max((h_par - box_ascent_pt).max(0.0));
         (d_par - d_box_line).clamp(0.0, 24.0)
     } else {
@@ -481,75 +483,6 @@ fn solve_inline_line_clearances_pt(
     };
 
     (extra_top_pt, extra_bottom_pt)
-}
-
-fn word_line_ascent_descent_total_pt(
-    font_family: Option<&str>,
-    font_size_pt: f64,
-    is_cjk: bool,
-    w_line_240: i64,
-    font_metrics: &BTreeMap<String, FontFaceMetricsIr>,
-) -> (f64, f64, f64) {
-    let sz = font_size_pt.clamp(6.0, 72.0);
-    let paradigm = resolve_paradigm_for_family(font_family, is_cjk, font_metrics);
-    let a_word = sz * paradigm.m_ink()
-        + measured_first_line_top_delta_pt(font_family, Some(sz), is_cjk);
-    let h_word = sz * paradigm.m_win() * (w_line_240 as f64 / 240.0);
-    let d_word = (h_word - a_word).max(0.0);
-    (a_word, d_word, h_word)
-}
-
-fn resolve_paradigm_for_family(
-    font_family: Option<&str>,
-    is_cjk: bool,
-    font_metrics: &BTreeMap<String, FontFaceMetricsIr>,
-) -> FontParadigm {
-    if let Some(fam) = font_family {
-        let effective_fam = match font_metrics.get(fam) {
-            Some(face) if !face.is_system_installed => {
-                if is_cjk || face.has_cjk_codepage {
-                    "SimSun"
-                } else if face.is_monospaced {
-                    "Consolas"
-                } else {
-                    "Times New Roman"
-                }
-            }
-            Some(face) => {
-                if let Some(known) = lookup_known_font(fam) {
-                    return known;
-                }
-                let raw = RawFontMetrics {
-                    family_name: fam,
-                    upm: face.upem,
-                    win_ascent: face
-                        .us_win_ascent
-                        .unwrap_or(face.hhea_ascender.max(0) as u16),
-                    win_descent: face
-                        .us_win_descent
-                        .unwrap_or((-face.hhea_descender).max(0) as u16),
-                    hhea_ascent: face.hhea_ascender,
-                    hhea_descent: face.hhea_descender,
-                    has_cjk_codepage: face.has_cjk_codepage,
-                    is_serif: fam.to_ascii_lowercase().contains("song")
-                        || fam.to_ascii_lowercase().contains("serif")
-                        || fam.to_ascii_lowercase().contains("times"),
-                    is_monospace: face.is_monospaced,
-                    has_valid_gsub_hani: face.has_gsub_hani,
-                };
-                return FontParadigm::from(&raw);
-            }
-            None => fam,
-        };
-        if let Some(known) = lookup_known_font(effective_fam) {
-            return known;
-        }
-    }
-    if is_cjk {
-        lookup_known_font("PingFang SC").unwrap()
-    } else {
-        lookup_known_font("Times New Roman").unwrap()
-    }
 }
 
 fn extract_block_text_sample(
@@ -610,24 +543,6 @@ fn first_text_run_info(
     None
 }
 
-/// Match `RunFontSizeConstruct` in `text_run.rs` so `Consolas`-substituted inline/block code runs
-/// use the exact Word `<w:sz>` rendered size (`9.5pt` at `8.8pt`, or `round(sz * 1.09 * 2) / 2`).
-fn effective_word_run_font_size_pt(r: &ir::TextRunIr, fallback_sz: f64) -> f64 {
-    let raw_sz = r.font_size_pt.unwrap_or(fallback_sz).clamp(6.0, 72.0);
-    let is_consolas_fallback = r.is_code
-        && matches!(
-            r.font_family.as_deref(),
-            None | Some("Consolas" | "DejaVu Sans Mono")
-        );
-    if is_consolas_fallback && (raw_sz - 8.8).abs() < 0.15 {
-        9.5
-    } else if is_consolas_fallback {
-        (((raw_sz * 1.09 * 2.0).round() as u32).clamp(10, 288) as f64) * 0.5
-    } else {
-        raw_sz
-    }
-}
-
 fn run_uses_cjk_slot_in_word(r: &ir::TextRunIr) -> bool {
     if run_has_cjk(r) {
         return true;
@@ -640,12 +555,13 @@ fn run_uses_cjk_slot_in_word(r: &ir::TextRunIr) -> bool {
 }
 
 /// Compute Word's natural `usWinDescent` (`pt`) for the first visual line of `block` inside a
-/// `w:lineRule="exact"` line box (`y_base = y_box_top + H_exact - d_win`), derived directly from
-/// OpenType `FontFaceMetricsIr` (`us_win_descent` / `hhea_descender` / `upem`).
+/// `w:lineRule="exact"` line box (`y_base = y_box_top + H_exact - d_win`), delegated to
+/// [`FontMetricsResolver::exact_line_descent_ratio`].
 fn word_exact_line_descent_pt(
     block: &BlockNode,
     font_metrics: &BTreeMap<String, FontFaceMetricsIr>,
 ) -> Option<f64> {
+    let resolver = FontMetricsResolver::new(font_metrics);
     let mut max_desc_pt = 0.0_f64;
     let mut visit_run = |r: &ir::TextRunIr, fallback_sz: f64| {
         if r.text.is_empty() {
@@ -653,45 +569,9 @@ fn word_exact_line_descent_pt(
         }
         let eff_sz = effective_word_run_font_size_pt(r, fallback_sz);
         let uses_cjk = run_uses_cjk_slot_in_word(r);
-        let named_face = r.font_family.as_deref().and_then(|f| font_metrics.get(f));
-        let face = match named_face {
-            Some(f) if !f.is_system_installed && f.is_monospaced && !uses_cjk => None,
-            Some(f) if !uses_cjk || f.has_cjk_codepage => Some(f),
-            _ if uses_cjk => font_metrics.get("PingFang SC").or_else(|| {
-                font_metrics
-                    .values()
-                    .find(|f| f.has_cjk_codepage && f.is_system_installed)
-            }),
-            other => other,
-        };
-        // Under `w:lineRule="exact"`, Word anchors `usWinDescent / upem` directly (`WORD_CJK_FACTOR`
-        // `1.3x` applies only to `w:lineRule="auto"` single-line spacing, never `exact`).
-        let desc_pt = match face {
-            Some(f) => {
-                let raw_ratio = f
-                    .us_win_descent
-                    .filter(|&d| d > 0)
-                    .map(|d| d as f64 / f.upem.max(1) as f64)
-                    .unwrap_or_else(|| {
-                        (-f.hhea_descender).max(0) as f64 / f.upem.max(1) as f64
-                    });
-                eff_sz * raw_ratio
-            }
-            None => {
-                let is_mono_fallback = named_face.is_some_and(|f| !f.is_system_installed && f.is_monospaced)
-                    || (r.is_code && matches!(r.font_family.as_deref(), None | Some("Consolas")));
-                eff_sz
-                    * if uses_cjk {
-                        0.34
-                    } else if is_mono_fallback {
-                        // `Consolas` OS/2 `usWinDescent / unitsPerEm = 439 / 2048`.
-                        439.0 / 2048.0
-                    } else {
-                        0.23
-                    }
-            }
-        };
-        max_desc_pt = max_desc_pt.max(desc_pt);
+        let ratio =
+            resolver.exact_line_descent_ratio(r.font_family.as_deref(), r.is_code, uses_cjk);
+        max_desc_pt = max_desc_pt.max(eff_sz * ratio);
     };
 
     match block {

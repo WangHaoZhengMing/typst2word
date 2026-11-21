@@ -19,6 +19,8 @@
 //!    whose `hhea = 1.400` is compounded by $\gamma_{\text{CJK}} = 1.3 \implies M_{\text{win}} = 1.820$,
 //!    while AAT-only tables simultaneously trigger `plsrun->script_id = 5` (`Latin` / `'DFLT'`) in `MicrosoftPTLS7`.
 
+use std::collections::BTreeMap;
+
 use ir::{FontFaceMetricsIr, ParagraphLineMetricsIr};
 use serde::{Deserialize, Serialize};
 
@@ -234,12 +236,12 @@ define_known_fonts! {
             => CjkUiSans { hhea_ratio: 1.000, m_ink: 0.718, workaround: ShapingWorkaround::ForceCjkScriptBinding },
         "simhei" | "microsoft yahei" | "黑体" | "dengxian" | "等线"
             => CjkUiSans { hhea_ratio: 1.059, m_ink: 0.800, workaround: ShapingWorkaround::None },
-        "simsun" | "nsimsun" | "mingliu" | "pmingliu" | "ms mincho" | "batang"
+        "simsun" | "nsimsun" | "宋体" | "mingliu" | "pmingliu" | "ms mincho" | "batang"
             => LegacyCjkSerif { hhea_ratio: 1.000, m_ink: 0.850 },
         "songti sc" | "songti tc" | "songti" | "stsong" | "kaiti sc" | "kaiti tc" | "stkaiti" | "stfangsong"
             | "baoli sc" | "libian sc" | "wawati sc" | "weibei sc" | "xingkai sc" | "yuanti sc"
             => AppleCjkQuirk { hhea_ratio: 1.400, m_ink: 0.695, workaround: ShapingWorkaround::ForceCjkScriptBinding },
-        "宋体" | "楷体" | "仿宋" | "kaiti" | "fangsong"
+        "楷体" | "仿宋" | "kaiti" | "fangsong"
             => AppleCjkQuirk { hhea_ratio: 1.400, m_ink: 0.695, workaround: ShapingWorkaround::None },
         "courier new" | "courier" | "dejavu sans mono"
             => Monospace { m_win: 1.1328, m_ink: 0.5713 },
@@ -250,7 +252,7 @@ define_known_fonts! {
         "songti" | "stsong" | "kaiti sc" | "kaiti tc" | "stkaiti" | "stfangsong"
             | "baoli sc" | "libian sc" | "wawati sc" | "weibei sc" | "xingkai sc" | "yuanti sc"
             => AppleCjkQuirk { hhea_ratio: 1.400, m_ink: 0.695, workaround: ShapingWorkaround::ForceCjkScriptBinding },
-        "宋体" | "楷体" | "仿宋" | "kaiti" | "fangsong"
+        "楷体" | "仿宋" | "kaiti" | "fangsong"
             => AppleCjkQuirk { hhea_ratio: 1.400, m_ink: 0.695, workaround: ShapingWorkaround::None },
         "pingfang"
             => CjkUiSans { hhea_ratio: 1.400, m_ink: 0.860, workaround: ShapingWorkaround::None },
@@ -258,7 +260,7 @@ define_known_fonts! {
             => CjkUiSans { hhea_ratio: 1.000, m_ink: 0.718, workaround: ShapingWorkaround::ForceCjkScriptBinding },
         "heiti" | "黑体" | "simhei" | "yahei" | "gothic"
             => CjkUiSans { hhea_ratio: 1.059, m_ink: 0.800, workaround: ShapingWorkaround::None },
-        "simsun" | "nsimsun" | "mingliu" | "mincho" | "batang"
+        "simsun" | "nsimsun" | "宋体" | "mingliu" | "mincho" | "batang"
             => LegacyCjkSerif { hhea_ratio: 1.000, m_ink: 0.850 },
         "courier" | "dejavu sans mono"
             => Monospace { m_win: 1.1328, m_ink: 0.5713 },
@@ -485,24 +487,12 @@ impl WordLineBox {
             Some(face) if face.is_system_installed => {
                 if face.has_cjk_codepage {
                     face.hhea_span_ratio() * WORD_CJK_FACTOR
-                } else if has_cjk_chars && paradigm.is_none_or(|p| !p.is_cjk()) {
-                    // Mixed paragraph starting on a Western run followed by CJK glyphs:
-                    // Word's East Asian fallback (`PingFang SC`) expands the line box if not CJK-aware.
-                    face.hhea_full_ratio()
                 } else {
                     face.hhea_full_ratio()
                 }
             }
             _ => match paradigm {
-                Some(p) => {
-                    if p.is_cjk() && !has_cjk_chars {
-                        // Pure ASCII inside a CJK font still uses the font's CJK `m_win` in Word
-                        // whenever the font itself is bound to `<w:rFonts w:ascii="..."/>`.
-                        p.m_win()
-                    } else {
-                        p.m_win()
-                    }
-                }
+                Some(p) => p.m_win(),
                 None => class.win_box_ratio(has_cjk_chars),
             },
         };
@@ -643,6 +633,295 @@ impl WordLineBox {
 }
 
 // ============================================================================
+// 3b. Single-Source-of-Truth Font Metrics Resolver (Binary OpenType First)
+// ============================================================================
+
+/// Unified font metric resolver backed by extracted OpenType binary tables
+/// (`DocumentIr::font_metrics`), falling back to calibrated known-font paradigms only when
+/// binary tables are absent or when Word substitutes a non-system-installed embedded font.
+#[derive(Debug, Clone, Copy)]
+pub struct FontMetricsResolver<'a> {
+    faces: &'a BTreeMap<String, FontFaceMetricsIr>,
+}
+
+impl<'a> FontMetricsResolver<'a> {
+    #[inline]
+    pub const fn new(faces: &'a BTreeMap<String, FontFaceMetricsIr>) -> Self {
+        Self { faces }
+    }
+
+    /// Look up extracted OpenType binary metrics for `family` (exact, case-insensitive, or alias).
+    pub fn lookup_face(&self, family: &str) -> Option<&'a FontFaceMetricsIr> {
+        if let Some(face) = self.faces.get(family) {
+            return Some(face);
+        }
+        let trimmed = family.trim();
+        if let Some(face) = self
+            .faces
+            .iter()
+            .find_map(|(k, v)| k.trim().eq_ignore_ascii_case(trimmed).then_some(v))
+        {
+            return Some(face);
+        }
+        let alias = crate::pipeline::font_recognize::resolve_font_alias_for_metrics(trimmed);
+        if !alias.eq_ignore_ascii_case(trimmed) {
+            return self
+                .faces
+                .get(alias)
+                .or_else(|| {
+                    self.faces
+                        .iter()
+                        .find_map(|(k, v)| k.trim().eq_ignore_ascii_case(alias).then_some(v))
+                });
+        }
+        None
+    }
+
+    /// Whether `family` is a CJK font (prefers binary `OS/2.ulCodePageRange1` CJK bits first).
+    pub fn is_cjk_font(&self, family: Option<&str>) -> bool {
+        if let Some(fam) = family
+            && let Some(face) = self.lookup_face(fam)
+        {
+            return face.has_cjk_codepage;
+        }
+        crate::pipeline::font_recognize::classify_font_family(family, false).is_cjk_font()
+    }
+
+    /// Whether `family` is an AAT-only CJK font lacking OpenType `'hani'` `GSUB`/`GPOS` tables,
+    /// triggering Word's `script_id = 5` (`'DFLT'`) override.
+    ///
+    /// Consults binary `FontFaceMetricsIr::has_gsub_hani` first when the font is installed on the
+    /// host OS, falling back to `lookup_known_font` when binary tables are absent.
+    pub fn is_aat_only_cjk_font(&self, family: Option<&str>) -> bool {
+        let Some(fam) = family else {
+            return false;
+        };
+        if let Some(face) = self.lookup_face(fam)
+            && face.is_system_installed
+        {
+            return face.has_cjk_codepage && !face.has_gsub_hani;
+        }
+        let alias = crate::pipeline::font_recognize::resolve_font_alias_for_metrics(fam);
+        lookup_known_font(alias)
+            .is_some_and(|p| p.shaping_workaround() == ShapingWorkaround::ForceCjkScriptBinding)
+    }
+
+    /// Resolve a [`FontParadigm`] from binary OpenType metrics first, respecting Word's
+    /// `<w:altName>` substitution when `is_system_installed == false`.
+    pub fn resolve_paradigm(&self, family: Option<&str>, is_cjk_hint: bool) -> FontParadigm {
+        if let Some(fam) = family {
+            let effective_fam = match self.lookup_face(fam) {
+                Some(face) if !face.is_system_installed => {
+                    if is_cjk_hint || face.has_cjk_codepage {
+                        "SimSun"
+                    } else if face.is_monospaced {
+                        "Consolas"
+                    } else {
+                        "Times New Roman"
+                    }
+                }
+                Some(face) => {
+                    let alias =
+                        crate::pipeline::font_recognize::resolve_font_alias_for_metrics(fam);
+                    if let Some(known) = lookup_known_font(alias) {
+                        return known;
+                    }
+                    let cap_ratio = face.cap_height_ratio();
+                    let raw = RawFontMetrics {
+                        family_name: alias,
+                        upm: face.upem,
+                        win_ascent: face
+                            .us_win_ascent
+                            .unwrap_or(face.hhea_ascender.max(0) as u16),
+                        win_descent: face
+                            .us_win_descent
+                            .unwrap_or((-face.hhea_descender).max(0) as u16),
+                        hhea_ascent: face.hhea_ascender,
+                        hhea_descent: face.hhea_descender,
+                        has_cjk_codepage: face.has_cjk_codepage,
+                        is_serif: {
+                            let lower = alias.to_ascii_lowercase();
+                            lower.contains("song")
+                                || lower.contains("serif")
+                                || lower.contains("times")
+                                || lower.contains("mincho")
+                        },
+                        is_monospace: face.is_monospaced,
+                        has_valid_gsub_hani: face.has_gsub_hani,
+                    };
+                    let mut paradigm = FontParadigm::from(&raw);
+                    if let Some(cap) = cap_ratio {
+                        paradigm = match paradigm {
+                            FontParadigm::StandardWin {
+                                m_win,
+                                is_cjk,
+                                workaround,
+                                ..
+                            } => FontParadigm::StandardWin {
+                                m_win,
+                                m_ink: cap,
+                                is_cjk,
+                                workaround,
+                            },
+                            FontParadigm::CjkUiSans {
+                                hhea_ratio,
+                                workaround,
+                                ..
+                            } => FontParadigm::CjkUiSans {
+                                hhea_ratio,
+                                m_ink: cap,
+                                workaround,
+                            },
+                            FontParadigm::LegacyCjkSerif { hhea_ratio, .. } => {
+                                FontParadigm::LegacyCjkSerif {
+                                    hhea_ratio,
+                                    m_ink: cap,
+                                }
+                            }
+                            FontParadigm::AppleCjkQuirk {
+                                hhea_ratio,
+                                workaround,
+                                ..
+                            } => FontParadigm::AppleCjkQuirk {
+                                hhea_ratio,
+                                m_ink: cap,
+                                workaround,
+                            },
+                            FontParadigm::Monospace { m_win, .. } => FontParadigm::Monospace {
+                                m_win,
+                                m_ink: cap,
+                            },
+                        };
+                    }
+                    return paradigm;
+                }
+                None => crate::pipeline::font_recognize::resolve_font_alias_for_metrics(fam),
+            };
+            if let Some(known) = lookup_known_font(effective_fam) {
+                return known;
+            }
+        }
+        if is_cjk_hint {
+            lookup_known_font("PingFang SC").unwrap()
+        } else {
+            lookup_known_font("Times New Roman").unwrap()
+        }
+    }
+
+    /// Resolve `(cap_height_ratio, word_single_line_ratio)` for `family`.
+    #[inline]
+    pub fn resolve_cap_and_word_ratios(
+        &self,
+        family: Option<&str>,
+        has_cjk_chars: bool,
+    ) -> (f64, f64) {
+        let face = family.and_then(|f| self.lookup_face(f));
+        WordLineBox::resolve_cap_and_word_ratios(family, face, has_cjk_chars)
+    }
+
+    /// Derive Word's first-line top baseline overhang (`Word baseline - Typst OS/2.sCapHeight`, in `pt`)
+    /// directly from binary OpenType tables (`hhea`, `OS/2.usWinAscent`, `OS/2.sCapHeight`,
+    /// `has_cjk_codepage`) when a system-installed font binary is present, falling back to
+    /// [`crate::page_calibration::measured_first_line_top_delta_pt`] otherwise.
+    pub fn first_line_top_overhang_pt(
+        &self,
+        family: Option<&str>,
+        font_size_pt: Option<f64>,
+        is_cjk_hint: bool,
+    ) -> f64 {
+        let sz = font_size_pt.unwrap_or(12.0).clamp(6.0, 72.0);
+        if let Some(fam) = family
+            && let Some(face) = self.lookup_face(fam)
+            && face.is_system_installed
+            && let Some(cap_ratio) = face.cap_height_ratio()
+        {
+            let upem = face.upem.max(1) as f64;
+            let hhea_asc = (face.hhea_ascender.max(0) as f64) / upem;
+            let hhea_gap = (face.hhea_line_gap.max(0) as f64) / upem;
+            let word_baseline_ratio = if face.has_cjk_codepage {
+                let win_asc = face
+                    .us_win_ascent
+                    .filter(|&a| a > 0)
+                    .map(|a| a as f64 / upem)
+                    .unwrap_or(hhea_asc);
+                let base_asc = win_asc.min(hhea_asc);
+                let cjk_extra = (WORD_CJK_FACTOR - 1.0) * face.hhea_span_ratio();
+                base_asc + 0.5 * cjk_extra
+            } else {
+                let win_asc = face
+                    .us_win_ascent
+                    .filter(|&a| a > 0)
+                    .map(|a| a as f64 / upem)
+                    .unwrap_or(hhea_asc);
+                (hhea_asc + hhea_gap).max(win_asc)
+            };
+            let delta_ratio = (word_baseline_ratio - cap_ratio).clamp(0.05, 0.70);
+            return sz * delta_ratio;
+        }
+        crate::page_calibration::measured_first_line_top_delta_pt(family, Some(sz), is_cjk_hint)
+    }
+
+    /// Compute `(ascent_pt, descent_pt, total_height_pt)` of a Word `w:lineRule="auto"` line box
+    /// at `(family, font_size_pt, w_line_240)`.
+    pub fn word_line_ascent_descent_total_pt(
+        &self,
+        family: Option<&str>,
+        font_size_pt: f64,
+        is_cjk_hint: bool,
+        w_line_240: i64,
+    ) -> (f64, f64, f64) {
+        let sz = font_size_pt.clamp(6.0, 72.0);
+        let paradigm = self.resolve_paradigm(family, is_cjk_hint);
+        let a_word =
+            sz * paradigm.m_ink() + self.first_line_top_overhang_pt(family, Some(sz), is_cjk_hint);
+        let h_word = sz * paradigm.m_win() * (w_line_240 as f64 / 240.0);
+        let d_word = (h_word - a_word).max(0.0);
+        (a_word, d_word, h_word)
+    }
+
+    /// Compute Word's natural `usWinDescent / upem` ratio under `w:lineRule="exact"` (where CJK
+    /// `1.3x` expansion does not apply), preferring binary `FontFaceMetricsIr`.
+    pub fn exact_line_descent_ratio(
+        &self,
+        family: Option<&str>,
+        is_code: bool,
+        uses_cjk: bool,
+    ) -> f64 {
+        let named_face = family.and_then(|f| self.lookup_face(f));
+        let face = match named_face {
+            Some(f) if !f.is_system_installed && f.is_monospaced && !uses_cjk => None,
+            Some(f) if !uses_cjk || f.has_cjk_codepage => Some(f),
+            _ if uses_cjk => self.lookup_face("PingFang SC").or_else(|| {
+                self.faces
+                    .values()
+                    .find(|f| f.has_cjk_codepage && f.is_system_installed)
+            }),
+            other => other,
+        };
+        match face {
+            Some(f) => f
+                .us_win_descent
+                .filter(|&d| d > 0)
+                .map(|d| d as f64 / f.upem.max(1) as f64)
+                .unwrap_or_else(|| (-f.hhea_descender).max(0) as f64 / f.upem.max(1) as f64),
+            None => {
+                let is_mono_fallback =
+                    named_face.is_some_and(|f| !f.is_system_installed && f.is_monospaced)
+                        || (is_code && matches!(family, None | Some("Consolas")));
+                if uses_cjk {
+                    0.34
+                } else if is_mono_fallback {
+                    // `Consolas` OS/2 `usWinDescent / unitsPerEm = 439 / 2048`.
+                    439.0 / 2048.0
+                } else {
+                    0.23
+                }
+            }
+        }
+    }
+}
+
+// ============================================================================
 // 4. Font Metrics Provider Trait & Default Implementation
 // ============================================================================
 
@@ -757,15 +1036,25 @@ pub fn estimate_text_advance_pt(
 impl FontMetricsProvider for WordFontMetricsProvider {
     fn single_line_height_pt(&self, font_family: Option<&str>, font_size_pt: f64) -> f64 {
         let s = font_size_pt.max(1.0);
-        match (
-            Self::is_cjk_codepage_font(font_family),
-            WordFontClass::classify(font_family, false),
-        ) {
-            (true, _) | (false, WordFontClass::Cjk | WordFontClass::CjkSongti) => {
-                s * self.word_cjk_factor
+        if let Some(fam) = font_family {
+            let alias = crate::pipeline::font_recognize::resolve_font_alias_for_metrics(fam);
+            if let Some(paradigm) = lookup_known_font(alias) {
+                let m_win = match paradigm {
+                    FontParadigm::CjkUiSans { hhea_ratio, .. }
+                    | FontParadigm::LegacyCjkSerif { hhea_ratio, .. }
+                    | FontParadigm::AppleCjkQuirk { hhea_ratio, .. } => {
+                        hhea_ratio * self.word_cjk_factor
+                    }
+                    FontParadigm::Monospace { m_win, .. } => m_win,
+                    FontParadigm::StandardWin { m_win, .. } => m_win,
+                };
+                return s * m_win;
             }
-            (false, WordFontClass::Monospace) => s * self.monospace_factor,
-            (false, WordFontClass::Latin) => s * self.latin_factor,
+        }
+        match WordFontClass::classify(font_family, false) {
+            WordFontClass::Cjk | WordFontClass::CjkSongti => s * self.word_cjk_factor,
+            WordFontClass::Monospace => s * self.monospace_factor,
+            WordFontClass::Latin => s * self.latin_factor,
         }
     }
 
@@ -952,17 +1241,12 @@ fn lookup_calibrated_glyph_advance_2048(family: &str, ch: char) -> Option<u16> {
     None
 }
 
-/// Check if a single character is a CJK ideograph, CJK symbol, or fullwidth glyph.
+/// Check if a single character is a CJK ideograph, CJK symbol, Hangul, or fullwidth glyph.
+///
+/// Delegates directly to [`ir::is_cjk_char`] as the single workspace-wide CJK predicate.
 #[inline]
-pub fn is_cjk_or_fullwidth_char(c: char) -> bool {
-    matches!(
-        c,
-        '\u{4E00}'..='\u{9FFF}'
-            | '\u{3400}'..='\u{4DBF}'
-            | '\u{3000}'..='\u{303F}'
-            | '\u{3040}'..='\u{30FF}'
-            | '\u{FF00}'..='\u{FFEF}'
-    )
+pub const fn is_cjk_or_fullwidth_char(c: char) -> bool {
+    ir::is_cjk_char(c)
 }
 
 /// Helper to check if a text string contains any CJK ideographs or fullwidth punctuation.

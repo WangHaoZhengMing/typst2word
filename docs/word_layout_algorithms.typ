@@ -1,6 +1,6 @@
 // ============================================================================
 // Microsoft Word 排版算法逆向与 word-construct 数学模型全解 (Apple Design Style)
-// 位置：/Users/ole/Code/typst2word/word_layout_algorithms.typ
+//
 // ============================================================================
 
 #let apple_blue    = rgb("#007AFF")

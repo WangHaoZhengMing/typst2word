@@ -8,6 +8,7 @@ import {
   setCachedFont,
   setCachedPackage,
 } from './idb-cache';
+import { isLikelyCjkFontFamily } from './local-fonts';
 import type {
   ConversionReport,
   FontFamilyDto,
@@ -73,29 +74,7 @@ function listPackages(workspace: WasmWorkspace): string[] {
 
 function hasAnyCjkFont(workspace: WasmWorkspace): boolean {
   if (cloudCjkLoaded) return true;
-  const cjkHints = [
-    'noto serif sc',
-    'noto sans sc',
-    'noto sans cjk',
-    'noto serif cjk',
-    'source han',
-    'songti',
-    'pingfang',
-    'heiti',
-    'kaiti',
-    'fangsong',
-    'simsun',
-    'simhei',
-    'microsoft yahei',
-    'dengxian',
-    'stsong',
-    'fandol',
-    'wenkai',
-  ];
-  return listFonts(workspace).some((f) => {
-    const lower = f.family.toLowerCase();
-    return cjkHints.some((h) => lower.includes(h));
-  });
+  return listFonts(workspace).some((f) => isLikelyCjkFontFamily(f.family));
 }
 
 async function fetchFirstAvailable(urls: string[]): Promise<Uint8Array> {
@@ -430,6 +409,7 @@ self.onmessage = async (event: MessageEvent) => {
 
         const t0 = performance.now();
         let hops = 0;
+        let exported = false;
         while (hops < 10) {
           const out = workspace.compile_and_convert(false);
           try {
@@ -468,10 +448,14 @@ self.onmessage = async (event: MessageEvent) => {
               },
               [buffer],
             );
+            exported = true;
             break;
           } finally {
             out.free();
           }
+        }
+        if (!exported) {
+          throw new Error('超过最大 @preview 包依赖解析深度 (10)，导出 .docx 失败');
         }
         break;
       }
