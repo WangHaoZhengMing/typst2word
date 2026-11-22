@@ -117,6 +117,7 @@ mod tests {
     fn drawing_ids_are_deterministic_and_textbox_equations_inherit_math_font() {
         let eq = EquationIr {
             id: NodeId::UNSET,
+            math_font_family: None,
             is_block: false,
             body: vec![MathNodeIr::Run(MathRunIr {
                 text: "x".to_string(),

@@ -10,38 +10,24 @@ use crate::xml::{escape_xml_attr, escape_xml_text};
 
 const EMPTY_MATH_RUN: &str = "<m:r><m:t>&#x200B;</m:t></m:r>";
 
-/// Calibrate an `EquationIr` via [`word_construct::equation::calibrate_equation_body`]
-/// and serialize `<m:oMath>...</m:oMath>`.
-#[allow(dead_code)]
-pub(crate) fn render_equation_omml(eq: &EquationIr, out: &mut String) {
-    render_equation_omml_with_font(eq, None, out);
-}
-
-/// Calibrate an `EquationIr` and serialize `<m:oMath>...</m:oMath>`, binding non-CJK math runs
-/// to `math_font` (e.g. embedded `"NewComputerModernMath"`) when specified.
+/// Render the OMML with the realized equation face, including Word-drawn operators.
 pub(crate) fn render_equation_omml_with_font(
     eq: &EquationIr,
-    math_font: Option<&str>,
+    document_font: Option<&str>,
     out: &mut String,
 ) {
-    let calibrated_body = calibrate_equation_body(eq);
-    render_math_omml_with_font(&calibrated_body, math_font, out);
-}
-
-/// Render a slice of `WordMathNode` into a complete `<m:oMath>...</m:oMath>` XML element.
-#[allow(dead_code)]
-pub(crate) fn render_math_omml(nodes: &[WordMathNode], out: &mut String) {
-    render_math_omml_with_font(nodes, None, out);
-}
-
-pub(crate) fn render_math_omml_with_font(
-    nodes: &[WordMathNode],
-    math_font: Option<&str>,
-    out: &mut String,
-) {
+    let family = eq.math_font_family.as_deref().or(document_font);
+    let mut control = String::new();
+    if let Some(local) = family.filter(|&f| Some(f) != document_font) {
+        control.push_str("<m:ctrlPr><w:rPr>");
+        render_math_run_fonts(local, false, &mut control);
+        control.push_str("</w:rPr></m:ctrlPr>");
+    }
+    let math_font = MathFont { family, control: &control };
+    let nodes = calibrate_equation_body(eq);
     out.push_str("<m:oMath>");
     let start_len = out.len();
-    for node in nodes {
+    for node in &nodes {
         render_math_node(node, math_font, out);
     }
     if out[start_len..].trim().is_empty() {
@@ -50,7 +36,13 @@ pub(crate) fn render_math_omml_with_font(
     out.push_str("</m:oMath>");
 }
 
-fn render_non_empty_node(node: &WordMathNode, math_font: Option<&str>, out: &mut String) {
+#[derive(Clone, Copy)]
+struct MathFont<'a> {
+    family: Option<&'a str>,
+    control: &'a str,
+}
+
+fn render_non_empty_node(node: &WordMathNode, math_font: MathFont<'_>, out: &mut String) {
     let start_len = out.len();
     render_math_node(node, math_font, out);
     if out.len() == start_len {
@@ -58,7 +50,8 @@ fn render_non_empty_node(node: &WordMathNode, math_font: Option<&str>, out: &mut
     }
 }
 
-fn render_math_node(node: &WordMathNode, math_font: Option<&str>, out: &mut String) {
+fn render_math_node(node: &WordMathNode, math_font: MathFont<'_>, out: &mut String) {
+    let control = math_font.control;
     match node {
         WordMathNode::Sequence(children) => {
             for child in children {
@@ -74,7 +67,7 @@ fn render_math_node(node: &WordMathNode, math_font: Option<&str>, out: &mut Stri
             };
             let _ = write!(
                 out,
-                r#"<m:f><m:fPr><m:type m:val="{frac_type}"/></m:fPr><m:num>"#
+                r#"<m:f><m:fPr><m:type m:val="{frac_type}"/>{control}</m:fPr><m:num>"#
             );
             render_non_empty_node(num, math_font, out);
             out.push_str("</m:num><m:den>");
@@ -83,13 +76,13 @@ fn render_math_node(node: &WordMathNode, math_font: Option<&str>, out: &mut Stri
         }
         WordMathNode::Radical { degree, radicand } => {
             if let Some(deg) = degree {
-                out.push_str(r#"<m:rad><m:radPr><m:degHide m:val="0"/></m:radPr><m:deg>"#);
+                let _ = write!(out, r#"<m:rad><m:radPr><m:degHide m:val="0"/>{control}</m:radPr><m:deg>"#);
                 render_non_empty_node(deg, math_font, out);
                 out.push_str("</m:deg><m:e>");
                 render_non_empty_node(radicand, math_font, out);
                 out.push_str("</m:e></m:rad>");
             } else {
-                out.push_str(r#"<m:rad><m:radPr><m:degHide m:val="1"/></m:radPr><m:deg/><m:e>"#);
+                let _ = write!(out, r#"<m:rad><m:radPr><m:degHide m:val="1"/>{control}</m:radPr><m:deg/><m:e>"#);
                 render_non_empty_node(radicand, math_font, out);
                 out.push_str("</m:e></m:rad>");
             }
@@ -171,7 +164,7 @@ fn render_math_node(node: &WordMathNode, math_font: Option<&str>, out: &mut Stri
 
             let _ = write!(
                 out,
-                r#"<m:nary><m:naryPr><m:chr m:val="{chr_str}"/><m:limLoc m:val="{lim_loc}"/><m:subHide m:val="{sub_hide}"/><m:supHide m:val="{sup_hide}"/></m:naryPr><m:sub>"#
+                r#"<m:nary><m:naryPr><m:chr m:val="{chr_str}"/><m:limLoc m:val="{lim_loc}"/><m:subHide m:val="{sub_hide}"/><m:supHide m:val="{sup_hide}"/>{control}</m:naryPr><m:sub>"#
             );
             if let Some(sub_n) = sub {
                 render_math_node(sub_n, math_font, out);
@@ -200,7 +193,7 @@ fn render_math_node(node: &WordMathNode, math_font: Option<&str>, out: &mut Stri
             }
             let _ = write!(
                 out,
-                r#"<m:endChr m:val="{}"/></m:dPr>"#,
+                r#"<m:endChr m:val="{}"/>{control}</m:dPr>"#,
                 escape_xml_attr(close)
             );
             for elem in elements {
@@ -253,7 +246,7 @@ fn render_math_node(node: &WordMathNode, math_font: Option<&str>, out: &mut Stri
             let chr_str = escape_xml_attr(chr.encode_utf8(&mut buf));
             let _ = write!(
                 out,
-                r#"<m:acc><m:accPr><m:chr m:val="{chr_str}"/></m:accPr><m:e>"#
+                r#"<m:acc><m:accPr><m:chr m:val="{chr_str}"/>{control}</m:accPr><m:e>"#
             );
             render_non_empty_node(base, math_font, out);
             out.push_str("</m:e></m:acc>");
@@ -262,7 +255,7 @@ fn render_math_node(node: &WordMathNode, math_font: Option<&str>, out: &mut Stri
             let pos = if *pos_bottom { "bot" } else { "top" };
             let _ = write!(
                 out,
-                r#"<m:bar><m:barPr><m:pos m:val="{pos}"/></m:barPr><m:e>"#
+                r#"<m:bar><m:barPr><m:pos m:val="{pos}"/>{control}</m:barPr><m:e>"#
             );
             render_non_empty_node(body, math_font, out);
             out.push_str("</m:e></m:bar>");
@@ -279,7 +272,7 @@ fn render_math_node(node: &WordMathNode, math_font: Option<&str>, out: &mut Stri
             let vert_jc = if *is_bottom { "top" } else { "bot" };
 
             let mut group_xml = format!(
-                r#"<m:groupChr><m:groupChrPr><m:chr m:val="{chr_str}"/><m:pos m:val="{pos}"/><m:vertJc m:val="{vert_jc}"/></m:groupChrPr><m:e>"#
+                r#"<m:groupChr><m:groupChrPr><m:chr m:val="{chr_str}"/><m:pos m:val="{pos}"/><m:vertJc m:val="{vert_jc}"/>{control}</m:groupChrPr><m:e>"#
             );
             render_non_empty_node(body, math_font, &mut group_xml);
             group_xml.push_str("</m:e></m:groupChr>");
@@ -326,7 +319,7 @@ fn render_math_node(node: &WordMathNode, math_font: Option<&str>, out: &mut Stri
             out.push_str("<m:r><m:t>&amp;</m:t></m:r>");
         }
         WordMathNode::Run(run) => {
-            render_math_run(run, math_font, out);
+            render_math_run(run, math_font.family, out);
         }
     }
 }
@@ -367,14 +360,8 @@ fn render_math_run(run: &WordMathRun, math_font: Option<&str>, out: &mut String)
         }
         out.push_str("</m:rPr>");
     }
-    let effective_font: Option<&str> = if has_cjk {
-        run.font_family.as_deref().filter(|f| !f.is_empty())
-    } else {
-        match run.font_family.as_deref().filter(|f| !f.is_empty()) {
-            Some("New Computer Modern Math") | Some("Cambria Math") | None => math_font,
-            Some(explicit) => Some(explicit),
-        }
-    };
+    let run_font = run.font_family.as_deref().filter(|f| !f.is_empty());
+    let effective_font = if has_cjk { run_font } else { run_font.or(math_font) };
     let width_scale = run.width_scale_pct.filter(|&p| p != 100);
     if effective_font.is_some()
         || run.font_size_pt.is_some()

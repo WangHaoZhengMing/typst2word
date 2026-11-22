@@ -142,6 +142,59 @@ mod tests {
     use super::*;
 
     #[test]
+    fn equations_keep_the_realized_math_font_in_every_embedding_mode() {
+        let world = TypstWorld::from_str("Inline $x$ and display:\n\n$ sqrt(y) $", None);
+        let compiled = compile_world(&world).unwrap();
+        for mode in [
+            FontEmbedMode::Subset,
+            FontEmbedMode::Full,
+            FontEmbedMode::None,
+        ] {
+            let ir = extract_document_ir_with_embed_mode(&compiled, &world, mode);
+            let family = ir
+                .math_font_family
+                .as_deref()
+                .expect("realized math family");
+            if mode == FontEmbedMode::None {
+                assert!(ir.embedded_fonts.is_empty());
+            } else {
+                let face = ir.embedded_fonts.iter().find(|f| f.is_math).unwrap();
+                assert_eq!(face.word_family, family);
+                assert_eq!(face.typst_family, "New Computer Modern Math");
+                assert!(!face.is_subset);
+                let count = u16::from_be_bytes([face.sfnt_data[4], face.sfnt_data[5]]) as usize;
+                assert!(
+                    face.sfnt_data[12..]
+                        .chunks_exact(16)
+                        .take(count)
+                        .any(|r| &r[..4] == b"MATH")
+                );
+            }
+
+            let bytes = docx_writer::write_docx_to_bytes(&build_word_document(&ir)).unwrap();
+            let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+            for (part, expected) in [
+                (
+                    "word/settings.xml",
+                    format!(r#"<m:mathFont m:val="{family}"/>"#),
+                ),
+                ("word/document.xml", format!(r#"w:ascii="{family}""#)),
+                (
+                    "word/fontTable.xml",
+                    format!(r#"<w:font w:name="{family}">"#),
+                ),
+            ] {
+                let mut xml = String::new();
+                std::io::Read::read_to_string(&mut zip.by_name(part).unwrap(), &mut xml).unwrap();
+                assert!(
+                    xml.contains(&expected),
+                    "{mode:?}: {part} missing {expected}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn centered_auto_table_preserves_alignment_bold_cells_and_single_line_width() {
         let source = r#"
 #align(center)[

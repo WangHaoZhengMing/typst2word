@@ -97,6 +97,10 @@ impl<'a> ExtractorContext<'a> {
             None
         };
 
+        if self.math_font_family.is_none() {
+            self.math_font_family.clone_from(&typo.math_font);
+        }
+
         let id = self.alloc_node_with_fragments(
             eq.span(),
             Some(loc),
@@ -113,6 +117,7 @@ impl<'a> ExtractorContext<'a> {
             body,
             source_text,
             numbering_text,
+            math_font_family: typo.math_font,
             bookmark,
             font_size_pt: Some((base_font_pt * 2.0).round() / 2.0),
             layout_metrics,
@@ -193,8 +198,12 @@ impl<'a> ExtractorContext<'a> {
                         && (text.text.chars().any(ir::is_cjk_char) || Self::is_cjk_font_family(fam))
                     {
                         *cjk_font = Some(fam.to_string());
-                    } else if math_font.is_none() && Self::is_math_font_family(fam) {
-                        *math_font = Some(fam.to_string());
+                    }
+                    if math_font.is_none() && text.font.ttf().tables().math.is_some() {
+                        *math_font = Some(
+                            crate::font_embed::extract_windows_family_name(text.font.ttf())
+                                .unwrap_or_else(|| fam.to_string()),
+                        );
                     }
                 }
                 TreeNode::Group { pos, children, .. } => {
@@ -428,16 +437,6 @@ impl<'a> ExtractorContext<'a> {
             || low.contains("黑")
             || low.contains("楷")
             || low.contains("仿宋")
-    }
-
-    pub(crate) fn is_math_font_family(fam: &str) -> bool {
-        let low = fam.trim().to_ascii_lowercase();
-        low.contains("math")
-            || low.contains("stix")
-            || low.contains("xits")
-            || low.contains("cambria")
-            || low.contains("newcm")
-            || low.contains("computer modern")
     }
 
     pub(crate) fn find_equation_number_text(nodes: &[TreeNode]) -> Option<String> {

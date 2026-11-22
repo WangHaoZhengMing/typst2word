@@ -82,6 +82,8 @@ pub(crate) struct ExtractorContext<'a> {
     pub(crate) doc_styles: Styles,
     pub(crate) current_page_index: usize,
     pub(crate) report: ConversionReport,
+    /// Word family name of the first realized equation font.
+    math_font_family: Option<String>,
     /// Monotonic counter for allocating `NodeId`s (`1..`).
     pub(crate) next_node_id: u32,
     /// Semantic provenance table (`NodeId -> NodeOrigin`).
@@ -154,6 +156,7 @@ impl<'a> ExtractorContext<'a> {
             doc_styles,
             current_page_index: 0,
             report: ConversionReport::default(),
+            math_font_family: None,
             next_node_id: 1,
             origins: BTreeMap::new(),
             reference_layout: BTreeMap::new(),
@@ -541,7 +544,7 @@ impl<'a> ExtractorContext<'a> {
         doc.page_setup = page_setup;
         doc.blocks = blocks;
         doc.font_metrics = font_metrics;
-        doc.math_font_family = embedded.math_font_family;
+        doc.math_font_family = self.math_font_family.take();
         doc.embedded_fonts = embedded.faces;
         doc.origins = std::mem::take(&mut self.origins);
         doc.reference_layout = std::mem::take(&mut self.reference_layout);

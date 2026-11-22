@@ -22,6 +22,6 @@ This matrix summarizes the mapping from Typst 0.15 constructs to native Microsof
 ## 2. Known Limitations & Graceful Degradation
 
 - **OMML Engine Constraints**: Multi-anchor column alignment within a single `<m:eqArr>` row, internal matrix augmentation lines / mixed per-column alignment, and automatic line-wrapping of ultra-wide display equations inside narrow table cells are constrained by Microsoft Word's OMML engine.
-- **Embedded Math Fonts**: OpenType `MATH` fonts (e.g., `NewCMMath-*.otf`) are intentionally not embedded into `.docx` because Word for Mac drops `<m:oMathPara>` display equations when `<m:mathFont>` is bound to an embedded CFF `.odttf` math font; OMML defaults to Word's built-in `Cambria Math`.
+- **Embedded Math Fonts** — Both embedding modes keep complete OpenType math faces. OMML uses the family resolved by Typst, including when font embedding is disabled.
 - **Legacy Word CFF Support**: Embedded OpenType CFF (`.otf`) text fonts render natively in Microsoft 365 / Word for Mac, while legacy Windows Word builds (Office 2010/2013) fall back via `<w:altName>`.
 - **Unsupported Primitives**: All Typst scripts, `#show`/`#set` rules, counters, and packages execute inside the embedded Typst 0.15 compiler. Any visual primitive that cannot yet be lowered into native Word objects never crashes or silently vanishes—`typst2word` emits an explicit in-document placeholder badge (`UnsupportedIr`) and reports its source location in the conversion report.

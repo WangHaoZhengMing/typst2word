@@ -22,6 +22,9 @@ pub struct EquationIr {
     pub numbering_text: Option<String>,
     /// Optional bookmark name for `@ref` cross-referencing.
     pub bookmark: Option<String>,
+    /// Realized math face (OpenType family name), including local equation font overrides.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub math_font_family: Option<String>,
     /// Base Typst font size in points.
     #[serde(default)]
     pub font_size_pt: Option<f64>,

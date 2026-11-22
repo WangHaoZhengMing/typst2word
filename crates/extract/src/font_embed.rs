@@ -20,7 +20,6 @@ struct CollectedFace {
 
 pub(crate) struct ExtractedEmbeddedFonts {
     pub(crate) faces: Vec<EmbeddedFontFaceIr>,
-    pub(crate) math_font_family: Option<String>,
     pub(crate) embedded_typst_families: BTreeSet<String>,
     pub(crate) notes: Vec<String>,
 }
@@ -35,7 +34,6 @@ impl<'a> ExtractorContext<'a> {
         if embed_mode == FontEmbedMode::None {
             return ExtractedEmbeddedFonts {
                 faces: Vec::new(),
-                math_font_family: None,
                 embedded_typst_families: BTreeSet::new(),
                 notes: Vec::new(),
             };
@@ -47,7 +45,6 @@ impl<'a> ExtractorContext<'a> {
         }
 
         let mut faces = Vec::new();
-        let math_font_family: Option<String> = None;
         let mut embedded_typst_families = BTreeSet::new();
         let mut total_bytes: usize = 0;
         let mut any_subsetted = false;
@@ -64,19 +61,11 @@ impl<'a> ExtractorContext<'a> {
                 .table(ttf_parser::Tag::from_bytes(b"MATH"))
                 .is_some();
 
-            // Skip embedding OpenType `MATH` fonts (such as Typst's CFF `NewCMMath-*.otf`):
-            // Microsoft Word's `<m:oMathPara>` display-equation renderer drops equations when
-            // `<m:mathFont>` is bound to an embedded `.odttf` CFF math font. Keeping Word's
-            // built-in `Cambria Math` ensures 100% reliable OMML rendering and keeps `.docx`
-            // files ~1 MB smaller.
-            if is_math {
-                continue;
-            }
-
             let word_family =
                 extract_windows_family_name(&ttf_face).unwrap_or_else(|| item.typst_family.clone());
 
-            let (sfnt_data, is_subset) = if embed_mode == FontEmbedMode::Subset {
+            // Minimal text subsets lose MATH constants and stretchable glyph assemblies.
+            let (sfnt_data, is_subset) = if embed_mode == FontEmbedMode::Subset && !is_math {
                 let mut glyph_ids = item.used_glyph_ids;
                 glyph_ids.insert(0); // `.notdef` is required as glyph 0
                 // Ensure ASCII space, digits `0-9` (for dynamic Word `PAGE`/`NUMPAGES`/`PAGEREF`
@@ -117,7 +106,7 @@ impl<'a> ExtractorContext<'a> {
                 typst_family: item.typst_family,
                 word_family,
                 slot: item.slot,
-                is_math: false,
+                is_math,
                 is_subset,
                 sfnt_data,
             });
@@ -128,7 +117,7 @@ impl<'a> ExtractorContext<'a> {
             let kb = (total_bytes + 512) / 1024;
             if embed_mode == FontEmbedMode::Subset && any_subsetted {
                 notes.push(format!(
-                    "已子集嵌入 {} 个字体（约 {} KB）；在 Word 中输入文档未出现的新字符时将回退到系统字体，如需完整可编辑请使用 --embed-fonts=full",
+                    "已嵌入 {} 个字体（约 {} KB，含子集字体）；如需为新增字符保留完整字体，请使用 --embed-fonts=full",
                     faces.len(),
                     kb
                 ));
@@ -143,7 +132,6 @@ impl<'a> ExtractorContext<'a> {
 
         ExtractedEmbeddedFonts {
             faces,
-            math_font_family,
             embedded_typst_families,
             notes,
         }
@@ -193,7 +181,7 @@ fn scan_frame_font_usage(
 
 /// Extract OpenType `nameID 1` (Windows Font Family Name), preferring Platform 3 (Windows)
 /// English US (`0x0409`), which Microsoft Word uses to match `<w:font w:name="...">` and `<m:mathFont>`.
-fn extract_windows_family_name(face: &ttf_parser::Face<'_>) -> Option<String> {
+pub(crate) fn extract_windows_family_name(face: &ttf_parser::Face<'_>) -> Option<String> {
     let mut fallback_win: Option<String> = None;
     let mut fallback_any: Option<String> = None;
     for name in face.names() {

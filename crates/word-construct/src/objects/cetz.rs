@@ -241,6 +241,7 @@ mod tests {
     fn make_inline_eq(body: Vec<MathNodeIr>) -> EquationIr {
         EquationIr {
             id: ir::NodeId::UNSET,
+            math_font_family: None,
             is_block: false,
             body,
             source_text: String::new(),

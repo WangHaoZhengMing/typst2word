@@ -55,9 +55,9 @@ In `crates/docx-writer/src/parts/fonts.rs`:
 
 ## 4. Mathematics Fonts & OMML Compatibility
 
-Empirical testing in Microsoft Word for Mac confirmed that while inline `<m:oMath>` equations can render with an embedded CFF `.otf` OpenType `MATH` font (`NewCMMath-*.otf` bound via OpenType `nameID 1 = "NewComputerModernMath"`), **display equations (`<m:oMathPara>`) fail to render when `<m:mathFont>` is bound to an embedded `.odttf` CFF math font**.
+The converter reads the OpenType family name from the math face Typst used to lay out each equation. The first detected equation face supplies the document's OMML default. Local equation fonts are emitted on math runs and on operators such as radicals and delimiters.
 
-Accordingly, `crates/extract/src/font_embed.rs` automatically skips embedding faces containing an OpenType `MATH` table, keeping Microsoft Word's built-in `Cambria Math` as `<m:mathFont>` for 100% reliable OMML rendering and ~1.3 MB smaller `.docx` files.
+Both `subset` and `full` embed complete math faces so the OpenType `MATH` table, size variants, and glyph assemblies survive packaging. With `none`, the DOCX references the same font names and the reader needs the fonts installed. Word for Mac versions can differ in their support for embedded CFF math fonts in display equations.
 
 ---
 

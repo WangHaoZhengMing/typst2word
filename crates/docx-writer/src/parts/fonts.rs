@@ -149,6 +149,9 @@ impl<'a> DocxWriter<'a> {
         .into_iter()
         .map(String::from)
         .collect();
+        if let Some(name) = &self.doc.math_font_family {
+            all_names.insert(name.clone());
+        }
         for name in self.doc.font_metrics.keys() {
             all_names.insert(name.clone());
         }

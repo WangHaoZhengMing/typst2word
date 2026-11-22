@@ -659,6 +659,7 @@ mod tests {
         });
         let inline_eq = InlineNode::EquationInline(EquationIr {
             id: ir::NodeId::UNSET,
+            math_font_family: None,
             is_block: false,
             body: Vec::new(),
             source_text: "$x_i^2 + y_i^2$".to_string(),
@@ -695,6 +696,7 @@ mod tests {
 
         let block_eq = EquationIr {
             id: ir::NodeId::UNSET,
+            math_font_family: None,
             is_block: true,
             body: Vec::new(),
             source_text: "$ a + b = c $".to_string(),

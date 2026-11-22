@@ -63,7 +63,7 @@ pub struct WordDocument {
     /// carried from `DocumentIr` for `docx-writer` line-box queries.
     pub font_metrics: BTreeMap<String, FontFaceMetricsIr>,
     /// Resolved Word OpenType `MATH` font family name (`nameID 1`, e.g. `"NewComputerModernMath"`)
-    /// when a math font is embedded for OMML rendering; `None` defaults to `"Cambria Math"`.
+    /// from equation layout, independent of embedding mode.
     pub math_font_family: Option<String>,
     /// Standalone SFNT font faces carried from `DocumentIr` for OOXML `.odttf` packaging.
     pub embedded_fonts: Vec<EmbeddedFontFaceIr>,

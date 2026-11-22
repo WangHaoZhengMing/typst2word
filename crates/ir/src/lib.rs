@@ -129,7 +129,7 @@ pub struct DocumentIr {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub font_metrics: BTreeMap<String, FontFaceMetricsIr>,
     /// Resolved Word OpenType `MATH` font family name (`nameID 1`, e.g. `"NewComputerModernMath"`)
-    /// when a math font is embedded for OMML rendering; `None` defaults to `"Cambria Math"`.
+    /// from equation layout, independent of embedding mode.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub math_font_family: Option<String>,
     /// Standalone SFNT font faces extracted for `.docx` embedding (skipped from JSON IR dumps).
