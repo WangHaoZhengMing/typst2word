@@ -47,6 +47,11 @@ impl<'a> ExtractorContext<'a> {
                     return true;
                 }
                 TreeNode::Element { elem, children, .. } => {
+                    // Internal shapes inside `EquationElem` (fraction bars, radical overbars,
+                    // underbars) are math typography rules, not CeTZ vector drawing shapes.
+                    if elem.is::<typst::math::EquationElem>() {
+                        continue;
+                    }
                     if elem.is::<CurveElem>() {
                         return true;
                     }

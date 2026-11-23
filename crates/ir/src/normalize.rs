@@ -19,6 +19,7 @@ use crate::{
 /// intra-document bookmark anchors).
 pub fn normalize_document_ir(doc: &mut DocumentIr) {
     visit_document_inline_lists_mut(doc, &mut coalesce_adjacent_text_runs);
+    visit_document_inline_lists_mut(doc, &mut resolve_weak_horizontal_spaces);
     collapse_hidden_empty_headings(doc);
     merge_split_containers(doc);
     clean_redundant_pagebreaks(&mut doc.blocks);
@@ -26,6 +27,76 @@ pub fn normalize_document_ir(doc: &mut DocumentIr) {
         clean_redundant_pagebreaks(&mut section.blocks);
     }
     canonicalize_bookmark_anchors(doc);
+}
+
+/// Collapse Typst weak horizontal spaces (`#h(..., weak: true)`) using Typst's spacing algebra:
+/// - Drop weak spaces at the start/end of an inline sequence or adjacent to `LineBreak` / `Tab`.
+/// - Drop weak spaces adjacent to a strong `HorizontalSpace` or whitespace at the boundary of
+///   an adjacent `Text` run.
+/// - Merge consecutive weak spaces to `max(w1, w2)` and clear `weak = false` on surviving spaces.
+pub fn resolve_weak_horizontal_spaces(inlines: &mut Vec<InlineNode>) {
+    if !inlines
+        .iter()
+        .any(|n| matches!(n, InlineNode::HorizontalSpace { weak: true, .. }))
+    {
+        return;
+    }
+
+    let is_left_absorber = |node: &InlineNode| match node {
+        InlineNode::LineBreak | InlineNode::Tab => true,
+        InlineNode::HorizontalSpace { weak: false, .. } => true,
+        InlineNode::Text(r) => r.text.chars().last().is_some_and(char::is_whitespace),
+        _ => false,
+    };
+    let is_right_absorber = |node: &InlineNode| match node {
+        InlineNode::LineBreak | InlineNode::Tab => true,
+        InlineNode::HorizontalSpace { weak: false, .. } => true,
+        InlineNode::Text(r) => r.text.chars().next().is_some_and(char::is_whitespace),
+        _ => false,
+    };
+
+    // First coalesce consecutive weak spaces into a single weak space of maximum width.
+    let mut merged: Vec<InlineNode> = Vec::with_capacity(inlines.len());
+    for node in std::mem::take(inlines) {
+        if let InlineNode::HorizontalSpace {
+            width_pt: w_new,
+            weak: true,
+        } = node
+        {
+            if let Some(InlineNode::HorizontalSpace {
+                width_pt: w_prev,
+                weak: true,
+            }) = merged.last_mut()
+            {
+                *w_prev = w_prev.max(w_new);
+                continue;
+            }
+        }
+        merged.push(node);
+    }
+
+    let len = merged.len();
+    let mut out = Vec::with_capacity(len);
+    for (i, node) in merged.iter().enumerate() {
+        if let InlineNode::HorizontalSpace {
+            width_pt,
+            weak: true,
+        } = *node
+        {
+            let prev = (i > 0).then(|| &merged[i - 1]);
+            let next = merged.get(i + 1);
+            let absorbed = prev.is_none_or(is_left_absorber) || next.is_none_or(is_right_absorber);
+            if !absorbed && width_pt > 0.5 {
+                out.push(InlineNode::HorizontalSpace {
+                    width_pt,
+                    weak: false,
+                });
+            }
+        } else {
+            out.push(node.clone());
+        }
+    }
+    *inlines = out;
 }
 
 /// Canonicalize Typst location-hash bookmark names (`_typst_loc_<hash>`) into deterministic

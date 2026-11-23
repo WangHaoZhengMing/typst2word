@@ -21,14 +21,22 @@ impl<'a> ExtractorContext<'a> {
             LineJoin::Round => LineJoinIr::Round,
             LineJoin::Bevel => LineJoinIr::Bevel,
         };
-        let dash = match &stroke.dash {
-            None => DashPatternIr::Solid,
-            Some(dp) => Self::classify_dash_array(&dp.array, thickness_pt),
+        let (dash, dash_array_pt) = match &stroke.dash {
+            None => (DashPatternIr::Solid, Vec::new()),
+            Some(dp) => (
+                Self::classify_dash_array(&dp.array, thickness_pt),
+                dp.array
+                    .iter()
+                    .map(|a| a.to_pt())
+                    .filter(|&v| v > 0.0)
+                    .collect(),
+            ),
         };
         StrokeIr {
             color,
             thickness_pt,
             dash,
+            dash_array_pt,
             cap,
             join,
         }

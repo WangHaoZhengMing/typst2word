@@ -199,7 +199,10 @@ impl<'a> ExtractorContext<'a> {
         {
             let gap_pt = box_pos.x.to_pt() - prev_x_end;
             if gap_pt > 2.0 {
-                out.push(InlineNode::HorizontalSpace { width_pt: gap_pt });
+                out.push(InlineNode::HorizontalSpace {
+                    width_pt: gap_pt,
+                    weak: false,
+                });
             }
         }
 

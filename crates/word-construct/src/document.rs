@@ -73,6 +73,8 @@ pub struct WordDocument {
     /// Whether the document contains any East Asian (CJK) characters or CJK typeface runs
     /// (requires `<w:useFELayout/>` and `zh-CN` theme font language in `word/settings.xml`).
     pub has_cjk: bool,
+    /// Typst root `text.cjk-latin-spacing` (`true` -> `<w:autoSpaceDE/DN w:val="1"/>`).
+    pub cjk_latin_spacing: bool,
     /// Whether the document contains any CeTZ canvases (`<wpg:wgp>` WordprocessingGroup),
     /// requiring `compatibilityMode=15` in `word/settings.xml`.
     pub has_cetz_canvas: bool,
@@ -246,6 +248,7 @@ impl WordDocument {
             embedded_fonts: first_doc.embedded_fonts.clone(),
             solved_nodes: merged_solved_nodes,
             has_cjk: first_doc.has_cjk,
+            cjk_latin_spacing: first_doc.cjk_latin_spacing,
             has_cetz_canvas,
         })
     }
@@ -326,12 +329,21 @@ pub fn build_word_document(ir: &DocumentIr) -> WordDocument {
                         resolve_paragraph_style_spacing(style, node_layout, page_band);
                         let para_lines = node_layout.and_then(|l| l.paragraph_lines.as_ref());
                         let is_multiline = para_lines.is_some_and(|p| p.line_count >= 2);
-                        let w_line = compute_line_spacing_dxa_with_metrics(
+                        let mut w_line = compute_line_spacing_dxa_with_metrics(
                             content,
                             style.line_spacing_pt,
                             &ir.font_metrics,
                             para_lines,
                         );
+                        // In Typst, `par.leading` only applies between lines of a multi-line
+                        // paragraph; applying an inflated `w:line > 240` (e.g. `354` on `24pt`
+                        // `Heiti SC`) to a single-line display paragraph adds phantom vertical air.
+                        if para_lines.is_some_and(|p| p.line_count == 1)
+                            && w_line > 240
+                            && ir::dominant_inline_font_size_pt(content, 11.0) >= 16.0
+                        {
+                            w_line = 240;
+                        }
                         if !id.is_unset() {
                             solved_nodes.entry(*id).or_default().paragraph_line =
                                 Some(SolvedParagraphLineDxa {
@@ -436,6 +448,7 @@ pub fn build_word_document(ir: &DocumentIr) -> WordDocument {
         embedded_fonts: ir.embedded_fonts.clone(),
         solved_nodes,
         has_cjk,
+        cjk_latin_spacing: ir.cjk_latin_spacing,
         has_cetz_canvas,
     }
 }

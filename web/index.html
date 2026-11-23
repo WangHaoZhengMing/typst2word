@@ -3,15 +3,28 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <title>typst2word — Typst 转 Word (.docx) 本地高保真转换器</title>
+    <title>Typst 转 Word（DOCX）在线转换器 | typst2word</title>
     <meta
       name="description"
       content="纯浏览器本地 WebAssembly 运行，将 Typst (.typ) 与工程包高保真转换为原生可编辑的 Microsoft Word (.docx)，支持 OMML 公式、DrawingML 矢量图形与字体子集嵌入。"
     />
+    <link rel="canonical" href="https://wanghaozhengming.github.io/typst2word/" />
+    <link rel="alternate" hreflang="zh-CN" href="https://wanghaozhengming.github.io/typst2word/" />
+    <link rel="alternate" hreflang="en" href="https://wanghaozhengming.github.io/typst2word/en/" />
     <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
   </head>
   <body>
-    <div id="app"></div>
+    <div id="app">
+      <main id="intro" class="intro">
+        <h1>Typst 转 Word</h1>
+        <p>将 .typ 文件、ZIP 工程包或粘贴的 Typst 源码转换为可编辑的 Word 文档（.docx）。转换在浏览器本地完成。</p>
+        <nav aria-label="转换帮助">
+          <a href="./guides/typst-math-to-word/">如何保留可编辑公式 · 附示例</a>
+          <a href="./en/" lang="en" hreflang="en">English</a>
+        </nav>
+        <noscript><p>在线转换需要启用 JavaScript。也可以下载<a href="https://github.com/WangHaoZhengMing/typst2word/releases">命令行版本</a>在电脑上转换。</p></noscript>
+      </main>
+    </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

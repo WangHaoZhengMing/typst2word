@@ -657,23 +657,33 @@ fn rewrite_inlines_denominator_after_page_field(
         out.push(orig[i].clone());
         if is_page_field {
             // Collect all consecutive `InlineNode::Text` runs immediately after `Field(Page)`
-            // because Typst/Touying may split `" / 37"` into multiple runs (`" "` + `"/"` + `" "` + `"37"`)
-            // prior to `ir::normalize` run coalescing.
+            // with their byte ranges so prefix, denominator (`NUMPAGES`), and suffix each keep
+            // their own original font/run styling (e.g. `Songti SC` CJK text vs `Times New Roman`
+            // digits in `"页（共"` + `"4"` + `"页）"`).
             let mut j = i + 1;
             let mut combined = String::new();
-            let mut template_run: Option<&TextRunIr> = None;
+            let mut run_spans: Vec<(usize, usize, &TextRunIr)> = Vec::new();
             while let Some(InlineNode::Text(r)) = orig.get(j) {
-                if template_run.is_none() {
-                    template_run = Some(r);
-                }
+                let start = combined.len();
                 combined.push_str(&r.text);
+                let end = combined.len();
+                run_spans.push((start, end, r));
                 j += 1;
             }
-            if let Some(tpl) = template_run
-                && let Some((prefix, denom, field_kind, suffix)) =
+            if !run_spans.is_empty()
+                && let Some((prefix, denom, field_kind, _suffix)) =
                     parse_denominator_in_suffix(&combined, total_doc_pages, run_len)
             {
-                push_denominator_nodes(tpl, &prefix, denom, field_kind, &suffix, &mut out);
+                let digit_start = prefix.len();
+                let digit_end = digit_start + denom.to_string().len();
+                let denom_tpl = run_spans
+                    .iter()
+                    .find(|(s, e, _)| digit_start >= *s && digit_start < *e)
+                    .map(|(_, _, r)| *r)
+                    .unwrap_or(run_spans[0].2);
+                push_sliced_text_runs(&run_spans, 0, digit_start, &mut out);
+                push_denominator_nodes(denom_tpl, "", denom, field_kind, "", &mut out);
+                push_sliced_text_runs(&run_spans, digit_end, combined.len(), &mut out);
                 changed = true;
                 i = j;
                 continue;
@@ -683,6 +693,28 @@ fn rewrite_inlines_denominator_after_page_field(
     }
     *inlines = out;
     changed
+}
+
+/// Emit the portion of `run_spans` intersecting byte range `[range_start, range_end)`,
+/// preserving each source `TextRunIr`'s exact font and styling.
+fn push_sliced_text_runs(
+    run_spans: &[(usize, usize, &TextRunIr)],
+    range_start: usize,
+    range_end: usize,
+    out: &mut Vec<InlineNode>,
+) {
+    if range_start >= range_end {
+        return;
+    }
+    for &(s, e, run) in run_spans {
+        let lo = range_start.max(s);
+        let hi = range_end.min(e);
+        if lo < hi {
+            let mut sliced = run.clone();
+            sliced.text = run.text[lo - s..hi - s].to_string();
+            out.push(InlineNode::Text(sliced));
+        }
+    }
 }
 
 fn blocks_have_page_field(blocks: &[BlockNode]) -> bool {

@@ -73,6 +73,7 @@ impl<'a> DocxWriter<'a> {
                 bookmark,
                 align,
                 left_indent_pt,
+                hanging_indent_pt,
                 box_style,
             } = block
             {
@@ -84,6 +85,7 @@ impl<'a> DocxWriter<'a> {
                     bookmark.as_deref(),
                     *align,
                     *left_indent_pt,
+                    *hanging_indent_pt,
                     box_style.as_ref(),
                     nb.collapse_before,
                     nb.heading_compact_after,
@@ -243,6 +245,7 @@ impl<'a> DocxWriter<'a> {
                 bookmark,
                 align,
                 left_indent_pt,
+                hanging_indent_pt,
                 box_style,
             } => {
                 self.render_heading(
@@ -253,6 +256,7 @@ impl<'a> DocxWriter<'a> {
                     bookmark.as_deref(),
                     *align,
                     *left_indent_pt,
+                    *hanging_indent_pt,
                     box_style.as_ref(),
                     out,
                 );

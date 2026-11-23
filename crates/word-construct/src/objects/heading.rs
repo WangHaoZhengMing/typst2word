@@ -38,17 +38,20 @@ impl HeadingConstruct {
             numbering,
             content,
             align,
+            0.0,
             collapse_before,
             compact_after,
             &BTreeMap::new(),
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn solve_with_metrics(
         level: usize,
         numbering: Option<&str>,
         content: &[InlineNode],
         align: HAlignIr,
+        explicit_hanging_indent_pt: f64,
         collapse_before: bool,
         compact_after: bool,
         font_metrics: &BTreeMap<String, FontFaceMetricsIr>,
@@ -146,22 +149,28 @@ impl HeadingConstruct {
             }
         });
 
-        let hanging_dxa = match (&prefix_run, align) {
-            (Some(pref), HAlignIr::Left) => {
-                let face = pref
-                    .font_family
-                    .as_deref()
-                    .and_then(|fam| font_metrics.get(fam));
-                let adv_pt = estimate_text_advance_pt(
-                    &pref.text,
-                    pref.font_family.as_deref(),
-                    face,
-                    sz_pt,
-                    pref.bold,
-                );
-                pt_to_dxa(adv_pt).max(0)
+        let hanging_dxa = if explicit_hanging_indent_pt > 0.5
+            && matches!(align, HAlignIr::Left | HAlignIr::Justify)
+        {
+            pt_to_dxa(explicit_hanging_indent_pt).max(0)
+        } else {
+            match (&prefix_run, align) {
+                (Some(pref), HAlignIr::Left | HAlignIr::Justify) => {
+                    let face = pref
+                        .font_family
+                        .as_deref()
+                        .and_then(|fam| font_metrics.get(fam));
+                    let adv_pt = estimate_text_advance_pt(
+                        &pref.text,
+                        pref.font_family.as_deref(),
+                        face,
+                        sz_pt,
+                        pref.bold,
+                    );
+                    pt_to_dxa(adv_pt).max(0)
+                }
+                _ => 0,
             }
-            _ => 0,
         };
 
         Self {

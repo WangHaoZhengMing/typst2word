@@ -47,6 +47,7 @@ pub struct CetzLabelConstruct {
     pub cx_emu: i64,
     pub cy_emu: i64,
     pub rot_60000: Option<i64>,
+    pub line_dxa_override: Option<i64>,
 }
 
 impl CetzLabelConstruct {
@@ -54,7 +55,7 @@ impl CetzLabelConstruct {
     /// and canvas bounds, without inspecting serialized XML.
     pub fn solve(label: &CetzLabelDrawableIr, canvas_height_pt: f64) -> Self {
         let content_kind = classify_label_inlines(&label.content);
-        let nobreak_content = replace_spaces_with_nbsp(&label.content);
+        let mut nobreak_content = replace_spaces_with_nbsp(&label.content);
 
         // Word's DrawingML textbox top-anchors the first line box (`anchor="t"`), which adds
         // slightly more top overhang for OMML math runs (and subscripted OMML runs) than plain text.
@@ -70,8 +71,23 @@ impl CetzLabelConstruct {
         let top_pt = (label.y_pt - y_shift_pt).max(0.0);
         let max_avail_h_pt = (canvas_height_pt - top_pt).max(11.0);
         let is_rotated = label.rotation_deg.abs() > 0.01;
+        let has_vertical_fraction = label_inlines_have_vertical_fraction(&nobreak_content);
+        if has_vertical_fraction {
+            // CJK vertical fractions inside DrawingML textboxes carry ~1.8x line-box height per
+            // story in Word (`Songti SC`); calibrate their equation font size to fit `label.height_pt`
+            // so the denominator does not spill downward into neighboring axis tick labels.
+            fit_cjk_fraction_label_equations(&mut nobreak_content, label.height_pt);
+        }
         let h_pt = if is_rotated {
             (label.height_pt + 14.0).max(28.0)
+        } else if has_vertical_fraction {
+            // OMML vertical fractions (`<m:f>`) inside CJK/math DrawingML textboxes need extra
+            // bottom clearance (CJK fonts like `Songti SC` carry a `1.82x` line-box factor per
+            // story) so Word never clips the denominator.
+            let dom_sz = ir::dominant_inline_font_size_pt(&label.content, 10.0).max(8.0);
+            (label.height_pt + 22.0)
+                .max(dom_sz * 4.5)
+                .clamp(24.0, max_avail_h_pt)
         } else {
             (label.height_pt + 2.0).clamp(11.0, max_avail_h_pt)
         };
@@ -84,6 +100,7 @@ impl CetzLabelConstruct {
             cx_emu: pt_to_emu(w_pt),
             cy_emu: pt_to_emu(h_pt),
             rot_60000: is_rotated.then(|| (label.rotation_deg * 60000.0).round() as i64),
+            line_dxa_override: has_vertical_fraction.then_some(240),
         }
     }
 }
@@ -117,6 +134,67 @@ fn classify_label_inlines(inlines: &[InlineNode]) -> CetzLabelContentKind {
         };
     }
     kind
+}
+
+fn fit_cjk_fraction_label_equations(inlines: &mut [InlineNode], target_height_pt: f64) {
+    for node in inlines {
+        match node {
+            InlineNode::EquationInline(eq) => {
+                let has_cjk = eq.source_text.chars().any(ir::is_cjk_char);
+                let has_vert_frac =
+                    crate::objects::equation::analyze_math_slice(&eq.body, eq.is_block)
+                        .max_fraction_depth
+                        > 0;
+                if has_cjk && has_vert_frac {
+                    let cur = eq.font_size_pt.unwrap_or(10.0).max(6.0);
+                    // Word renders a 2-story CJK OMML fraction at ~3.2 * S; scale S to fit
+                    // `target_height_pt` cleanly without encroaching on neighboring axis ticks.
+                    let fitted = (target_height_pt / 3.0).clamp(cur * 0.72, cur);
+                    let rounded = (fitted * 2.0).round() / 2.0;
+                    eq.font_size_pt = Some(rounded);
+                    match &mut eq.layout_metrics {
+                        ir::EquationLayoutMetricsIr::Measured {
+                            context_font_size_pt,
+                            max_glyph_pt,
+                            min_glyph_pt,
+                            ..
+                        }
+                        | ir::EquationLayoutMetricsIr::Unmeasured {
+                            context_font_size_pt,
+                            max_glyph_pt,
+                            min_glyph_pt,
+                            ..
+                        } => {
+                            *context_font_size_pt = rounded;
+                            *max_glyph_pt = Some(rounded);
+                            *min_glyph_pt = Some(rounded);
+                        }
+                    }
+                }
+            }
+            InlineNode::Link { content, .. }
+            | InlineNode::Ref { content, .. }
+            | InlineNode::Citation { content, .. }
+            | InlineNode::Field { content, .. } => {
+                fit_cjk_fraction_label_equations(content, target_height_pt);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn label_inlines_have_vertical_fraction(inlines: &[InlineNode]) -> bool {
+    inlines.iter().any(|node| match node {
+        InlineNode::EquationInline(eq) => {
+            crate::objects::equation::analyze_math_slice(&eq.body, eq.is_block).max_fraction_depth
+                > 0
+        }
+        InlineNode::Link { content, .. }
+        | InlineNode::Ref { content, .. }
+        | InlineNode::Citation { content, .. }
+        | InlineNode::Field { content, .. } => label_inlines_have_vertical_fraction(content),
+        _ => false,
+    })
 }
 
 fn math_node_has_subscript(node: &MathNodeIr) -> bool {
@@ -157,6 +235,9 @@ fn math_node_has_subscript(node: &MathNodeIr) -> bool {
             .any(|row| row.iter().any(math_node_has_subscript)),
         MathNodeIr::EquationArray { rows } => rows.iter().any(math_node_has_subscript),
         MathNodeIr::Accent { base, .. } => math_node_has_subscript(base),
+        MathNodeIr::Func { name, arg } => {
+            math_node_has_subscript(name) || math_node_has_subscript(arg)
+        }
         MathNodeIr::Bar { body, .. } | MathNodeIr::Cancel { body, .. } => {
             math_node_has_subscript(body)
         }
@@ -246,6 +327,7 @@ mod tests {
             body,
             source_text: String::new(),
             numbering_text: None,
+            numbering_runs: Vec::new(),
             bookmark: None,
             font_size_pt: Some(11.0),
             layout_metrics: Default::default(),

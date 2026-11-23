@@ -638,7 +638,11 @@
   <main class="container">
     <section class="hero">
       <h1>Typst 转 Word</h1>
-      <p>高保真输出原生 OMML 公式、矢量图形与嵌入字体。纯浏览器本地运行，文件绝不上传。</p>
+      <p>将 .typ 文件或 ZIP 工程包转换为可编辑的 Word 文档（.docx）。文件在浏览器本地处理。</p>
+      <nav class="guide-links" aria-label="转换帮助">
+        <a href="./guides/typst-math-to-word/">如何保留可编辑公式 · 附示例</a>
+        <a href="./en/" lang="en" hreflang="en">English</a>
+      </nav>
     </section>
 
     <section class="card converter-card">

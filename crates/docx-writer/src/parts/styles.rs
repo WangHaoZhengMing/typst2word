@@ -11,9 +11,12 @@ impl<'a> DocxWriter<'a> {
             ""
         };
         let ppr_cjk_xml = if has_cjk {
-            "\n        <w:overflowPunct w:val=\"1\"/>\n        <w:autoSpaceDE w:val=\"0\"/>\n        <w:autoSpaceDN w:val=\"0\"/>"
+            let auto_sp = if self.doc.cjk_latin_spacing { "1" } else { "0" };
+            format!(
+                "\n        <w:overflowPunct w:val=\"1\"/>\n        <w:autoSpaceDE w:val=\"{auto_sp}\"/>\n        <w:autoSpaceDN w:val=\"{auto_sp}\"/>"
+            )
         } else {
-            ""
+            String::new()
         };
         format!(
             r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>

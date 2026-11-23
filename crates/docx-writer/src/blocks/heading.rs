@@ -33,6 +33,7 @@ impl<'a> DocxWriter<'a> {
         bookmark: Option<&str>,
         align: HAlignIr,
         left_indent_pt: f64,
+        hanging_indent_pt: f64,
         box_style: Option<&ContainerStyleIr>,
         out: &mut String,
     ) {
@@ -44,6 +45,7 @@ impl<'a> DocxWriter<'a> {
             bookmark,
             align,
             left_indent_pt,
+            hanging_indent_pt,
             box_style,
             false,
             false,
@@ -61,6 +63,7 @@ impl<'a> DocxWriter<'a> {
         bookmark: Option<&str>,
         align: HAlignIr,
         left_indent_pt: f64,
+        hanging_indent_pt: f64,
         box_style: Option<&ContainerStyleIr>,
         collapse_before: bool,
         compact_after: bool,
@@ -71,6 +74,7 @@ impl<'a> DocxWriter<'a> {
             numbering,
             content,
             align,
+            hanging_indent_pt,
             collapse_before,
             compact_after,
             &self.doc.font_metrics,
@@ -109,7 +113,7 @@ impl<'a> DocxWriter<'a> {
             false,
             out,
         );
-        if construct.align == HAlignIr::Left {
+        if matches!(construct.align, HAlignIr::Left | HAlignIr::Justify) {
             let base_left_dxa = if left_indent_pt.abs() > 0.5 {
                 pt_to_dxa(left_indent_pt)
             } else {

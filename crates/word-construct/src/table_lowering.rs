@@ -458,7 +458,7 @@ fn estimate_inlines_word_advance_pt(
                     }
                 }
             }
-            InlineNode::HorizontalSpace { width_pt: w } => width_pt += *w,
+            InlineNode::HorizontalSpace { width_pt: w, .. } => width_pt += *w,
             InlineNode::Link { content, .. }
             | InlineNode::Ref { content, .. }
             | InlineNode::Citation { content, .. }

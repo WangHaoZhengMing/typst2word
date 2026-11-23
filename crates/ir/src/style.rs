@@ -164,6 +164,10 @@ pub struct StrokeIr {
     pub color: ColorHex,
     pub thickness_pt: f64,
     pub dash: DashPatternIr,
+    /// Optional raw Typst dash/gap lengths in `pt` (e.g. `[5.0, 3.0]` for `dash: (5pt, 3pt)`),
+    /// enabling exact OOXML `<a:custDash>` serialization in DrawingML.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dash_array_pt: Vec<f64>,
     #[serde(default)]
     pub cap: LineCapIr,
     #[serde(default)]
@@ -176,6 +180,7 @@ impl Default for StrokeIr {
             color: "000000".to_string(),
             thickness_pt: 1.0,
             dash: DashPatternIr::Solid,
+            dash_array_pt: Vec::new(),
             cap: LineCapIr::Butt,
             join: LineJoinIr::Miter,
         }

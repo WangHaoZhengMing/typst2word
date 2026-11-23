@@ -9,10 +9,14 @@ use typst::pdf::{PdfMarkerTag, PdfMarkerTagKind};
 
 use crate::ExtractorContext;
 use crate::frame_tree::TreeNode;
-use crate::math::extract_equation_math_nodes;
-use ir::{EquationIr, EquationLayoutMetricsIr, SemanticRoleIr};
+use crate::inline::ActiveInlineState;
+use crate::math::{EquationFonts, extract_equation_math_nodes};
+use ir::{EquationIr, EquationLayoutMetricsIr, SemanticRoleIr, TextRunIr};
 
+#[derive(Default)]
 struct EquationTypography {
+    number: Vec<TextRunIr>,
+    fonts: EquationFonts,
     context_font_size_pt: f64,
     max_glyph_pt: Option<f64>,
     min_glyph_pt: Option<f64>,
@@ -29,7 +33,10 @@ impl<'a> ExtractorContext<'a> {
     ) -> EquationIr {
         let chain = self.scoped_style_chain(Some(loc));
         let is_block = eq.block.get(chain);
-        let typo = Self::resolve_equation_typography(children, chain);
+        let cfg_numbering = eq.numbering.get_cloned(chain);
+        let number_span = (is_block && cfg_numbering.is_some() && !eq.span().is_detached())
+            .then_some(eq.span());
+        let typo = Self::resolve_equation_typography(children, chain, number_span);
         let measured_bbox = Self::measure_equation_bbox(
             children,
             is_block,
@@ -44,6 +51,7 @@ impl<'a> ExtractorContext<'a> {
             Some(typo.context_font_size_pt),
             typo.math_font.as_deref(),
             typo.cjk_font.as_deref(),
+            &typo.fonts,
         );
         let max_available_width_pt =
             Some((self.current_column_width_pt() - self.scope.container_inset_pt).max(60.0));
@@ -74,9 +82,13 @@ impl<'a> ExtractorContext<'a> {
 
         // Extract resolved equation number (e.g. `(1)`, `(2)`, `(3)`) from laid-out `children`
         // or from the active `#set math.equation(numbering: ...)` pattern.
-        let cfg_numbering = eq.numbering.get_cloned(chain);
+        let mut numbering_runs = typo.number;
         let numbering_text = if is_block {
-            if let Some(found) = Self::find_equation_number_text(children) {
+            if !numbering_runs.is_empty() {
+                self.next_equation_number += 1;
+                Some(numbering_runs.iter().map(|run| run.text.as_str()).collect())
+            } else if let Some((found, runs)) = Self::find_equation_number(children) {
+                numbering_runs = runs;
                 self.next_equation_number += 1;
                 Some(found)
             } else if let Some(numbering) = cfg_numbering {
@@ -117,6 +129,7 @@ impl<'a> ExtractorContext<'a> {
             body,
             source_text,
             numbering_text,
+            numbering_runs,
             math_font_family: typo.math_font,
             bookmark,
             font_size_pt: Some((base_font_pt * 2.0).round() / 2.0),
@@ -127,84 +140,64 @@ impl<'a> ExtractorContext<'a> {
     fn resolve_equation_typography(
         nodes: &[TreeNode],
         chain: typst::foundations::StyleChain,
+        number_span: Option<typst::syntax::Span>,
     ) -> EquationTypography {
-        let mut max_size_pt = 0.0_f64;
-        let mut min_size_pt = f64::INFINITY;
-        let mut math_font: Option<String> = None;
-        let mut cjk_font: Option<String> = None;
-        Self::scan_equation_text_nodes(
-            nodes,
-            &mut max_size_pt,
-            &mut min_size_pt,
-            &mut math_font,
-            &mut cjk_font,
-        );
-
-        let context_font_size_pt =
-            Self::resolve_length_pt(chain.get(typst::text::TextElem::size).0, 11.0);
-        let max_glyph_pt = if max_size_pt > 1.0 {
-            Some((max_size_pt * 10.0).round() / 10.0)
-        } else {
-            None
+        let mut typo = EquationTypography {
+            context_font_size_pt: Self::resolve_length_pt(
+                chain.get(typst::text::TextElem::size).0,
+                11.0,
+            ),
+            ..Default::default()
         };
-        let min_glyph_pt = if min_size_pt.is_finite() && min_size_pt > 1.0 {
-            Some((min_size_pt * 10.0).round() / 10.0)
-        } else {
-            None
-        };
-
-        if cjk_font.is_none() {
-            for fam in chain.get_ref(typst::text::TextElem::font).into_iter() {
-                if Self::is_cjk_font_family(fam.as_str()) {
-                    cjk_font = Some(fam.as_str().to_string());
-                    break;
-                }
-            }
+        Self::scan_equation_text_nodes(nodes, &mut typo, number_span);
+        if typo.cjk_font.is_none() {
+            typo.cjk_font = chain
+                .get_ref(typst::text::TextElem::font)
+                .into_iter()
+                .find(|fam| Self::is_cjk_font_family(fam.as_str()))
+                .map(|fam| fam.as_str().to_string());
         }
-
-        EquationTypography {
-            context_font_size_pt,
-            max_glyph_pt,
-            min_glyph_pt,
-            math_font,
-            cjk_font,
-        }
+        typo
     }
 
     fn scan_equation_text_nodes(
         nodes: &[TreeNode],
-        max_size_pt: &mut f64,
-        min_size_pt: &mut f64,
-        math_font: &mut Option<String>,
-        cjk_font: &mut Option<String>,
+        typo: &mut EquationTypography,
+        number_span: Option<typst::syntax::Span>,
     ) {
         for node in nodes {
             match node {
                 TreeNode::Text { text, .. } => {
+                    // Typst assigns the displayed counter the span of the whole equation.
+                    if !text.glyphs.is_empty()
+                        && text.glyphs.iter().all(|g| Some(g.span.0) == number_span)
+                    {
+                        if let Some(run) = Self::equation_number_run(text) {
+                            typo.number.push(run);
+                        }
+                        continue;
+                    }
                     if text.text.trim().is_empty() {
                         continue;
                     }
                     let sz = text.size.to_pt();
-                    if sz > *max_size_pt {
-                        *max_size_pt = sz;
+                    if sz > 1.0 {
+                        let sz = (sz * 10.0).round() / 10.0;
+                        typo.max_glyph_pt = Some(typo.max_glyph_pt.map_or(sz, |max| sz.max(max)));
+                        typo.min_glyph_pt = Some(typo.min_glyph_pt.map_or(sz, |min| sz.min(min)));
                     }
-                    if sz > 1.0 && sz < *min_size_pt {
-                        *min_size_pt = sz;
-                    }
-                    // Preserve the exact realized font family name verbatim (`"Hei"`, `"SimSun"`,
-                    // `"New Computer Modern Math"`, etc.) without substituting another family.
-                    let fam = text.font.info().family.as_str();
-                    if cjk_font.is_none()
-                        && (text.text.chars().any(ir::is_cjk_char) || Self::is_cjk_font_family(fam))
+                    let family = text.font.info().family.as_str();
+                    if typo.cjk_font.is_none()
+                        && (text.text.chars().any(ir::is_cjk_char)
+                            || Self::is_cjk_font_family(family))
                     {
-                        *cjk_font = Some(fam.to_string());
+                        typo.cjk_font = Some(family.to_owned());
                     }
-                    if math_font.is_none() && text.font.ttf().tables().math.is_some() {
-                        *math_font = Some(
-                            crate::font_embed::extract_windows_family_name(text.font.ttf())
-                                .unwrap_or_else(|| fam.to_string()),
-                        );
+                    let math = crate::font_embed::math_family(&text.font);
+                    if typo.math_font.is_none() {
+                        typo.math_font.clone_from(&math);
                     }
+                    typo.fonts.record(text, math.as_deref());
                 }
                 TreeNode::Group { pos, children, .. } => {
                     if pos.x.to_pt() > 220.0 {
@@ -216,13 +209,7 @@ impl<'a> ExtractorContext<'a> {
                             continue;
                         }
                     }
-                    Self::scan_equation_text_nodes(
-                        children,
-                        max_size_pt,
-                        min_size_pt,
-                        math_font,
-                        cjk_font,
-                    );
+                    Self::scan_equation_text_nodes(children, typo, number_span);
                 }
                 TreeNode::Element { elem, children, .. } => {
                     if let Some(marker) = elem.to_packed::<PdfMarkerTag>()
@@ -230,13 +217,7 @@ impl<'a> ExtractorContext<'a> {
                     {
                         continue;
                     }
-                    Self::scan_equation_text_nodes(
-                        children,
-                        max_size_pt,
-                        min_size_pt,
-                        math_font,
-                        cjk_font,
-                    );
+                    Self::scan_equation_text_nodes(children, typo, number_span);
                 }
                 _ => {}
             }
@@ -439,89 +420,74 @@ impl<'a> ExtractorContext<'a> {
             || low.contains("仿宋")
     }
 
-    pub(crate) fn find_equation_number_text(nodes: &[TreeNode]) -> Option<String> {
+    fn equation_number_run(text: &typst::text::TextItem) -> Option<TextRunIr> {
+        let mut run = Self::text_item_to_run(text, &ActiveInlineState::default());
+        run.text = run.text.replace('\u{2060}', "");
+        if let Some(family) = crate::font_embed::math_family(&text.font) {
+            run.font_family = Some(family);
+        }
+        (!run.text.is_empty()).then_some(run)
+    }
+
+    fn find_equation_number(nodes: &[TreeNode]) -> Option<(String, Vec<TextRunIr>)> {
         for node in nodes {
             match node {
                 TreeNode::Element { elem, children, .. } => {
-                    if let Some(marker) = elem.to_packed::<PdfMarkerTag>() {
-                        if matches!(marker.kind, PdfMarkerTagKind::Label) {
-                            let txt = Self::nodes_to_plain_text(children)
-                                .replace('\u{2060}', "")
-                                .trim()
-                                .to_string();
-                            if !txt.is_empty() {
-                                return Some(txt);
-                            }
-                        }
+                    let label = elem
+                        .to_packed::<PdfMarkerTag>()
+                        .is_some_and(|m| matches!(m.kind, PdfMarkerTagKind::Label));
+                    if (label || elem.is::<ParElem>())
+                        && let Some(number) = Self::equation_label_runs(children, None)
+                    {
+                        return Some(number);
                     }
-                    if elem.is::<ParElem>() {
-                        let txt = Self::nodes_to_plain_text(children)
-                            .replace('\u{2060}', "")
-                            .trim()
-                            .to_string();
-                        if !txt.is_empty() {
-                            return Some(txt);
-                        }
-                    }
-                    if let Some(found) = Self::find_equation_number_text(children) {
-                        return Some(found);
+                    if let Some(number) = Self::find_equation_number(children) {
+                        return Some(number);
                     }
                 }
                 TreeNode::Group { pos, children, .. } => {
-                    if let Some(found) = Self::find_equation_number_text(children) {
-                        return Some(found);
+                    if let Some(number) = Self::find_equation_number(children) {
+                        return Some(number);
                     }
-                    if pos.x.to_pt() > 220.0 {
-                        let txt = Self::nodes_to_plain_text(children)
-                            .replace('\u{2060}', "")
-                            .trim()
-                            .to_string();
-                        if Self::looks_like_equation_number(&txt) {
-                            return Some(txt);
-                        }
+                    if pos.x.to_pt() > 220.0
+                        && let Some(number) = Self::equation_label_runs(children, None)
+                        && Self::looks_like_equation_number(&number.0)
+                    {
+                        return Some(number);
                     }
                 }
                 _ => {}
             }
         }
-        let mut right_text = String::new();
-        Self::collect_right_edge_equation_text(nodes, 0.0, &mut right_text);
-        let trimmed = right_text.replace('\u{2060}', "").trim().to_string();
-        if Self::looks_like_equation_number(&trimmed) {
-            return Some(trimmed);
-        }
-        None
+        Self::equation_label_runs(nodes, Some(260.0))
+            .filter(|(text, _)| Self::looks_like_equation_number(text))
     }
 
-    pub(crate) fn collect_right_edge_equation_text(
+    fn equation_label_runs(
         nodes: &[TreeNode],
-        offset_x_pt: f64,
-        out: &mut String,
-    ) {
-        for node in nodes {
-            match node {
-                TreeNode::Text { text, pos, .. } => {
-                    if offset_x_pt + pos.x.to_pt() > 260.0 {
-                        out.push_str(&text.text);
+        min_x: Option<f64>,
+    ) -> Option<(String, Vec<TextRunIr>)> {
+        fn collect(nodes: &[TreeNode], min_x: Option<f64>, runs: &mut Vec<TextRunIr>) {
+            for node in nodes {
+                match node {
+                    TreeNode::Text { text, pos, .. } if min_x.is_none_or(|x| pos.x.to_pt() > x) => {
+                        if let Some(run) = ExtractorContext::equation_number_run(text) {
+                            runs.push(run);
+                        }
                     }
+                    TreeNode::Group { children, pos, .. }
+                    | TreeNode::Element { children, pos, .. } => {
+                        collect(children, min_x.map(|x| x - pos.x.to_pt()), runs);
+                    }
+                    _ => {}
                 }
-                TreeNode::Group { pos, children, .. } => {
-                    Self::collect_right_edge_equation_text(
-                        children,
-                        offset_x_pt + pos.x.to_pt(),
-                        out,
-                    );
-                }
-                TreeNode::Element { pos, children, .. } => {
-                    Self::collect_right_edge_equation_text(
-                        children,
-                        offset_x_pt + pos.x.to_pt(),
-                        out,
-                    );
-                }
-                _ => {}
             }
         }
+        let mut runs = Vec::new();
+        collect(nodes, min_x, &mut runs);
+        let label: String = runs.iter().map(|run| run.text.as_str()).collect();
+        let trimmed = label.trim();
+        (!trimmed.is_empty()).then(|| (trimmed.to_string(), runs))
     }
 
     pub(crate) fn looks_like_equation_number(s: &str) -> bool {

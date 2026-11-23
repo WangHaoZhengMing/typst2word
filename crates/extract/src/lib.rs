@@ -538,11 +538,21 @@ impl<'a> ExtractorContext<'a> {
         }
         self.report.font_embed_notes = embedded.notes;
 
+        let cjk_latin_spacing = page_styles
+            .first()
+            .map(|styles| {
+                StyleChain::new(styles)
+                    .get(typst::text::TextElem::cjk_latin_spacing)
+                    .is_auto()
+            })
+            .unwrap_or(true);
+
         let mut doc = DocumentIr::default();
         doc.sections = sections;
         doc.metadata = metadata;
         doc.page_setup = page_setup;
         doc.blocks = blocks;
+        doc.cjk_latin_spacing = cjk_latin_spacing;
         doc.font_metrics = font_metrics;
         doc.math_font_family = self.math_font_family.take();
         doc.embedded_fonts = embedded.faces;

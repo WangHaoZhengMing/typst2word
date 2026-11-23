@@ -193,60 +193,51 @@ pub fn primary_font_size_pt(content: &[InlineNode]) -> f64 {
     ir::dominant_inline_font_size_pt(content, 11.0)
 }
 
-/// Estimate inline width (`pt`) of `content` for distinguishing `#h(1fr)` flush-right tabs from fixed `#h(36pt)`.
-fn estimate_inlines_width_pt(content: &[InlineNode]) -> f64 {
-    content
-        .iter()
-        .map(|inl| match inl {
-            InlineNode::Text(r) => {
-                let sz = r.font_size_pt.unwrap_or(11.0);
-                r.text
-                    .chars()
-                    .map(|ch| if ir::is_cjk_char(ch) { sz } else { sz * 0.52 })
-                    .sum::<f64>()
-            }
-            InlineNode::HorizontalSpace { width_pt } => *width_pt,
-            InlineNode::ShapeInline(s) => s.width_pt,
-            InlineNode::ImageInline(i) => i.width_pt,
-            InlineNode::CetzInline(c) => c.width_pt,
-            InlineNode::Field { content: fc, .. }
-            | InlineNode::Link { content: fc, .. }
-            | InlineNode::Ref { content: fc, .. }
-            | InlineNode::Citation { content: fc, .. } => estimate_inlines_width_pt(fc),
-            _ => 0.0,
-        })
-        .sum()
-}
-
 /// Whether `content` contains a single `#h(1fr)`-style fill space reaching the right margin
-/// (as opposed to a fixed `#h(36pt)` horizontal spacer mid-line).
+/// (as opposed to a leading `#h(2em)` indent or a fixed `#h(36pt)` horizontal spacer mid-line).
 pub fn has_flush_right_horizontal_space(content: &[InlineNode], content_width_dxa: i64) -> bool {
     if content.iter().any(|inl| matches!(inl, InlineNode::Tab)) {
         return true;
     }
-    let mut large_count = 0usize;
-    let mut max_space_pt = 0.0_f64;
-    for inl in content {
-        if let InlineNode::HorizontalSpace { width_pt } = inl
-            && *width_pt >= 18.0
+    let mut wide_idx: Option<usize> = None;
+    let mut wide_pt = 0.0_f64;
+    for (idx, inl) in content.iter().enumerate() {
+        if let InlineNode::HorizontalSpace {
+            width_pt,
+            weak: false,
+        } = *inl
+            && width_pt >= 18.0
         {
-            large_count += 1;
-            max_space_pt = max_space_pt.max(*width_pt);
+            if wide_idx.is_some() {
+                return false;
+            }
+            wide_idx = Some(idx);
+            wide_pt = width_pt;
         }
     }
-    if large_count != 1 {
+    let Some(idx) = wide_idx else {
+        return false;
+    };
+    // A flush-right fill (`#h(1fr)`) always separates non-empty left content from right content
+    // and never sits at the start or end of a paragraph.
+    if idx == 0 || idx + 1 >= content.len() {
         return false;
     }
     let content_w_pt = (content_width_dxa as f64 / 20.0).max(72.0);
-    let est_line_w_pt = estimate_inlines_width_pt(content);
-    max_space_pt >= content_w_pt * 0.35 || est_line_w_pt >= content_w_pt * 0.85
+    wide_pt >= content_w_pt * 0.35
 }
 
 /// Whether `content` contains a large `#h(...)` (`>= 18pt`).
 pub fn has_large_horizontal_space(content: &[InlineNode]) -> bool {
-    content
-        .iter()
-        .any(|inl| matches!(inl, InlineNode::HorizontalSpace { width_pt } if *width_pt >= 18.0))
+    content.iter().any(|inl| {
+        matches!(
+            inl,
+            InlineNode::HorizontalSpace {
+                width_pt,
+                weak: false
+            } if *width_pt >= 18.0
+        )
+    })
 }
 
 /// Whether `content` contains at least one inline equation and zero non-empty text runs,
@@ -443,7 +434,7 @@ pub fn compute_line_spacing_dxa_with_metrics(
         has_inline_eq && !content.iter().any(|inl| matches!(inl, InlineNode::Text(_)));
     let resolver = crate::font_metrics::FontMetricsResolver::new(font_metrics);
     let font_face = eff_font.and_then(|f| resolver.lookup_face(f));
-    crate::WordLineBox::from_paragraph_metrics(
+    let w_line = crate::WordLineBox::from_paragraph_metrics(
         eff_font,
         font_face,
         para_lines,
@@ -453,7 +444,14 @@ pub fn compute_line_spacing_dxa_with_metrics(
         base_font_pt,
         line_spacing_pt,
     )
-    .w_line_240
+    .w_line_240;
+    // Sub-single `w:line < 240` under `w:lineRule="auto"` multiplies Word/WPS's OMML line box
+    // below 100%, clipping vertical fractions (`<m:f>`), radicals (`<m:rad>`), and n-ary limits.
+    if has_inline_eq && crate::objects::equation::inlines_require_full_line_box(content) {
+        w_line.max(240)
+    } else {
+        w_line
+    }
 }
 
 pub fn content_has_cjk_chars(content: &[InlineNode]) -> bool {

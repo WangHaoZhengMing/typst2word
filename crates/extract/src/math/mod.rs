@@ -16,11 +16,14 @@
 mod accent;
 mod attach;
 mod delim;
+mod fonts;
 mod frac;
 mod matrix;
 mod nary;
 mod node;
 mod symbol;
+
+pub(crate) use fonts::EquationFonts;
 
 use compiler::{CompiledTypstDocument, TypstWorld};
 use typst::foundations::{Content, NativeElement, Packed, SequenceElem, StyleChain, StyledElem};
@@ -37,8 +40,9 @@ use nary::{build_nary_node, extract_nary_operator, is_nary_operand_terminator};
 use node::extract_math_node;
 
 /// Active math styling state propagated down `StyledElem` chains.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Clone, Copy)]
 pub(crate) struct MathStyleCtx<'a> {
+    fonts: &'a EquationFonts,
     pub(crate) is_display: bool,
     pub(crate) in_eq_arr: bool,
     pub(crate) force_limits: Option<bool>,
@@ -58,6 +62,7 @@ pub(crate) fn extract_equation_math_nodes<'a>(
     base_font_size_pt: Option<f64>,
     math_font: Option<&'a str>,
     cjk_font: Option<&'a str>,
+    fonts: &'a EquationFonts,
 ) -> Vec<MathNodeIr> {
     let is_block = eq.block.get(styles);
     // Mirror Typst's math layouter: block equations default to `MathSize::Display`, inline
@@ -72,6 +77,7 @@ pub(crate) fn extract_equation_math_nodes<'a>(
         .wrap();
     let eq_styles = styles.chain(&size_style);
     let ctx = MathStyleCtx {
+        fonts,
         is_display: is_block,
         in_eq_arr: false,
         force_limits: None,
@@ -370,13 +376,49 @@ pub(crate) fn extract_sequence_slice(
             continue;
         }
 
+        // Check if this item is a prefix mathematical function (`OpElem`, e.g. `sin`, `cos`, `ln`,
+        // or an attached power/index of one such as `cos^2`), and pair it with its following
+        // argument into OMML `<m:func>` so Word applies proper operator spacing.
+        if is_prefix_func_item(item) {
+            let mut cursor = i + 1;
+            while cursor < items.len() && items[cursor].0.is::<SpaceElem>() {
+                cursor += 1;
+            }
+            let arg_begin = cursor;
+            while cursor < items.len() {
+                if is_func_arg_terminator(&items[cursor].0) {
+                    break;
+                }
+                cursor += 1;
+            }
+            // Trim trailing `SpaceElem`s from the argument slice.
+            let mut arg_end = cursor;
+            while arg_end > arg_begin && items[arg_end - 1].0.is::<SpaceElem>() {
+                arg_end -= 1;
+            }
+            if arg_end > arg_begin {
+                let name = extract_math_child(item, st, ctx);
+                let arg = extract_sequence_as_node(&items[arg_begin..arg_end], ctx);
+                out.push(MathNodeIr::Func {
+                    name: Box::new(name),
+                    arg: Box::new(arg),
+                });
+                i = arg_end;
+                continue;
+            }
+        }
+
         if item.is::<SpaceElem>() {
-            let is_multi_char_text = |c: &Content| {
-                c.to_packed::<TextElem>()
-                    .is_some_and(|t| t.text.chars().count() > 1)
+            // Only insert a word space (`U+2005`) next to multi-character alphabetic/CJK prose
+            // words inside math (e.g. `"for all" x`), not next to pure numeric literals like
+            // `$60 degree$` where `SpaceElem` is merely a Typst token separator.
+            let is_prose_word_text = |c: &Content| {
+                c.to_packed::<TextElem>().is_some_and(|t| {
+                    t.text.chars().count() > 1 && t.text.chars().any(char::is_alphabetic)
+                })
             };
-            let prev_is_word = i > 0 && is_multi_char_text(&items[i - 1].0);
-            let next_is_word = i + 1 < items.len() && is_multi_char_text(&items[i + 1].0);
+            let prev_is_word = i > 0 && is_prose_word_text(&items[i - 1].0);
+            let next_is_word = i + 1 < items.len() && is_prose_word_text(&items[i + 1].0);
             if prev_is_word || next_is_word {
                 out.push(MathNodeIr::Run(MathRunIr {
                     text: "\u{2005}".to_string(),
@@ -392,6 +434,55 @@ pub(crate) fn extract_sequence_slice(
         extract_math_node(item, st, ctx, out);
         i += 1;
     }
+}
+
+fn is_prefix_func_item(content: &Content) -> bool {
+    if content.is::<typst::math::OpElem>() {
+        return true;
+    }
+    if let Some(styled) = content.to_packed::<StyledElem>() {
+        return is_prefix_func_item(&styled.child);
+    }
+    if let Some(attach) = content.to_packed::<typst::math::AttachElem>() {
+        return is_prefix_func_item(&attach.base);
+    }
+    false
+}
+
+fn is_func_arg_terminator(content: &Content) -> bool {
+    if is_nary_operand_terminator(content)
+        || is_prefix_func_item(content)
+        || content.is::<typst::layout::HElem>()
+    {
+        return true;
+    }
+    if let Some(styled) = content.to_packed::<StyledElem>() {
+        return is_func_arg_terminator(&styled.child);
+    }
+    if let Some(sym) = content.to_packed::<typst::foundations::SymbolElem>() {
+        return matches!(
+            sym.text.as_str(),
+            "+" | "-"
+                | "−"
+                | "±"
+                | "∓"
+                | "·"
+                | "⋅"
+                | "×"
+                | "∗"
+                | "÷"
+                | "/"
+                | "|"
+                | ")"
+                | "]"
+                | "}"
+                | ":"
+        );
+    }
+    if let Some(txt) = content.to_packed::<TextElem>() {
+        return matches!(txt.text.as_str(), "+" | "-" | "," | ";" | ":" | ")" | "]" | "}");
+    }
+    false
 }
 
 pub(crate) fn split_by_align_point<'a>(

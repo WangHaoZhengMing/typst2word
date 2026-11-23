@@ -402,17 +402,6 @@ impl<'a> ExtractorContext<'a> {
         let mut line_spans: Vec<(f64, f64, f64)> = Vec::new();
         Self::collect_line_x_spans(stray, typst::layout::Point::zero(), &mut line_spans);
         line_spans.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-        let (vis_first, vis_hang) = if line_spans.len() >= 2 {
-            Self::infer_paragraph_line_indents(stray)
-        } else {
-            (0.0, 0.0)
-        };
-
-        let mut first_line_indent_pt = 0.0;
-        let mut hanging_indent_pt = 0.0;
-        let mut left_indent_pt = 0.0;
-        let mut right_indent_pt = 0.0;
-
         let (
             chain_justify,
             chain_linebreaks,
@@ -447,57 +436,22 @@ impl<'a> ExtractorContext<'a> {
             (justify, linebreaks, font_pt, leading, spacing, locale, dir)
         };
 
-        if line_spans.len() >= 2 {
+        if line_spans.len() >= 2 && eff_align == HAlignIr::Left {
             let non_final = &line_spans[..line_spans.len() - 1];
             let r0 = non_final[0].2;
             let min_flush_span = if chain_justify { 100.0 } else { 200.0 };
-            if eff_align == HAlignIr::Left {
-                let multi_flush = non_final.len() >= 2
-                    && non_final.iter().all(|(_, _, rx)| (*rx - r0).abs() <= 1.2)
-                    && (r0 - non_final[0].1) >= min_flush_span;
-                let expected_right = self
-                    .scope
-                    .active_group_bounds_pt
-                    .map(|(_, gr)| gr)
-                    .unwrap_or(self.content_right_pt);
-                let right_margin_flush = (expected_right - r0).abs() <= 1.5
-                    && (r0 - non_final[0].1) >= min_flush_span;
-                if multi_flush || right_margin_flush {
-                    eff_align = HAlignIr::Justify;
-                }
-            }
-            if matches!(eff_align, HAlignIr::Left | HAlignIr::Justify) {
-                if vis_first > 2.0 {
-                    first_line_indent_pt = vis_first;
-                } else if vis_hang > 2.0 {
-                    hanging_indent_pt = vis_hang;
-                }
-                if self.scope.container_inset_pt <= 0.1 {
-                    let base_l = if vis_first > 2.0 {
-                        line_spans[1].1
-                    } else {
-                        line_spans[0].1
-                    };
-                    let col_w = self.current_column_width_pt();
-                    let (left_bound, right_bound) =
-                        if let Some((gl, gr)) = self.scope.active_group_bounds_pt {
-                            (gl, gr)
-                        } else if base_l >= self.content_left_pt - 4.0 {
-                            (self.content_left_pt, self.content_right_pt)
-                        } else {
-                            (0.0, col_w)
-                        };
-                    let vis_left = (base_l - left_bound).max(0.0);
-                    if (2.0..=48.0).contains(&vis_left) {
-                        left_indent_pt = vis_left;
-                    }
-                    if eff_align == HAlignIr::Justify && r0 <= right_bound + 4.0 {
-                        let r_gap = (right_bound - r0).max(0.0);
-                        if (2.0..=48.0).contains(&r_gap) {
-                            right_indent_pt = r_gap;
-                        }
-                    }
-                }
+            let multi_flush = non_final.len() >= 2
+                && non_final.iter().all(|(_, _, rx)| (*rx - r0).abs() <= 1.2)
+                && (r0 - non_final[0].1) >= min_flush_span;
+            let expected_right = self
+                .scope
+                .active_group_bounds_pt
+                .map(|(_, gr)| gr)
+                .unwrap_or(self.content_right_pt);
+            let right_margin_flush = (expected_right - r0).abs() <= 1.5
+                && (r0 - non_final[0].1) >= min_flush_span;
+            if multi_flush || right_margin_flush {
+                eff_align = HAlignIr::Justify;
             }
         }
 
@@ -515,6 +469,9 @@ impl<'a> ExtractorContext<'a> {
             &mut last_y,
             &mut last_x_end,
         );
+
+        let (first_line_indent_pt, hanging_indent_pt, left_indent_pt, right_indent_pt) = self
+            .resolve_paragraph_indents(eff_align, 0, 0.0, 0.0, stray, &mut inlines);
         let base_font_pt = inlines
             .iter()
             .find_map(|inl| match inl {

@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Convert Typst to Word (.docx) with editable equations | typst2word</title>
+    <meta name="description" content="Convert a Typst file or ZIP project to Word in your browser. Try a worked example and compare the Typst source, reference PDF and editable Word equation." />
+    <link rel="canonical" href="https://wanghaozhengming.github.io/typst2word/en/" />
+    <link rel="alternate" hreflang="en" href="https://wanghaozhengming.github.io/typst2word/en/" />
+    <link rel="alternate" hreflang="zh-CN" href="https://wanghaozhengming.github.io/typst2word/" />
+    <link rel="icon" href="../favicon.svg" />
+    <link rel="stylesheet" href="../src/guide.css" />
+  </head>
+  <body>
+    <header><a class="brand" href="../">typst2word</a><a href="../" lang="zh-CN" hreflang="zh-CN">中文</a></header>
+    <main>
+      <h1>Convert Typst to Word</h1>
+      <p>Turn a <code>.typ</code> file or a ZIP project into a Microsoft Word document. The converter runs locally in your browser and can write equations as editable Word math.</p>
+      <h2>Convert a file</h2>
+      <ol>
+        <li><a href="../">Open the converter</a> and drag your file onto the page. To paste a snippet instead, select <span lang="zh-CN">粘贴代码</span> (Paste code).</li>
+        <li>Select <span lang="zh-CN">转换为 .docx</span> (Convert), then <span lang="zh-CN">下载 .docx</span> (Download).</li>
+        <li>Open the document in Word. Click inside a converted fraction to edit its numerator or denominator.</li>
+      </ol>
+      <h2>Try an editable fraction</h2>
+      <p>The sample combines two groups of readings into a weighted mean. Convert its source yourself, or open the DOCX and click the fraction. The PDF shows how Typst typeset the same source.</p>
+      <p class="files"><a download href="../samples/weighted-mean.typ">Typst source</a><a href="../samples/weighted-mean.pdf">Reference PDF</a><a download href="../samples/weighted-mean.docx">Editable DOCX</a></p>
+      <h2>Convert from the command line</h2>
+      <p>Download the <a href="https://github.com/WangHaoZhengMing/typst2word/releases">CLI for your platform</a>, then run <code>typst2word weighted-mean.typ weighted-mean.docx</code>.</p>
+    </main>
+  </body>
+</html>

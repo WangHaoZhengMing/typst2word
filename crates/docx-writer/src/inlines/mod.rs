@@ -136,7 +136,7 @@ impl<'a> DocxWriter<'a> {
             InlineNode::Tab => {
                 out.push_str("<w:r><w:tab/></w:r>");
             }
-            InlineNode::HorizontalSpace { width_pt } => {
+            InlineNode::HorizontalSpace { width_pt, .. } => {
                 if self.in_right_tab_paragraph && *width_pt >= 18.0 {
                     out.push_str("<w:r><w:tab/></w:r>");
                 } else if *width_pt >= 4.0 {
@@ -161,9 +161,15 @@ impl<'a> DocxWriter<'a> {
                     };
                     out.push_str(&shape_to_drawingml_run(self, &spacer));
                 } else {
-                    let spaces = ((width_pt / 3.5).round() as usize).clamp(1, 8);
-                    let s = " ".repeat(spaces);
-                    let _ = write!(out, r#"<w:r><w:t xml:space="preserve">{s}</w:t></w:r>"#);
+                    // In proportional Latin fonts (`Times New Roman` / `Libertinus Serif`),
+                    // ASCII space `' '` has advance `~0.25em`, so calibrating `<w:sz>` gives an
+                    // exact narrow spacer (e.g. `3.0pt = 0.25em` at `12pt` -> `w:sz="24"`) that is
+                    // guaranteed present in every subsetted font with normal line-break behavior.
+                    let sz_half_pt = ((*width_pt / 0.25) * 2.0).round().clamp(4.0, 48.0) as u32;
+                    let _ = write!(
+                        out,
+                        r#"<w:r><w:rPr><w:sz w:val="{sz_half_pt}"/><w:szCs w:val="{sz_half_pt}"/></w:rPr><w:t xml:space="preserve"> </w:t></w:r>"#
+                    );
                 }
             }
             InlineNode::UnsupportedInline(unsup) => {

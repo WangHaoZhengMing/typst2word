@@ -3,6 +3,8 @@
 /examples
 *.pdf
 *.docx
+!/web/public/samples/weighted-mean.pdf
+!/web/public/samples/weighted-mean.docx
 __pycache__/
 /test/tools/pdf_inspector
 /test/*/*.report.json

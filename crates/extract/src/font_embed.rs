@@ -179,6 +179,12 @@ fn scan_frame_font_usage(
     }
 }
 
+/// Family name used for the same OpenType math face in Word's font table.
+pub(crate) fn math_family(font: &typst::text::FontInstance) -> Option<String> {
+    font.ttf().tables().math?;
+    Some(extract_windows_family_name(font.ttf()).unwrap_or_else(|| font.info().family.clone()))
+}
+
 /// Extract OpenType `nameID 1` (Windows Font Family Name), preferring Platform 3 (Windows)
 /// English US (`0x0409`), which Microsoft Word uses to match `<w:font w:name="...">` and `<m:mathFont>`.
 pub(crate) fn extract_windows_family_name(face: &ttf_parser::Face<'_>) -> Option<String> {

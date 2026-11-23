@@ -6,7 +6,19 @@ Unlike pure syntax-tree converters (which cannot evaluate Typst scripting, `#sho
 
 > **Try Online (WebAssembly Converter)**: [**wanghaozhengming.github.io/typst2word**](https://wanghaozhengming.github.io/typst2word/) — convert `.typ` files, `.zip` project archives, or pasted snippets directly to `.docx` locally in your browser (zero server upload, supports subset/full font embedding, Local Font Access API on Chromium, and OpenXML inspection).
 >
+> [English quick start](https://wanghaozhengming.github.io/typst2word/en/) · [Typst 公式转 Word 教程（含源文件、PDF 和可编辑 DOCX）](https://wanghaozhengming.github.io/typst2word/guides/typst-math-to-word/)
+>
 > **Documentation**: See [`docs/`](./docs/README.md) for the complete technical reference ([CLI & Library](./docs/cli-and-library.md), [Architecture](./docs/architecture.md), [IR Specification](./docs/ir-specification.md), [Fonts & Embedding](./docs/fonts-and-embedding.md), [Layout Calibration](./docs/layout-calibration.md), [Feature Matrix](./docs/feature-matrix.md), [WebAssembly & Web](./docs/wasm-and-web.md), [Testing & Visual Parity](./docs/testing-and-visual-parity.md)).
+
+---
+
+## Visual Comparison
+
+Side-by-side comparison of a real 4-page Chinese national math exam (`2026新高考II卷数学.typ`) compiled directly to PDF by **Typst** (left) versus converted by **`typst2word`** and opened in **Microsoft Word** (right) — preserving exact 4-page pagination, mixed CJK/Latin typography, hanging-indent headings, **native editable OMML equations**, **native editable CeTZ DrawingML vector graphics**, multi-column choice grids, and dynamic `PAGE` / `NUMPAGES` footers:
+
+![Typst vs Microsoft Word comparison — Page 1: CJK typography, hanging-indent headings, OMML equations, and option grids](./docs/images/comparison-page1.png)
+
+![Typst vs Microsoft Word comparison — Page 3: fill-in-the-blank rules, native CeTZ DrawingML frequency histogram and 3D geometry diagram](./docs/images/comparison-page3.png)
 
 ---
 

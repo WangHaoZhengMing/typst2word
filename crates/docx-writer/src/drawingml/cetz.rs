@@ -211,12 +211,22 @@ pub(crate) fn build_cetz_label_wsp(
 ) -> String {
     let sp_id = writer.alloc_drawing_id();
     let solved = CetzLabelConstruct::solve(label, canvas_height_pt);
-    let para_xml = render_inline_nodes_as_txbx_para(
-        &solved.nobreak_content,
-        HAlignIr::Left,
-        None,
-        writer.doc.math_font_family.as_deref(),
-    );
+    let para_xml = if let Some(line_dxa) = solved.line_dxa_override {
+        super::textbox::render_inline_nodes_as_txbx_para_with_line_dxa(
+            &solved.nobreak_content,
+            HAlignIr::Left,
+            line_dxa,
+            0,
+            writer.doc.math_font_family.as_deref(),
+        )
+    } else {
+        render_inline_nodes_as_txbx_para(
+            &solved.nobreak_content,
+            HAlignIr::Left,
+            None,
+            writer.doc.math_font_family.as_deref(),
+        )
+    };
 
     let xfrm_attrs = solved
         .rot_60000

@@ -100,14 +100,18 @@ impl<'a> DocxWriter<'a> {
                         r#"</w:p></w:tc>"#,
                         r#"<w:tc><w:tcPr><w:tcW w:w="{side_dxa}" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr>"#,
                         r#"<w:p><w:pPr><w:jc w:val="right"/><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/><w:rPr><w:sz w:val="{num_half_pts}"/><w:szCs w:val="{num_half_pts}"/></w:rPr></w:pPr>"#,
-                        r#"<w:r><w:rPr><w:rFonts w:ascii="Libertinus Serif" w:hAnsi="Libertinus Serif" w:eastAsia="Heiti SC" w:cs="Libertinus Serif"/><w:sz w:val="{num_half_pts}"/><w:szCs w:val="{num_half_pts}"/></w:rPr>"#,
-                        r#"<w:t xml:space="preserve">{}</w:t></w:r></w:p></w:tc>"#,
-                        r#"</w:tr></w:tbl>"#,
                     ),
-                    escape_xml(number_text),
-                    side_dxa = side_dxa,
                     num_half_pts = num_half_pts,
+                    side_dxa = side_dxa,
                 );
+                if eq.numbering_runs.is_empty() {
+                    let _ = write!(out, r#"<w:r><w:rPr><w:sz w:val="{num_half_pts}"/><w:szCs w:val="{num_half_pts}"/></w:rPr><w:t xml:space="preserve">{}</w:t></w:r>"#, escape_xml(number_text));
+                } else {
+                    for run in &eq.numbering_runs {
+                        self.render_text_run(run, out);
+                    }
+                }
+                out.push_str("</w:p></w:tc></w:tr></w:tbl>");
             }
             EquationBlockConstruct::CenteredDisplayParagraph {
                 indent_left_dxa,

@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Typst 公式转 Word：导出可编辑的分式 | typst2word</title>
+    <meta name="description" content="用一个加权平均数示例，将 Typst 分式转换为 Word 原生公式。下载 Typst 源文件、排版参考 PDF 和可编辑 DOCX，跟着步骤在 Word 中修改分子或分母。" />
+    <link rel="canonical" href="https://wanghaozhengming.github.io/typst2word/guides/typst-math-to-word/" />
+    <link rel="icon" href="../../favicon.svg" />
+    <link rel="stylesheet" href="../../src/guide.css" />
+  </head>
+  <body>
+    <header><a class="brand" href="../../">typst2word</a><a href="../../">打开转换器</a></header>
+    <main>
+      <h1>如何把 Typst 分式转成可编辑的 Word 公式</h1>
+      <p>假设你用 Typst 写了一份实验报告，合作者需要在 Word 里改公式。下面用加权平均数做一次转换，从同一份源码生成 PDF 和 DOCX，然后在 Word 中单独选中分母。</p>
+      <h2>下载示例</h2>
+      <p class="files"><a download href="../../samples/weighted-mean.typ">Typst 源文件</a><a href="../../samples/weighted-mean.pdf">查看 Typst PDF</a><a download href="../../samples/weighted-mean.docx">下载 Word 成品</a></p>
+      <p>两组读数的均值分别是 12 和 17，各有 2 次和 3 次测量。源码里用下面这一行写出分式，结果为 15。</p>
+      <p><code>$ (2 times 12 + 3 times 17) / (2 + 3) = 15 $</code></p>
+      <h2>从源码生成 DOCX</h2>
+      <ol>
+        <li>打开<a href="../../">Typst 转 Word 转换器</a>，将下载的 <code>weighted-mean.typ</code> 拖入页面。也可以选择「粘贴代码」，直接粘贴上面一行。</li>
+        <li>点击「转换为 .docx」，完成后点击「下载 .docx」。</li>
+        <li>用 Word 打开文档，点击分数线下方的 <code>2 + 3</code>，把光标移到数字之间。这个分式以 Word 原生公式（OMML）保存，分子和分母都可以分别修改。</li>
+      </ol>
+      <h2>对照原稿</h2>
+      <p>打开示例 PDF，核对分式的层次、乘号和等号。DOCX 中的等式是排版内容，修改读数后，右侧的结果也需要手动更新。</p>
+    </main>
+  </body>
+</html>

@@ -6,8 +6,8 @@
 //! and calibrated Office Math nodes ([`WordMathNode`], [`WordMathRun`]).
 
 use ir::{
-    ColorHex, EquationIr, EquationLayoutMetricsIr, MathFracStyleIr, MathNodeIr, MathScriptIr,
-    MathStyleIr,
+    ColorHex, EquationIr, EquationLayoutMetricsIr, InlineNode, MathFracStyleIr, MathNodeIr,
+    MathScriptIr, MathStyleIr,
 };
 
 use crate::pipeline::lang_script::TextScriptClassIr;
@@ -21,10 +21,15 @@ pub enum WordMathNode {
         num: Box<WordMathNode>,
         denom: Box<WordMathNode>,
         style: MathFracStyleIr,
+        /// Optional `<m:fPr><m:ctrlPr><w:rPr><w:sz>` override so Word computes fraction bar
+        /// shift/clearance using the compensated display size rather than cramped inline size.
+        ctrl_font_size_pt: Option<f64>,
     },
     Radical {
         degree: Option<Box<WordMathNode>>,
         radicand: Box<WordMathNode>,
+        /// Optional `<m:radPr><m:ctrlPr><w:rPr><w:sz>` override when inside a scaled fraction.
+        ctrl_font_size_pt: Option<f64>,
     },
     SubSup {
         base: Box<WordMathNode>,
@@ -75,6 +80,10 @@ pub enum WordMathNode {
         body: Box<WordMathNode>,
         annotation: Option<Box<WordMathNode>>,
     },
+    Func {
+        name: Box<WordMathNode>,
+        arg: Box<WordMathNode>,
+    },
     Cancel {
         body: Box<WordMathNode>,
         cross: bool,
@@ -88,6 +97,7 @@ pub enum WordMathNode {
 /// and CJK normal-text flag (`<m:nor/>`).
 #[derive(Debug, Clone, Default)]
 pub struct WordMathRun {
+    pub normal_text: bool,
     pub text: String,
     pub script: Option<MathScriptIr>,
     pub style: Option<MathStyleIr>,
@@ -169,9 +179,30 @@ impl<'a> EquationBlockConstruct<'a> {
 pub struct MathAstStructure {
     pub row_count: usize,
     pub max_fraction_depth: usize,
+    /// Whether any vertical/noBar fraction explicitly sets `display_style: Some(true)`.
+    pub has_display_fraction: bool,
     pub has_tall_construct: bool,
+    /// True when the AST contains 2D vertical math structures (vertical fractions, radicals,
+    /// n-ary operators, limits, matrices, or equation arrays) whose OMML bounding box is clipped
+    /// by Word/WPS whenever the enclosing paragraph uses sub-single `w:line < 240`.
+    pub requires_full_line_box: bool,
     pub all_glyphs_in_fraction_or_script: bool,
     pub expected_em_width: f64,
+}
+
+/// Whether `content` contains any inline equation whose OMML box requires at least single-line
+/// spacing (`w:line >= 240`) so Word/WPS never clips vertical fractions, radicals, or n-ary operators.
+pub fn inlines_require_full_line_box(content: &[InlineNode]) -> bool {
+    content.iter().any(|inl| match inl {
+        InlineNode::EquationInline(eq) => {
+            analyze_math_slice(&eq.body, eq.is_block).requires_full_line_box
+        }
+        InlineNode::Link { content: inner, .. }
+        | InlineNode::Ref { content: inner, .. }
+        | InlineNode::Citation { content: inner, .. }
+        | InlineNode::Field { content: inner, .. } => inlines_require_full_line_box(inner),
+        _ => false,
+    })
 }
 
 /// Solve [`crate::WordEquationBox`] for an [`EquationIr`] from its `EquationLayoutMetricsIr` and AST structure.
@@ -224,6 +255,7 @@ pub fn solve_word_equation_box(eq: &EquationIr) -> crate::WordEquationBox {
         max_available_width_pt,
         row_count: ast_metrics.row_count,
         max_fraction_depth: ast_metrics.max_fraction_depth,
+        has_display_fraction: ast_metrics.has_display_fraction,
         has_tall_construct: ast_metrics.has_tall_construct,
         all_glyphs_in_fraction_or_script: ast_metrics.all_glyphs_in_fraction_or_script,
         expected_em_width: ast_metrics.expected_em_width,
@@ -234,37 +266,32 @@ pub fn solve_word_equation_box(eq: &EquationIr) -> crate::WordEquationBox {
 /// `fraction_font_size_pt`, and `width_scale_pct` solved by [`crate::WordEquationBox`].
 pub fn calibrate_equation_body(eq: &EquationIr) -> Vec<WordMathNode> {
     let eq_box = solve_word_equation_box(eq);
-    calibrate_math_nodes(
-        &eq.body,
-        eq_box.run_font_size_pt,
-        eq_box.fraction_font_size_pt,
-        eq_box.width_scale_pct,
-    )
+    let ctx = MathCalibCtx {
+        is_block: eq.is_block,
+        run_font_size_pt: eq_box.run_font_size_pt,
+        fraction_font_size_pt: eq_box.fraction_font_size_pt,
+        width_scale_pct: eq_box.width_scale_pct,
+        in_vertical_fraction: false,
+    };
+    eq.body.iter().map(|node| ctx.calibrate(node)).collect()
 }
 
 pub fn analyze_math_slice(nodes: &[MathNodeIr], is_block: bool) -> MathAstStructure {
-    let mut row_count = 1usize;
-    let mut max_fraction_depth = 0usize;
-    let mut has_tall_construct = false;
-    let mut has_root_unscaled_glyph = false;
-    let mut has_any_glyph = false;
+    let mut summary = NodeStructSummary::identity();
     let mut expected_em_width = 0.0_f64;
 
     for node in nodes {
-        let (r, f, tall, root_g, any_g) = inspect_node_structure(node, false);
-        row_count = row_count.max(r);
-        max_fraction_depth = max_fraction_depth.max(f);
-        has_tall_construct |= tall;
-        has_root_unscaled_glyph |= root_g;
-        has_any_glyph |= any_g;
-        expected_em_width += estimate_node_em_width(node, is_block && row_count == 1);
+        summary.merge(inspect_node_structure(node, false));
+        expected_em_width += estimate_node_em_width(node, is_block && summary.rows == 1);
     }
 
     MathAstStructure {
-        row_count,
-        max_fraction_depth,
-        has_tall_construct,
-        all_glyphs_in_fraction_or_script: has_any_glyph && !has_root_unscaled_glyph,
+        row_count: summary.rows,
+        max_fraction_depth: summary.max_fraction_depth,
+        has_display_fraction: summary.has_display_fraction,
+        has_tall_construct: summary.has_tall_construct,
+        requires_full_line_box: summary.requires_full_line_box,
+        all_glyphs_in_fraction_or_script: summary.has_any_glyph && !summary.has_root_unscaled_glyph,
         expected_em_width: expected_em_width.max(0.5),
     }
 }
@@ -275,42 +302,249 @@ pub fn calibrate_math_nodes(
     fraction_font_size_pt: Option<f64>,
     width_scale_pct: Option<u32>,
 ) -> Vec<WordMathNode> {
-    nodes
-        .iter()
-        .map(|node| {
-            calibrate_math_node_inner(
-                node,
-                run_font_size_pt,
-                fraction_font_size_pt,
-                width_scale_pct,
-                false,
-            )
-        })
-        .collect()
+    let ctx = MathCalibCtx {
+        is_block: false,
+        run_font_size_pt,
+        fraction_font_size_pt,
+        width_scale_pct,
+        in_vertical_fraction: false,
+    };
+    nodes.iter().map(|node| ctx.calibrate(node)).collect()
 }
 
-fn calibrate_math_node_inner(
-    node: &MathNodeIr,
+#[derive(Clone, Copy)]
+struct MathCalibCtx {
+    is_block: bool,
     run_font_size_pt: f64,
     fraction_font_size_pt: Option<f64>,
     width_scale_pct: Option<u32>,
     in_vertical_fraction: bool,
-) -> WordMathNode {
-    match node {
-        MathNodeIr::Sequence(children) => WordMathNode::Sequence(
-            children
-                .iter()
-                .map(|ch| {
-                    calibrate_math_node_inner(
-                        ch,
-                        run_font_size_pt,
-                        fraction_font_size_pt,
-                        width_scale_pct,
-                        in_vertical_fraction,
-                    )
+}
+
+impl MathCalibCtx {
+    #[inline]
+    fn map_box(self, node: &MathNodeIr) -> Box<WordMathNode> {
+        Box::new(self.calibrate(node))
+    }
+
+    #[inline]
+    fn map_opt(self, opt: Option<&Box<MathNodeIr>>) -> Option<Box<WordMathNode>> {
+        opt.map(|n| self.map_box(n))
+    }
+
+    fn calibrate(self, node: &MathNodeIr) -> WordMathNode {
+        match node {
+            MathNodeIr::Sequence(children) => {
+                WordMathNode::Sequence(children.iter().map(|ch| self.calibrate(ch)).collect())
+            }
+            MathNodeIr::Fraction {
+                num,
+                denom,
+                style,
+                display_style,
+            } => {
+                let is_vert = matches!(style, MathFracStyleIr::Vertical | MathFracStyleIr::NoBar);
+                // Explicit `display(...)` / `inline(...)` math size overrides on vertical fractions
+                // take precedence even when nested subscripts/radicals lower `typst_min_glyph_pt`.
+                let local_frac_sz = match (is_vert, display_style) {
+                    (true, Some(true)) => crate::FractionScaleMode::InlineDisplayCompensated
+                        .resolve_font_size_pt(self.run_font_size_pt),
+                    (true, Some(false)) => crate::FractionScaleMode::BlockInlineCompensated
+                        .resolve_font_size_pt(self.run_font_size_pt),
+                    _ => self.fraction_font_size_pt,
+                };
+                let child_ctx = Self {
+                    fraction_font_size_pt: local_frac_sz,
+                    in_vertical_fraction: self.in_vertical_fraction || is_vert,
+                    ..self
+                };
+                WordMathNode::Fraction {
+                    num: child_ctx.map_box(num),
+                    denom: child_ctx.map_box(denom),
+                    style: *style,
+                    ctrl_font_size_pt: local_frac_sz,
+                }
+            }
+            MathNodeIr::Radical { degree, radicand } => WordMathNode::Radical {
+                degree: self.map_opt(degree.as_ref()),
+                radicand: self.map_box(radicand),
+                ctrl_font_size_pt: self
+                    .in_vertical_fraction
+                    .then_some(self.fraction_font_size_pt)
+                    .flatten(),
+            },
+            MathNodeIr::SubSup { base, sub, sup } => WordMathNode::SubSup {
+                base: self.map_box(base),
+                sub: self.map_opt(sub.as_ref()),
+                sup: self.map_opt(sup.as_ref()),
+            },
+            MathNodeIr::PreSubSup { base, sub, sup } => WordMathNode::PreSubSup {
+                base: self.map_box(base),
+                sub: self.map_opt(sub.as_ref()),
+                sup: self.map_opt(sup.as_ref()),
+            },
+            MathNodeIr::Limit { base, lower, upper } => WordMathNode::Limit {
+                base: self.map_box(base),
+                lower: self.map_opt(lower.as_ref()),
+                upper: self.map_opt(upper.as_ref()),
+            },
+            MathNodeIr::Nary {
+                chr,
+                limits_under_over,
+                sub,
+                sup,
+                operand,
+            } => WordMathNode::Nary {
+                chr: *chr,
+                limits_under_over: *limits_under_over,
+                sub: self.map_opt(sub.as_ref()),
+                sup: self.map_opt(sup.as_ref()),
+                operand: self.map_box(operand),
+            },
+            MathNodeIr::Delimited {
+                open,
+                close,
+                separator,
+                elements,
+            } => WordMathNode::Delimited {
+                open: open.clone(),
+                close: close.clone(),
+                separator: separator.clone(),
+                elements: elements.iter().map(|el| self.calibrate(el)).collect(),
+            },
+            MathNodeIr::Matrix { rows, left_aligned } => WordMathNode::Matrix {
+                rows: rows
+                    .iter()
+                    .map(|row| row.iter().map(|cell| self.calibrate(cell)).collect())
+                    .collect(),
+                left_aligned: *left_aligned,
+            },
+            MathNodeIr::EquationArray { rows } => WordMathNode::EquationArray {
+                rows: rows.iter().map(|row| self.calibrate(row)).collect(),
+            },
+            MathNodeIr::Accent { chr, base } => WordMathNode::Accent {
+                chr: *chr,
+                base: self.map_box(base),
+            },
+            MathNodeIr::Bar { pos_bottom, body } => WordMathNode::Bar {
+                pos_bottom: *pos_bottom,
+                body: self.map_box(body),
+            },
+            MathNodeIr::GroupChar {
+                chr,
+                is_bottom,
+                body,
+                annotation,
+            } => WordMathNode::GroupChar {
+                chr: *chr,
+                is_bottom: *is_bottom,
+                body: self.map_box(body),
+                annotation: self.map_opt(annotation.as_ref()),
+            },
+            MathNodeIr::Func { name, arg } => WordMathNode::Func {
+                name: self.map_box(name),
+                arg: self.map_box(arg),
+            },
+            MathNodeIr::Cancel {
+                body,
+                cross,
+                inverted,
+            } => WordMathNode::Cancel {
+                body: self.map_box(body),
+                cross: *cross,
+                inverted: *inverted,
+            },
+            MathNodeIr::AlignPoint => WordMathNode::AlignPoint,
+            MathNodeIr::Run(run) => {
+                let has_cjk = TextScriptClassIr::classify(&run.text).has_cjk();
+                let target_sz = if self.in_vertical_fraction {
+                    match self.fraction_font_size_pt {
+                        Some(sz) => sz,
+                        // Word's OMML engine scales math-script runs to ~73% inside inline
+                        // `<m:f>`, but leaves `<m:nor/>` CJK runs unscaled; apply the matching
+                        // 0.73x scale explicitly so inline CJK fractions (e.g. `频率/组距`) match
+                        // Typst's size.
+                        None if !self.is_block && has_cjk => {
+                            ((self.run_font_size_pt * 0.73 * 2.0).round() / 2.0).clamp(5.0, 72.0)
+                        }
+                        None => self.run_font_size_pt,
+                    }
+                } else {
+                    self.run_font_size_pt
+                };
+                WordMathNode::Run(WordMathRun {
+                    normal_text: run.normal_text,
+                    text: run.text.clone(),
+                    script: run.script,
+                    style: run.style,
+                    color: run.color.clone(),
+                    font_family: run.font_family.clone(),
+                    font_size_pt: Some(target_sz),
+                    width_scale_pct: self.width_scale_pct,
+                    has_cjk,
                 })
-                .collect(),
-        ),
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct NodeStructSummary {
+    rows: usize,
+    max_fraction_depth: usize,
+    has_display_fraction: bool,
+    has_tall_construct: bool,
+    requires_full_line_box: bool,
+    has_root_unscaled_glyph: bool,
+    has_any_glyph: bool,
+}
+
+impl NodeStructSummary {
+    #[inline]
+    const fn identity() -> Self {
+        Self {
+            rows: 1,
+            max_fraction_depth: 0,
+            has_display_fraction: false,
+            has_tall_construct: false,
+            requires_full_line_box: false,
+            has_root_unscaled_glyph: false,
+            has_any_glyph: false,
+        }
+    }
+
+    #[inline]
+    fn merge(&mut self, other: Self) {
+        self.rows = self.rows.max(other.rows);
+        self.max_fraction_depth = self.max_fraction_depth.max(other.max_fraction_depth);
+        self.has_display_fraction |= other.has_display_fraction;
+        self.has_tall_construct |= other.has_tall_construct;
+        self.requires_full_line_box |= other.requires_full_line_box;
+        self.has_root_unscaled_glyph |= other.has_root_unscaled_glyph;
+        self.has_any_glyph |= other.has_any_glyph;
+    }
+
+    fn merge_slice(nodes: &[MathNodeIr], in_script_or_frac: bool) -> Self {
+        let mut acc = Self::identity();
+        for node in nodes {
+            acc.merge(inspect_node_structure(node, in_script_or_frac));
+        }
+        acc
+    }
+
+    #[inline]
+    fn merge_opt(&mut self, opt: Option<&Box<MathNodeIr>>, in_script_or_frac: bool) {
+        if let Some(node) = opt {
+            self.merge(inspect_node_structure(node, in_script_or_frac));
+        }
+    }
+}
+
+fn inspect_node_structure(node: &MathNodeIr, in_script_or_frac: bool) -> NodeStructSummary {
+    match node {
+        MathNodeIr::Sequence(children) | MathNodeIr::Delimited { elements: children, .. } => {
+            NodeStructSummary::merge_slice(children, in_script_or_frac)
+        }
         MathNodeIr::Fraction {
             num,
             denom,
@@ -318,426 +552,99 @@ fn calibrate_math_node_inner(
             display_style,
         } => {
             let is_vert = matches!(style, MathFracStyleIr::Vertical | MathFracStyleIr::NoBar);
-            let next_in_frac = in_vertical_fraction || is_vert;
-            // Explicit `display(...)` / `inline(...)` math size overrides on vertical fractions
-            // take precedence even when nested subscripts/radicals lower `typst_min_glyph_pt`.
-            let local_frac_sz = match (is_vert, display_style) {
-                (true, Some(true)) => crate::FractionScaleMode::InlineDisplayCompensated
-                    .resolve_font_size_pt(run_font_size_pt),
-                (true, Some(false)) => crate::FractionScaleMode::BlockInlineCompensated
-                    .resolve_font_size_pt(run_font_size_pt),
-                _ => fraction_font_size_pt,
-            };
-            WordMathNode::Fraction {
-                num: Box::new(calibrate_math_node_inner(
-                    num,
-                    run_font_size_pt,
-                    local_frac_sz,
-                    width_scale_pct,
-                    next_in_frac,
-                )),
-                denom: Box::new(calibrate_math_node_inner(
-                    denom,
-                    run_font_size_pt,
-                    local_frac_sz,
-                    width_scale_pct,
-                    next_in_frac,
-                )),
-                style: *style,
+            let mut acc = inspect_node_structure(num, true);
+            acc.merge(inspect_node_structure(denom, true));
+            NodeStructSummary {
+                rows: 1,
+                max_fraction_depth: if is_vert {
+                    1 + acc.max_fraction_depth
+                } else {
+                    acc.max_fraction_depth
+                },
+                has_display_fraction: acc.has_display_fraction
+                    || (is_vert && *display_style == Some(true)),
+                has_tall_construct: is_vert || acc.has_tall_construct,
+                requires_full_line_box: is_vert || acc.requires_full_line_box,
+                has_root_unscaled_glyph: false,
+                has_any_glyph: acc.has_any_glyph,
             }
-        }
-        MathNodeIr::Radical { degree, radicand } => WordMathNode::Radical {
-            degree: degree.as_ref().map(|deg| {
-                Box::new(calibrate_math_node_inner(
-                    deg,
-                    run_font_size_pt,
-                    fraction_font_size_pt,
-                    width_scale_pct,
-                    in_vertical_fraction,
-                ))
-            }),
-            radicand: Box::new(calibrate_math_node_inner(
-                radicand,
-                run_font_size_pt,
-                fraction_font_size_pt,
-                width_scale_pct,
-                in_vertical_fraction,
-            )),
-        },
-        MathNodeIr::SubSup { base, sub, sup } => WordMathNode::SubSup {
-            base: Box::new(calibrate_math_node_inner(
-                base,
-                run_font_size_pt,
-                fraction_font_size_pt,
-                width_scale_pct,
-                in_vertical_fraction,
-            )),
-            sub: sub.as_ref().map(|s| {
-                Box::new(calibrate_math_node_inner(
-                    s,
-                    run_font_size_pt,
-                    fraction_font_size_pt,
-                    width_scale_pct,
-                    in_vertical_fraction,
-                ))
-            }),
-            sup: sup.as_ref().map(|s| {
-                Box::new(calibrate_math_node_inner(
-                    s,
-                    run_font_size_pt,
-                    fraction_font_size_pt,
-                    width_scale_pct,
-                    in_vertical_fraction,
-                ))
-            }),
-        },
-        MathNodeIr::PreSubSup { base, sub, sup } => WordMathNode::PreSubSup {
-            base: Box::new(calibrate_math_node_inner(
-                base,
-                run_font_size_pt,
-                fraction_font_size_pt,
-                width_scale_pct,
-                in_vertical_fraction,
-            )),
-            sub: sub.as_ref().map(|s| {
-                Box::new(calibrate_math_node_inner(
-                    s,
-                    run_font_size_pt,
-                    fraction_font_size_pt,
-                    width_scale_pct,
-                    in_vertical_fraction,
-                ))
-            }),
-            sup: sup.as_ref().map(|s| {
-                Box::new(calibrate_math_node_inner(
-                    s,
-                    run_font_size_pt,
-                    fraction_font_size_pt,
-                    width_scale_pct,
-                    in_vertical_fraction,
-                ))
-            }),
-        },
-        MathNodeIr::Limit { base, lower, upper } => WordMathNode::Limit {
-            base: Box::new(calibrate_math_node_inner(
-                base,
-                run_font_size_pt,
-                fraction_font_size_pt,
-                width_scale_pct,
-                in_vertical_fraction,
-            )),
-            lower: lower.as_ref().map(|l| {
-                Box::new(calibrate_math_node_inner(
-                    l,
-                    run_font_size_pt,
-                    fraction_font_size_pt,
-                    width_scale_pct,
-                    in_vertical_fraction,
-                ))
-            }),
-            upper: upper.as_ref().map(|u| {
-                Box::new(calibrate_math_node_inner(
-                    u,
-                    run_font_size_pt,
-                    fraction_font_size_pt,
-                    width_scale_pct,
-                    in_vertical_fraction,
-                ))
-            }),
-        },
-        MathNodeIr::Nary {
-            chr,
-            limits_under_over,
-            sub,
-            sup,
-            operand,
-        } => WordMathNode::Nary {
-            chr: *chr,
-            limits_under_over: *limits_under_over,
-            sub: sub.as_ref().map(|s| {
-                Box::new(calibrate_math_node_inner(
-                    s,
-                    run_font_size_pt,
-                    fraction_font_size_pt,
-                    width_scale_pct,
-                    in_vertical_fraction,
-                ))
-            }),
-            sup: sup.as_ref().map(|s| {
-                Box::new(calibrate_math_node_inner(
-                    s,
-                    run_font_size_pt,
-                    fraction_font_size_pt,
-                    width_scale_pct,
-                    in_vertical_fraction,
-                ))
-            }),
-            operand: Box::new(calibrate_math_node_inner(
-                operand,
-                run_font_size_pt,
-                fraction_font_size_pt,
-                width_scale_pct,
-                in_vertical_fraction,
-            )),
-        },
-        MathNodeIr::Delimited {
-            open,
-            close,
-            separator,
-            elements,
-        } => WordMathNode::Delimited {
-            open: open.clone(),
-            close: close.clone(),
-            separator: separator.clone(),
-            elements: elements
-                .iter()
-                .map(|el| {
-                    calibrate_math_node_inner(
-                        el,
-                        run_font_size_pt,
-                        fraction_font_size_pt,
-                        width_scale_pct,
-                        in_vertical_fraction,
-                    )
-                })
-                .collect(),
-        },
-        MathNodeIr::Matrix { rows, left_aligned } => WordMathNode::Matrix {
-            rows: rows
-                .iter()
-                .map(|row| {
-                    row.iter()
-                        .map(|cell| {
-                            calibrate_math_node_inner(
-                                cell,
-                                run_font_size_pt,
-                                fraction_font_size_pt,
-                                width_scale_pct,
-                                in_vertical_fraction,
-                            )
-                        })
-                        .collect()
-                })
-                .collect(),
-            left_aligned: *left_aligned,
-        },
-        MathNodeIr::EquationArray { rows } => WordMathNode::EquationArray {
-            rows: rows
-                .iter()
-                .map(|row| {
-                    calibrate_math_node_inner(
-                        row,
-                        run_font_size_pt,
-                        fraction_font_size_pt,
-                        width_scale_pct,
-                        in_vertical_fraction,
-                    )
-                })
-                .collect(),
-        },
-        MathNodeIr::Accent { chr, base } => WordMathNode::Accent {
-            chr: *chr,
-            base: Box::new(calibrate_math_node_inner(
-                base,
-                run_font_size_pt,
-                fraction_font_size_pt,
-                width_scale_pct,
-                in_vertical_fraction,
-            )),
-        },
-        MathNodeIr::Bar { pos_bottom, body } => WordMathNode::Bar {
-            pos_bottom: *pos_bottom,
-            body: Box::new(calibrate_math_node_inner(
-                body,
-                run_font_size_pt,
-                fraction_font_size_pt,
-                width_scale_pct,
-                in_vertical_fraction,
-            )),
-        },
-        MathNodeIr::GroupChar {
-            chr,
-            is_bottom,
-            body,
-            annotation,
-        } => WordMathNode::GroupChar {
-            chr: *chr,
-            is_bottom: *is_bottom,
-            body: Box::new(calibrate_math_node_inner(
-                body,
-                run_font_size_pt,
-                fraction_font_size_pt,
-                width_scale_pct,
-                in_vertical_fraction,
-            )),
-            annotation: annotation.as_ref().map(|ann| {
-                Box::new(calibrate_math_node_inner(
-                    ann,
-                    run_font_size_pt,
-                    fraction_font_size_pt,
-                    width_scale_pct,
-                    in_vertical_fraction,
-                ))
-            }),
-        },
-        MathNodeIr::Cancel {
-            body,
-            cross,
-            inverted,
-        } => WordMathNode::Cancel {
-            body: Box::new(calibrate_math_node_inner(
-                body,
-                run_font_size_pt,
-                fraction_font_size_pt,
-                width_scale_pct,
-                in_vertical_fraction,
-            )),
-            cross: *cross,
-            inverted: *inverted,
-        },
-        MathNodeIr::AlignPoint => WordMathNode::AlignPoint,
-        MathNodeIr::Run(run) => {
-            let target_sz = if in_vertical_fraction {
-                fraction_font_size_pt.unwrap_or(run_font_size_pt)
-            } else {
-                run_font_size_pt
-            };
-            WordMathNode::Run(WordMathRun {
-                text: run.text.clone(),
-                script: run.script,
-                style: run.style,
-                color: run.color.clone(),
-                font_family: run.font_family.clone(),
-                font_size_pt: Some(target_sz),
-                width_scale_pct,
-                has_cjk: TextScriptClassIr::classify(&run.text).has_cjk(),
-            })
-        }
-    }
-}
-
-fn inspect_node_structure(
-    node: &MathNodeIr,
-    in_script_or_frac: bool,
-) -> (usize, usize, bool, bool, bool) {
-    match node {
-        MathNodeIr::Sequence(children) => {
-            let mut rows = 1usize;
-            let mut frac_d = 0usize;
-            let mut tall = false;
-            let mut root_g = false;
-            let mut any_g = false;
-            for ch in children {
-                let (r, f, t, rg, ag) = inspect_node_structure(ch, in_script_or_frac);
-                rows = rows.max(r);
-                frac_d = frac_d.max(f);
-                tall |= t;
-                root_g |= rg;
-                any_g |= ag;
-            }
-            (rows, frac_d, tall, root_g, any_g)
-        }
-        MathNodeIr::Fraction {
-            num, denom, style, ..
-        } => {
-            let is_vert = matches!(style, MathFracStyleIr::Vertical | MathFracStyleIr::NoBar);
-            let (_, f1, t1, _, ag1) = inspect_node_structure(num, true);
-            let (_, f2, t2, _, ag2) = inspect_node_structure(denom, true);
-            let f = if is_vert { 1 + f1.max(f2) } else { f1.max(f2) };
-            (1, f, is_vert || t1 || t2, false, ag1 || ag2)
         }
         MathNodeIr::Radical { degree, radicand } => {
-            let (_, f1, _, _, ag1) = degree.as_ref().map_or((1, 0, false, false, false), |d| {
-                inspect_node_structure(d, true)
-            });
-            let (_, f2, _, rg2, ag2) = inspect_node_structure(radicand, in_script_or_frac);
-            (1, f1.max(f2), true, rg2, ag1 || ag2)
+            let mut acc = inspect_node_structure(radicand, in_script_or_frac);
+            let root_g = acc.has_root_unscaled_glyph;
+            acc.merge_opt(degree.as_ref(), true);
+            acc.rows = 1;
+            acc.has_tall_construct = true;
+            acc.requires_full_line_box = true;
+            acc.has_root_unscaled_glyph = root_g;
+            acc
         }
         MathNodeIr::SubSup { base, sub, sup } | MathNodeIr::PreSubSup { base, sub, sup } => {
-            let (_, f0, t0, rg0, ag0) = inspect_node_structure(base, in_script_or_frac);
-            let (_, f1, _, _, ag1) = sub.as_ref().map_or((1, 0, false, false, false), |s| {
-                inspect_node_structure(s, true)
-            });
-            let (_, f2, _, _, ag2) = sup.as_ref().map_or((1, 0, false, false, false), |s| {
-                inspect_node_structure(s, true)
-            });
-            (
-                1,
-                f0.max(f1).max(f2),
-                t0 || sub.is_some() || sup.is_some(),
-                rg0,
-                ag0 || ag1 || ag2,
-            )
+            let mut acc = inspect_node_structure(base, in_script_or_frac);
+            let root_g = acc.has_root_unscaled_glyph;
+            acc.merge_opt(sub.as_ref(), true);
+            acc.merge_opt(sup.as_ref(), true);
+            acc.rows = 1;
+            acc.has_tall_construct |= sub.is_some() || sup.is_some();
+            acc.has_root_unscaled_glyph = root_g;
+            acc
         }
         MathNodeIr::Limit { base, lower, upper } => {
-            let (_, f0, _, rg0, ag0) = inspect_node_structure(base, in_script_or_frac);
-            let (_, f1, _, _, ag1) = lower.as_ref().map_or((1, 0, false, false, false), |l| {
-                inspect_node_structure(l, true)
-            });
-            let (_, f2, _, _, ag2) = upper.as_ref().map_or((1, 0, false, false, false), |u| {
-                inspect_node_structure(u, true)
-            });
-            (1, f0.max(f1).max(f2), true, rg0, ag0 || ag1 || ag2)
+            let mut acc = inspect_node_structure(base, in_script_or_frac);
+            let root_g = acc.has_root_unscaled_glyph;
+            acc.merge_opt(lower.as_ref(), true);
+            acc.merge_opt(upper.as_ref(), true);
+            acc.rows = 1;
+            acc.has_tall_construct = true;
+            acc.requires_full_line_box = true;
+            acc.has_root_unscaled_glyph = root_g;
+            acc
         }
         MathNodeIr::Nary {
             sub, sup, operand, ..
         } => {
-            let (_, f1, _, _, _) = sub.as_ref().map_or((1, 0, false, false, false), |s| {
-                inspect_node_structure(s, true)
-            });
-            let (_, f2, _, _, _) = sup.as_ref().map_or((1, 0, false, false, false), |s| {
-                inspect_node_structure(s, true)
-            });
-            let (_, f3, _, rg3, _) = inspect_node_structure(operand, in_script_or_frac);
-            (1, f1.max(f2).max(f3), true, rg3, true)
-        }
-        MathNodeIr::Delimited { elements, .. } => {
-            let mut rows = 1usize;
-            let mut frac_d = 0usize;
-            let mut tall = false;
-            let mut root_g = false;
-            let mut any_g = false;
-            for el in elements {
-                let (r, f, t, rg, ag) = inspect_node_structure(el, in_script_or_frac);
-                rows = rows.max(r);
-                frac_d = frac_d.max(f);
-                tall |= t;
-                root_g |= rg;
-                any_g |= ag;
-            }
-            (rows, frac_d, tall, root_g, any_g)
+            let mut acc = inspect_node_structure(operand, in_script_or_frac);
+            let root_g = acc.has_root_unscaled_glyph;
+            acc.merge_opt(sub.as_ref(), true);
+            acc.merge_opt(sup.as_ref(), true);
+            acc.rows = 1;
+            acc.has_tall_construct = true;
+            acc.requires_full_line_box = true;
+            acc.has_root_unscaled_glyph = root_g;
+            acc.has_any_glyph = true;
+            acc
         }
         MathNodeIr::Matrix { rows, .. } => {
             let r_cnt = rows.len().max(1);
-            let mut frac_d = 0usize;
-            let mut root_g = false;
-            let mut any_g = false;
+            let mut acc = NodeStructSummary::identity();
             for row in rows {
                 for cell in row {
-                    let (_, f, _, rg, ag) = inspect_node_structure(cell, in_script_or_frac);
-                    frac_d = frac_d.max(f);
-                    root_g |= rg;
-                    any_g |= ag;
+                    acc.merge(inspect_node_structure(cell, in_script_or_frac));
                 }
             }
-            (r_cnt, frac_d, r_cnt > 1, root_g, any_g)
+            acc.rows = r_cnt;
+            acc.has_tall_construct = r_cnt > 1;
+            acc.requires_full_line_box |= r_cnt > 1;
+            acc
         }
         MathNodeIr::EquationArray { rows } => {
             let r_cnt = rows.len().max(1);
-            let mut frac_d = 0usize;
-            let mut root_g = false;
-            let mut any_g = false;
-            for row in rows {
-                let (_, f, _, rg, ag) = inspect_node_structure(row, in_script_or_frac);
-                frac_d = frac_d.max(f);
-                root_g |= rg;
-                any_g |= ag;
-            }
-            (r_cnt, frac_d, r_cnt > 1, root_g, any_g)
+            let mut acc = NodeStructSummary::merge_slice(rows, in_script_or_frac);
+            acc.rows = r_cnt;
+            acc.has_tall_construct = r_cnt > 1;
+            acc.requires_full_line_box |= r_cnt > 1;
+            acc
         }
         MathNodeIr::Accent { base, .. } => {
-            let (_, f, _, rg, ag) = inspect_node_structure(base, in_script_or_frac);
-            (1, f, true, rg, ag)
+            let mut acc = inspect_node_structure(base, in_script_or_frac);
+            acc.rows = 1;
+            acc.has_tall_construct = true;
+            acc
+        }
+        MathNodeIr::Func { name, arg } => {
+            let mut acc = inspect_node_structure(name, in_script_or_frac);
+            acc.merge(inspect_node_structure(arg, in_script_or_frac));
+            acc
         }
         MathNodeIr::Bar { body, .. } | MathNodeIr::Cancel { body, .. } => {
             inspect_node_structure(body, in_script_or_frac)
@@ -745,18 +652,22 @@ fn inspect_node_structure(
         MathNodeIr::GroupChar {
             body, annotation, ..
         } => {
-            let (_, f1, _, rg1, ag1) = inspect_node_structure(body, in_script_or_frac);
-            let (_, f2, _, _, ag2) = annotation
-                .as_ref()
-                .map_or((1, 0, false, false, false), |a| {
-                    inspect_node_structure(a, true)
-                });
-            (1, f1.max(f2), true, rg1, ag1 || ag2)
+            let mut acc = inspect_node_structure(body, in_script_or_frac);
+            let root_g = acc.has_root_unscaled_glyph;
+            acc.merge_opt(annotation.as_ref(), true);
+            acc.rows = 1;
+            acc.has_tall_construct = true;
+            acc.has_root_unscaled_glyph = root_g;
+            acc
         }
-        MathNodeIr::AlignPoint => (1, 0, false, false, false),
+        MathNodeIr::AlignPoint => NodeStructSummary::identity(),
         MathNodeIr::Run(run) => {
             let non_empty = !run.text.trim().is_empty();
-            (1, 0, false, non_empty && !in_script_or_frac, non_empty)
+            NodeStructSummary {
+                has_root_unscaled_glyph: non_empty && !in_script_or_frac,
+                has_any_glyph: non_empty,
+                ..NodeStructSummary::identity()
+            }
         }
     }
 }
@@ -864,6 +775,11 @@ fn estimate_node_em_width(node: &MathNodeIr, in_display_context: bool) -> f64 {
             .iter()
             .map(|r| estimate_node_em_width(r, true))
             .fold(0.0_f64, f64::max),
+        MathNodeIr::Func { name, arg } => {
+            estimate_node_em_width(name, in_display_context)
+                + 0.18
+                + estimate_node_em_width(arg, in_display_context)
+        }
         MathNodeIr::Accent { base, .. }
         | MathNodeIr::Bar { body: base, .. }
         | MathNodeIr::Cancel { body: base, .. } => estimate_node_em_width(base, in_display_context),

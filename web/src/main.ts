@@ -6,4 +6,6 @@ const app = mount(App, {
   target: document.getElementById('app')!,
 });
 
+document.getElementById('intro')?.remove();
+
 export default app;

@@ -42,6 +42,22 @@ struct MathFont<'a> {
     control: &'a str,
 }
 
+fn render_ctrl_pr(math_font: MathFont<'_>, ctrl_font_size_pt: Option<f64>, out: &mut String) {
+    let Some(sz_pt) = ctrl_font_size_pt else {
+        out.push_str(math_font.control);
+        return;
+    };
+    let half_pts = ((sz_pt * 2.0).round() as u32).clamp(4, 288);
+    out.push_str("<m:ctrlPr><w:rPr>");
+    if let Some(fam) = math_font.family {
+        render_math_run_fonts(fam, false, out);
+    }
+    let _ = write!(
+        out,
+        r#"<w:sz w:val="{half_pts}"/><w:szCs w:val="{half_pts}"/></w:rPr></m:ctrlPr>"#
+    );
+}
+
 fn render_non_empty_node(node: &WordMathNode, math_font: MathFont<'_>, out: &mut String) {
     let start_len = out.len();
     render_math_node(node, math_font, out);
@@ -58,31 +74,43 @@ fn render_math_node(node: &WordMathNode, math_font: MathFont<'_>, out: &mut Stri
                 render_math_node(child, math_font, out);
             }
         }
-        WordMathNode::Fraction { num, denom, style } => {
+        WordMathNode::Fraction {
+            num,
+            denom,
+            style,
+            ctrl_font_size_pt,
+        } => {
             let frac_type = match style {
                 MathFracStyleIr::Vertical => "bar",
                 MathFracStyleIr::Skewed => "skw",
                 MathFracStyleIr::Horizontal => "lin",
                 MathFracStyleIr::NoBar => "noBar",
             };
-            let _ = write!(
-                out,
-                r#"<m:f><m:fPr><m:type m:val="{frac_type}"/>{control}</m:fPr><m:num>"#
-            );
+            let _ = write!(out, r#"<m:f><m:fPr><m:type m:val="{frac_type}"/>"#);
+            render_ctrl_pr(math_font, *ctrl_font_size_pt, out);
+            out.push_str("</m:fPr><m:num>");
             render_non_empty_node(num, math_font, out);
             out.push_str("</m:num><m:den>");
             render_non_empty_node(denom, math_font, out);
             out.push_str("</m:den></m:f>");
         }
-        WordMathNode::Radical { degree, radicand } => {
+        WordMathNode::Radical {
+            degree,
+            radicand,
+            ctrl_font_size_pt,
+        } => {
             if let Some(deg) = degree {
-                let _ = write!(out, r#"<m:rad><m:radPr><m:degHide m:val="0"/>{control}</m:radPr><m:deg>"#);
+                out.push_str(r#"<m:rad><m:radPr><m:degHide m:val="0"/>"#);
+                render_ctrl_pr(math_font, *ctrl_font_size_pt, out);
+                out.push_str("</m:radPr><m:deg>");
                 render_non_empty_node(deg, math_font, out);
                 out.push_str("</m:deg><m:e>");
                 render_non_empty_node(radicand, math_font, out);
                 out.push_str("</m:e></m:rad>");
             } else {
-                let _ = write!(out, r#"<m:rad><m:radPr><m:degHide m:val="1"/>{control}</m:radPr><m:deg/><m:e>"#);
+                out.push_str(r#"<m:rad><m:radPr><m:degHide m:val="1"/>"#);
+                render_ctrl_pr(math_font, *ctrl_font_size_pt, out);
+                out.push_str("</m:radPr><m:deg/><m:e>");
                 render_non_empty_node(radicand, math_font, out);
                 out.push_str("</m:e></m:rad>");
             }
@@ -295,6 +323,13 @@ fn render_math_node(node: &WordMathNode, math_font: MathFont<'_>, out: &mut Stri
                 out.push_str(&group_xml);
             }
         }
+        WordMathNode::Func { name, arg } => {
+            let _ = write!(out, "<m:func><m:funcPr>{control}</m:funcPr><m:fName>");
+            render_non_empty_node(name, math_font, out);
+            out.push_str("</m:fName><m:e>");
+            render_non_empty_node(arg, math_font, out);
+            out.push_str("</m:e></m:func>");
+        }
         WordMathNode::Cancel {
             body,
             cross,
@@ -332,7 +367,7 @@ fn render_math_run(run: &WordMathRun, math_font: Option<&str>, out: &mut String)
     // OMML collapses plain ASCII spaces inside math-italic `<m:r>` runs (`$space space$` -> `0pt`);
     // mark whitespace-only math runs `<m:nor/>` and emit non-breaking spaces with `xml:space="preserve"`.
     let is_whitespace_only = run.text.chars().all(char::is_whitespace);
-    let emit_nor = has_cjk || is_whitespace_only;
+    let emit_nor = run.normal_text || has_cjk || is_whitespace_only;
     out.push_str("<m:r>");
     if emit_nor || run.script.is_some() || run.style.is_some() {
         out.push_str("<m:rPr>");

@@ -1,7 +1,7 @@
 //! Attachments (`attach`: sub/superscripts, pre-scripts, limits) -> `MathNodeIr`.
 
-use typst::foundations::{Content, Packed, StyleChain, StyledElem};
-use typst::math::{AttachElem, EquationElem, LimitsElem, OpElem, ScriptsElem};
+use typst::foundations::{Content, Packed, SequenceElem, StyleChain, StyledElem};
+use typst::math::{AttachElem, EquationElem, LimitsElem, OpElem, PrimesElem, ScriptsElem};
 
 use crate::math::{MathStyleCtx, extract_math_child};
 use ir::MathNodeIr;
@@ -70,6 +70,31 @@ pub(crate) fn extract_attach(
         return;
     }
 
+    // OpenType math prime glyphs (`′`, `″`, `‴`, `⁗`) already sit at superscript height in
+    // math fonts. Wrapping a pure `PrimesElem` in OMML `<m:sSup>` double-raises it above the cap
+    // line (`M′`), so attach pure primes directly after the base instead.
+    if let Some(sup_content) = sup.as_ref()
+        && is_pure_primes_content(sup_content)
+    {
+        let primes_ir = extract_math_child(sup_content, styles, ctx);
+        let sub_ir = sub
+            .as_ref()
+            .map(|c| extract_math_child(c, styles, script_ctx))
+            .filter(|n| !is_empty_math_node(n))
+            .map(Box::new);
+        let with_primes = MathNodeIr::Sequence(vec![base_node, primes_ir]);
+        if let Some(sub_n) = sub_ir {
+            out.push(MathNodeIr::SubSup {
+                base: Box::new(with_primes),
+                sub: Some(sub_n),
+                sup: None,
+            });
+        } else {
+            out.push(with_primes);
+        }
+        return;
+    }
+
     let sub_ir = sub
         .as_ref()
         .map(|c| extract_math_child(c, styles, script_ctx))
@@ -90,6 +115,19 @@ pub(crate) fn extract_attach(
     } else {
         out.push(base_node);
     }
+}
+
+fn is_pure_primes_content(content: &Content) -> bool {
+    if content.is::<PrimesElem>() {
+        return true;
+    }
+    if let Some(styled) = content.to_packed::<StyledElem>() {
+        return is_pure_primes_content(&styled.child);
+    }
+    if let Some(seq) = content.to_packed::<SequenceElem>() {
+        return !seq.children.is_empty() && seq.children.iter().all(is_pure_primes_content);
+    }
+    false
 }
 
 fn is_empty_math_node(node: &MathNodeIr) -> bool {

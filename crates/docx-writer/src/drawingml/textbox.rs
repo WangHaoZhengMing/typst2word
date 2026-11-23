@@ -290,7 +290,7 @@ pub(crate) fn render_inline_nodes_to_wml(
             InlineNode::Tab => {
                 out.push_str("<w:r><w:tab/></w:r>");
             }
-            InlineNode::HorizontalSpace { width_pt } => {
+            InlineNode::HorizontalSpace { width_pt, .. } => {
                 let spaces = ((width_pt / 3.5).round() as usize).clamp(1, 8);
                 let s = "\u{00A0}".repeat(spaces);
                 out.push_str(&format!(

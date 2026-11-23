@@ -125,6 +125,7 @@ mod tests {
             })],
             source_text: String::new(),
             numbering_text: None,
+            numbering_runs: Vec::new(),
             bookmark: None,
             font_size_pt: Some(11.0),
             layout_metrics: Default::default(),

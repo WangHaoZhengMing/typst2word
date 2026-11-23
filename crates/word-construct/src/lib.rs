@@ -372,6 +372,7 @@ mod tests {
             max_available_width_pt: Some(453.5),
             row_count: 1,
             max_fraction_depth: 0,
+            has_display_fraction: false,
             has_tall_construct: false,
             all_glyphs_in_fraction_or_script: false,
             expected_em_width: 5.1,
@@ -390,6 +391,7 @@ mod tests {
             max_available_width_pt: Some(453.5),
             row_count: 1,
             max_fraction_depth: 1,
+            has_display_fraction: false,
             has_tall_construct: true,
             all_glyphs_in_fraction_or_script: true,
             expected_em_width: 1.5,
@@ -408,11 +410,33 @@ mod tests {
             max_available_width_pt: Some(453.5),
             row_count: 1,
             max_fraction_depth: 1,
+            has_display_fraction: true,
             has_tall_construct: true,
             all_glyphs_in_fraction_or_script: true,
             expected_em_width: 2.0,
         });
         assert!(eq_display_in_inline.fraction_font_size_pt.unwrap() >= 16.0);
+
+        // 4. Inline `$ S_n > display(2/3) a_1 $` where subscripts lower `typst_min_glyph_pt` to 8.4pt
+        //    but `has_display_fraction == true`: must keep `run_font_size_pt == 12.0` (no 13.5pt
+        //    height_scale_y inflation and no `<w:w>` horizontal squishing).
+        let eq_display_frac_with_sub = WordEquationBox::solve(EquationBoxInput {
+            is_block: false,
+            typst_width_pt: Some(54.0),
+            typst_height_pt: Some(26.5),
+            typst_max_glyph_pt: Some(12.0),
+            typst_min_glyph_pt: Some(8.4),
+            context_font_size_pt: 12.0,
+            max_available_width_pt: Some(216.0),
+            row_count: 1,
+            max_fraction_depth: 1,
+            has_display_fraction: true,
+            has_tall_construct: true,
+            all_glyphs_in_fraction_or_script: false,
+            expected_em_width: 4.5,
+        });
+        assert_eq!(eq_display_frac_with_sub.run_font_size_pt, 12.0);
+        assert_eq!(eq_display_frac_with_sub.width_scale_pct, None);
     }
 
     #[test]
@@ -664,6 +688,7 @@ mod tests {
             body: Vec::new(),
             source_text: "$x_i^2 + y_i^2$".to_string(),
             numbering_text: None,
+            numbering_runs: Vec::new(),
             bookmark: None,
             font_size_pt: Some(9.5),
             layout_metrics: EquationLayoutMetricsIr::Unmeasured {
@@ -701,6 +726,7 @@ mod tests {
             body: Vec::new(),
             source_text: "$ a + b = c $".to_string(),
             numbering_text: None,
+            numbering_runs: Vec::new(),
             bookmark: None,
             font_size_pt: Some(9.5),
             layout_metrics: EquationLayoutMetricsIr::Unmeasured {

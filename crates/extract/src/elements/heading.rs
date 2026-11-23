@@ -47,15 +47,24 @@ impl<'a> ExtractorContext<'a> {
         blocks: &mut Vec<BlockNode>,
         inherited_align: HAlignIr,
     ) {
-        let (level, outlined, style_align) = {
+        let (level, outlined, style_align, hanging_indent_pt) = {
             let chain = self.scoped_style_chain(Some(loc));
             let (ha, _) = Self::alignment_to_ir(typst::foundations::Smart::Custom(
                 chain.get(typst::layout::AlignElem::alignment),
             ));
+            let base_font_pt =
+                Self::resolve_length_pt(chain.get(typst::text::TextElem::size).0, 11.0);
+            let hang_pt = match heading.hanging_indent.get(chain) {
+                typst::foundations::Smart::Custom(len) => {
+                    Self::resolve_length_pt(len, base_font_pt).max(0.0)
+                }
+                typst::foundations::Smart::Auto => 0.0,
+            };
             (
                 heading.resolve_level(chain).get(),
                 heading.outlined.get(chain),
                 ha,
+                hang_pt,
             )
         };
         let eff_inherited_align = if style_align != HAlignIr::Left {
@@ -95,6 +104,7 @@ impl<'a> ExtractorContext<'a> {
             bookmark,
             align,
             left_indent_pt: 0.0,
+            hanging_indent_pt,
             box_style,
         });
     }

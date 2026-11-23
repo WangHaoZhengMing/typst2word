@@ -31,6 +31,9 @@ pub struct EquationBoxInput {
     pub row_count: usize,
     /// Maximum nesting depth of vertical fractions (`<m:f>` with `bar` or `noBar`).
     pub max_fraction_depth: usize,
+    /// Whether any vertical/noBar fraction in the AST explicitly requests display sizing
+    /// (`MathNodeIr::Fraction { display_style: Some(true), .. }`, e.g. `$ display(a/b) $`).
+    pub has_display_fraction: bool,
     /// Whether the equation contains tall constructs (radicals, under/over limits, group braces, scripts).
     pub has_tall_construct: bool,
     /// Whether all top-level glyphs in the equation belong to a fraction or script (no unscaled root glyphs).
@@ -196,15 +199,26 @@ impl WordEquationBox {
         };
         let base_pt = (raw_base_pt * 2.0).round() / 2.0;
 
-        // 2. Estimate Word OMML's natural vertical height at `base_pt` and solve vertical scale `scale_y`.
+        // 2. Classify fraction scaling mode first so inline `display(a/b)` equations rely on
+        //    `FractionScaleMode::InlineDisplayCompensated` (`fraction_font_size_pt` + `<m:ctrlPr>`)
+        //    instead of also warping `run_font_size_pt` via `height_scale_y` (which would double-scale
+        //    the fraction and trigger horizontal width compression `<w:w>`).
+        //    Also skip `height_scale_y` whenever an inline equation carries an explicit
+        //    `has_display_fraction` (`$ S_n > display(2/3) a_1 $`), because sibling subscripts/superscripts
+        //    lower `typst_min_glyph_pt` below `0.92 * base_pt` while the tall vertical box is already
+        //    accounted for by per-node `display_style: Some(true)` fraction compensation.
+        let frac_scale_mode = FractionScaleMode::classify(&input, base_pt);
         let profile = EquationVerticalProfile::classify(&input);
         let word_natural_h_pt = profile.natural_height_em() * base_pt;
+        let uses_inline_display_frac = frac_scale_mode == FractionScaleMode::InlineDisplayCompensated
+            || (!input.is_block && input.has_display_fraction);
 
         let height_scale_y = match (
             profile.is_multi_story(),
+            uses_inline_display_frac,
             input.typst_height_pt.filter(|&h| h > base_pt * 1.1),
         ) {
-            (true, Some(typst_h)) => {
+            (true, false, Some(typst_h)) => {
                 let ratio = (typst_h / word_natural_h_pt).clamp(0.86, 1.12);
                 match (ratio - 1.0).abs() > 0.05 {
                     true => ratio,
@@ -243,8 +257,7 @@ impl WordEquationBox {
         let actual_scale_y = run_font_size_pt / base_pt;
 
         // 4. Calibrate fraction numerator/denominator font size via `FractionScaleMode`.
-        let fraction_font_size_pt =
-            FractionScaleMode::classify(&input, base_pt).resolve_font_size_pt(run_font_size_pt);
+        let fraction_font_size_pt = frac_scale_mode.resolve_font_size_pt(run_font_size_pt);
 
         // 5. Solve horizontal width scale (`<w:w w:val="..."/>`) to decouple width from `actual_scale_y`.
         let word_after_sz_w_pt = word_natural_w_pt * actual_scale_y;

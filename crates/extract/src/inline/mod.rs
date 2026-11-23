@@ -114,8 +114,21 @@ impl<'a> ExtractorContext<'a> {
                             }
                         } else if let Some(prev_x_end) = *last_x_end {
                             let gap_pt = x_pt - prev_x_end;
-                            if gap_pt > text.size.to_pt() * 0.75 {
-                                out.push(InlineNode::HorizontalSpace { width_pt: gap_pt });
+                            let after_inline_eq =
+                                matches!(out.last(), Some(InlineNode::EquationInline(_)));
+                            let starts_with_ws =
+                                text.text.chars().next().is_some_and(char::is_whitespace);
+                            if after_inline_eq && !starts_with_ws && gap_pt >= 1.8 && gap_pt <= 24.0
+                            {
+                                out.push(InlineNode::HorizontalSpace {
+                                    width_pt: gap_pt,
+                                    weak: false,
+                                });
+                            } else if gap_pt > text.size.to_pt() * 0.75 {
+                                out.push(InlineNode::HorizontalSpace {
+                                    width_pt: gap_pt,
+                                    weak: false,
+                                });
                             }
                         }
                     }
@@ -185,7 +198,10 @@ impl<'a> ExtractorContext<'a> {
                     {
                         let gap_pt = pos.x.to_pt() - prev_x_end;
                         if gap_pt > 2.0 {
-                            out.push(InlineNode::HorizontalSpace { width_pt: gap_pt });
+                            out.push(InlineNode::HorizontalSpace {
+                                width_pt: gap_pt,
+                                weak: false,
+                            });
                         }
                     }
 
@@ -262,29 +278,31 @@ impl<'a> ExtractorContext<'a> {
 
         if let Some(h) = elem.to_packed::<typst::layout::HElem>() {
             let chain = self.scoped_style_chain(Some(loc));
-            if !h.weak.get(chain) {
-                match h.amount {
-                    typst::layout::Spacing::Rel(rel) => {
-                        let base_em =
-                            Self::resolve_length_pt(chain.get(typst::text::TextElem::size).0, 11.0);
-                        let col_w = self.current_column_width_pt();
-                        let w_pt =
-                            Self::resolve_length_pt(rel.abs, base_em) + rel.rel.get() * col_w;
-                        if w_pt > 0.5 {
-                            out.push(InlineNode::HorizontalSpace { width_pt: w_pt });
-                            if let Some(prev_x) = last_x_end.as_mut() {
-                                *prev_x += w_pt;
-                            }
+            let is_weak = h.weak.get(chain);
+            match h.amount {
+                typst::layout::Spacing::Rel(rel) => {
+                    let base_em =
+                        Self::resolve_length_pt(chain.get(typst::text::TextElem::size).0, 11.0);
+                    let col_w = self.current_column_width_pt();
+                    let w_pt =
+                        Self::resolve_length_pt(rel.abs, base_em) + rel.rel.get() * col_w;
+                    if w_pt > 0.5 {
+                        out.push(InlineNode::HorizontalSpace {
+                            width_pt: w_pt,
+                            weak: is_weak,
+                        });
+                        if let Some(prev_x) = last_x_end.as_mut() {
+                            *prev_x += w_pt;
                         }
                     }
-                    // Fractional fill spacing (`#h(1fr)`) maps semantically to a flush-right tab;
-                    // reset `last_x_end` so the following glyph does not also synthesize a fixed gap.
-                    typst::layout::Spacing::Fr(fr) if fr.get() > 0.0 => {
-                        out.push(InlineNode::Tab);
-                        *last_x_end = None;
-                    }
-                    _ => {}
                 }
+                // Fractional fill spacing (`#h(1fr)`) maps semantically to a flush-right tab;
+                // reset `last_x_end` so the following glyph does not also synthesize a fixed gap.
+                typst::layout::Spacing::Fr(fr) if fr.get() > 0.0 && !is_weak => {
+                    out.push(InlineNode::Tab);
+                    *last_x_end = None;
+                }
+                _ => {}
             }
             return;
         }
@@ -361,10 +379,48 @@ impl<'a> ExtractorContext<'a> {
 
         // 2. Inline Equation (`EquationElem`).
         if let Some(eq) = elem.to_packed::<EquationElem>() {
+            let (eq_x, eq_y, eq_w, eq_h) = Self::estimate_nodes_bbox(children);
+            // Preserve resolved geometric spacing before an inline equation (e.g. Typst
+            // `#show math.equation.where(block: false): it => h(0.25em, weak: true) + it + ...`
+            // whose weak `HElem` is consumed by Typst's inline shaper into a `~3pt` x-gap).
+            if eq_w > 0.5
+                && eq_x.is_finite()
+                && eq_y.is_finite()
+                && let (Some(prev_y), Some(prev_x_end)) = (*last_y, *last_x_end)
+            {
+                let eq_base_est = eq_y + eq_h * 0.72;
+                let same_line = (eq_base_est - prev_y).abs() <= (eq_h * 0.75).max(12.0);
+                let gap_pt = eq_x - prev_x_end;
+                let prev_has_space = matches!(
+                    out.last(),
+                    Some(
+                        InlineNode::HorizontalSpace { .. }
+                            | InlineNode::Tab
+                            | InlineNode::LineBreak
+                    )
+                ) || matches!(
+                    out.last(),
+                    Some(InlineNode::Text(r))
+                        if r.text.chars().last().is_some_and(char::is_whitespace)
+                );
+                if same_line && !prev_has_space && (1.8..=24.0).contains(&gap_pt) {
+                    out.push(InlineNode::HorizontalSpace {
+                        width_pt: gap_pt,
+                        weak: false,
+                    });
+                }
+            }
             let eq_ir = self.extract_equation(eq, loc, children);
             self.report.equations_count += 1;
             out.push(InlineNode::EquationInline(eq_ir));
-            *last_x_end = None;
+            if eq_w > 0.5 && eq_x.is_finite() && eq_y.is_finite() && eq_h <= 40.0 {
+                *last_x_end = Some(eq_x + eq_w);
+                if last_y.is_none() {
+                    *last_y = Some(eq_y + eq_h * 0.72);
+                }
+            } else {
+                *last_x_end = None;
+            }
             return;
         }
 
@@ -406,7 +462,10 @@ impl<'a> ExtractorContext<'a> {
             {
                 let gap_pt = pos.x.to_pt() - prev_x_end;
                 if gap_pt > 1.5 {
-                    out.push(InlineNode::HorizontalSpace { width_pt: gap_pt });
+                    out.push(InlineNode::HorizontalSpace {
+                        width_pt: gap_pt,
+                        weak: false,
+                    });
                 }
             }
             let w_pt = shape_ir.width_pt;

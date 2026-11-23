@@ -8,6 +8,9 @@ export default defineConfig({
     format: 'es',
   },
   build: {
+    rollupOptions: {
+      input: ['index.html', 'en/index.html', 'guides/typst-math-to-word/index.html'],
+    },
     target: 'es2022',
     assetsInlineLimit: 0,
   },

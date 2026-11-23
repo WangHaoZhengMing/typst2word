@@ -46,7 +46,7 @@ pub use list::{EnumItemIr, ListItemIr, TermItemIr};
 pub use locale::{LocaleIr, TextDirIr};
 pub use normalize::{
     canonicalize_bookmark_anchors, clean_redundant_pagebreaks, coalesce_adjacent_text_runs,
-    merge_split_containers, normalize_document_ir,
+    merge_split_containers, normalize_document_ir, resolve_weak_horizontal_spaces,
     visit_block_list_mut, visit_document_block_lists_mut, visit_document_inline_lists_mut,
     visit_page_setup_blocks_mut,
 };
@@ -115,8 +115,12 @@ pub enum LinkTargetIr {
     Anchor(String),
 }
 
+fn default_true() -> bool {
+    true
+}
+
 /// Complete intermediate representation of a compiled Typst document.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DocumentIr {
     /// Subsequent sections; `page_setup` and `blocks` retain the first section.
     #[serde(default)]
@@ -125,6 +129,9 @@ pub struct DocumentIr {
     pub page_setup: PageSetupIr,
     pub blocks: Vec<BlockNode>,
     pub report: ConversionReport,
+    /// Typst root `text.cjk-latin-spacing` (`true` = `auto`, `false` = `none`).
+    #[serde(default = "default_true")]
+    pub cjk_latin_spacing: bool,
     /// Intrinsic OpenType binary table metrics for every font family realized in the document.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub font_metrics: BTreeMap<String, FontFaceMetricsIr>,
@@ -146,6 +153,26 @@ pub struct DocumentIr {
     pub anchors: Vec<AnchorLineIr>,
     #[serde(skip)]
     next_node_id: u32,
+}
+
+impl Default for DocumentIr {
+    fn default() -> Self {
+        Self {
+            sections: Vec::new(),
+            metadata: MetadataIr::default(),
+            page_setup: PageSetupIr::default(),
+            blocks: Vec::new(),
+            report: ConversionReport::default(),
+            cjk_latin_spacing: true,
+            font_metrics: BTreeMap::new(),
+            math_font_family: None,
+            embedded_fonts: Vec::new(),
+            origins: BTreeMap::new(),
+            reference_layout: BTreeMap::new(),
+            anchors: Vec::new(),
+            next_node_id: 0,
+        }
+    }
 }
 
 impl DocumentIr {
@@ -240,6 +267,9 @@ pub enum BlockNode {
         align: HAlignIr,
         #[serde(default)]
         left_indent_pt: f64,
+        /// Explicit heading hanging indent (`#set heading(hanging-indent: ...)`), `0.0` when `auto`.
+        #[serde(default)]
+        hanging_indent_pt: f64,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         box_style: Option<ContainerStyleIr>,
     },
@@ -470,8 +500,12 @@ pub enum InlineNode {
     LineBreak,
     /// Tab stop (`\t`).
     Tab,
-    /// Explicit horizontal spacing (`#h(12pt)`).
-    HorizontalSpace { width_pt: f64 },
+    /// Explicit horizontal spacing (`#h(12pt)` or `#h(0.25em, weak: true)`).
+    HorizontalSpace {
+        width_pt: f64,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        weak: bool,
+    },
     /// Unsupported inline element marker.
     UnsupportedInline(UnsupportedIr),
 }

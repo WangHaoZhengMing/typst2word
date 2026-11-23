@@ -31,7 +31,7 @@ pub(crate) fn extract_symbol_or_wrapper(
             n => "′".repeat(n),
         };
         if let Some(run) = build_math_run(&s, styles, ctx, false) {
-            out.push(MathNodeIr::Run(run));
+            ctx.fonts.emit(content.span(), run, out);
         }
         return;
     }
@@ -40,7 +40,7 @@ pub(crate) fn extract_symbol_or_wrapper(
     if let Some(op) = content.to_packed::<OpElem>() {
         let op_str = op.text.plain_text();
         if let Some(run) = build_math_run(&op_str, styles, ctx, true) {
-            out.push(MathNodeIr::Run(run));
+            ctx.fonts.emit(content.span(), run, out);
         }
         return;
     }
@@ -67,7 +67,7 @@ pub(crate) fn extract_symbol_or_wrapper(
                 "\u{2001}".repeat((em_val.round() as usize).clamp(2, 6))
             };
             if let Some(run) = build_math_run(&space_str, styles, ctx, true) {
-                out.push(MathNodeIr::Run(run));
+                ctx.fonts.emit(content.span(), run, out);
             }
         }
         return;
@@ -76,7 +76,7 @@ pub(crate) fn extract_symbol_or_wrapper(
     // 4. Symbols (`SymbolElem`) and Text (`TextElem`, `RawElem`, `SmartQuoteElem`)
     if let Some(sym) = content.to_packed::<SymbolElem>() {
         if let Some(run) = build_math_run(&sym.text, styles, ctx, false) {
-            out.push(MathNodeIr::Run(run));
+            ctx.fonts.emit(content.span(), run, out);
         }
         return;
     }
@@ -90,20 +90,20 @@ pub(crate) fn extract_symbol_or_wrapper(
             FontStyle::Italic | FontStyle::Oblique
         );
         if let Some(run) = build_math_run(&txt.text, styles, ctx, !is_explicit_italic_text) {
-            out.push(MathNodeIr::Run(run));
+            ctx.fonts.emit(content.span(), run, out);
         }
         return;
     }
     if content.is::<RawElem>() {
         let t = content.plain_text();
         if let Some(run) = build_math_run(&t, styles, ctx, true) {
-            out.push(MathNodeIr::Run(run));
+            ctx.fonts.emit(content.span(), run, out);
         }
         return;
     }
     if content.is::<SmartQuoteElem>() {
         if let Some(run) = build_math_run("\"", styles, ctx, true) {
-            out.push(MathNodeIr::Run(run));
+            ctx.fonts.emit(content.span(), run, out);
         }
         return;
     }
@@ -160,7 +160,7 @@ pub(crate) fn extract_symbol_or_wrapper(
     if let Some(r) = content.to_packed::<RefElem>() {
         let t = format!("@{}", r.target.resolve());
         if let Some(run) = build_math_run(&t, styles, ctx, true) {
-            out.push(MathNodeIr::Run(run));
+            ctx.fonts.emit(content.span(), run, out);
         }
         return;
     }
@@ -168,7 +168,7 @@ pub(crate) fn extract_symbol_or_wrapper(
     // Fallback for any other content inside math: extract plain text.
     let fallback_txt = content.plain_text();
     if let Some(run) = build_math_run(&fallback_txt, styles, ctx, false) {
-        out.push(MathNodeIr::Run(run));
+        ctx.fonts.emit(content.span(), run, out);
     }
 }
 
@@ -248,6 +248,7 @@ pub(crate) fn build_math_run(
     };
 
     Some(MathRunIr {
+        normal_text: false,
         text: text.to_string(),
         script,
         style,

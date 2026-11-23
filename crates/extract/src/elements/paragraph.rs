@@ -95,7 +95,7 @@ impl<'a> ExtractorContext<'a> {
             }
         }
 
-        let content = self.extract_inlines_flat(children);
+        let mut content = self.extract_inlines_flat(children);
         if content.is_empty() {
             return;
         }
@@ -127,7 +127,7 @@ impl<'a> ExtractorContext<'a> {
                 first_line_indent_pt = 0.0;
             }
         }
-        let mut hanging_indent_pt =
+        let hanging_indent_pt =
             Self::resolve_length_pt(par.hanging_indent.get(chain), base_font_pt);
 
         // Honor `#align(center/right)[#block(...)[...]]` in `StyleChain` even when an enclosing
@@ -153,48 +153,15 @@ impl<'a> ExtractorContext<'a> {
             base_align
         };
 
-        if matches!(align, HAlignIr::Center | HAlignIr::Right) {
-            first_line_indent_pt = 0.0;
-            hanging_indent_pt = 0.0;
-        }
-
-        let mut left_indent_pt = 0.0;
-        let mut right_indent_pt = 0.0;
-        if matches!(align, HAlignIr::Left | HAlignIr::Justify) {
-            if first_line_indent_pt < 0.5 && hanging_indent_pt < 0.5 {
-                let (vis_first, vis_hang) = Self::infer_paragraph_line_indents(children);
-                if vis_first > 2.0 {
-                    first_line_indent_pt = vis_first;
-                } else if vis_hang > 2.0 {
-                    hanging_indent_pt = vis_hang;
-                }
-            }
-            if list_level == 0
-                && let Some(vis_left) = self.node_left_offset_in_column(children)
-            {
-                let mut line_starts: Vec<(f64, f64)> = Vec::new();
-                Self::collect_line_left_edges(children, Point::zero(), &mut line_starts);
-                let block_vis_left =
-                    if line_starts.len() <= 1 && first_line_indent_pt > 0.5 && vis_left > 0.0 {
-                        (vis_left - first_line_indent_pt).max(0.0)
-                    } else {
-                        vis_left
-                    };
-                if (2.0..=48.0).contains(&block_vis_left)
-                    || (-144.0..=-1.5).contains(&block_vis_left)
-                {
-                    left_indent_pt = block_vis_left;
-                }
-            }
-            if list_level == 0 && align == HAlignIr::Justify && left_indent_pt > 2.0 {
-                let (_, _, width, _) = Self::estimate_nodes_bbox(children);
-                let col_w = self.current_column_width_pt();
-                let r_gap = col_w - left_indent_pt - width;
-                if (2.0..=48.0).contains(&r_gap) {
-                    right_indent_pt = r_gap;
-                }
-            }
-        }
+        let (first_line_indent_pt, hanging_indent_pt, left_indent_pt, right_indent_pt) = self
+            .resolve_paragraph_indents(
+                align,
+                list_level,
+                first_line_indent_pt,
+                hanging_indent_pt,
+                children,
+                &mut content,
+            );
 
         let linebreaks = match par.linebreaks.get(chain) {
             Smart::Custom(Linebreaks::Optimized) => LinebreaksIr::Optimized,
@@ -248,6 +215,86 @@ impl<'a> ExtractorContext<'a> {
         });
     }
 
+    /// Resolve canonical `(first_line_indent_pt, hanging_indent_pt, left_indent_pt, right_indent_pt)`.
+    ///
+    /// Hoists a leading strong `InlineNode::HorizontalSpace` (e.g. `#h(2em)#body` in custom paragraph
+    /// wrappers) into `first_line_indent_pt` so the indent has one canonical representation instead of
+    /// being double-counted by both visual indent inference and a leading inline spacer drawing.
+    pub(crate) fn resolve_paragraph_indents(
+        &self,
+        align: HAlignIr,
+        list_level: usize,
+        mut first_line_indent_pt: f64,
+        mut hanging_indent_pt: f64,
+        children: &[TreeNode],
+        content: &mut Vec<InlineNode>,
+    ) -> (f64, f64, f64, f64) {
+        if matches!(align, HAlignIr::Center | HAlignIr::Right) {
+            return (0.0, 0.0, 0.0, 0.0);
+        }
+
+        // Hoist leading strong `#h(...)` into `first_line_indent_pt` when no style indent is set.
+        if first_line_indent_pt < 0.5 && hanging_indent_pt < 0.5 {
+            let first_non_weak = content
+                .iter()
+                .position(|inl| !matches!(inl, InlineNode::HorizontalSpace { weak: true, .. }));
+            if let Some(idx) = first_non_weak
+                && let InlineNode::HorizontalSpace {
+                    width_pt,
+                    weak: false,
+                } = content[idx]
+                && width_pt > 0.5
+                && width_pt <= 72.0
+                && idx + 1 < content.len()
+            {
+                first_line_indent_pt = width_pt;
+                content.drain(..=idx);
+            }
+        }
+
+        if first_line_indent_pt < 0.5 && hanging_indent_pt < 0.5 {
+            let (vis_first, vis_hang) = Self::infer_paragraph_line_indents(children);
+            if vis_first > 2.0 {
+                first_line_indent_pt = vis_first;
+            } else if vis_hang > 2.0 {
+                hanging_indent_pt = vis_hang;
+            }
+        }
+
+        let mut left_indent_pt = 0.0;
+        let mut right_indent_pt = 0.0;
+        if list_level == 0
+            && let Some(vis_left) = self.node_left_offset_in_column(children)
+        {
+            let mut line_starts: Vec<(f64, f64)> = Vec::new();
+            Self::collect_line_left_edges(children, Point::zero(), &mut line_starts);
+            let block_vis_left =
+                if line_starts.len() <= 1 && first_line_indent_pt > 0.5 && vis_left > 0.0 {
+                    (vis_left - first_line_indent_pt).max(0.0)
+                } else {
+                    vis_left
+                };
+            if (2.0..=48.0).contains(&block_vis_left) || (-144.0..=-1.5).contains(&block_vis_left) {
+                left_indent_pt = block_vis_left;
+            }
+        }
+        if list_level == 0 && align == HAlignIr::Justify && left_indent_pt > 2.0 {
+            let (_, _, width, _) = Self::estimate_nodes_bbox(children);
+            let col_w = self.current_column_width_pt();
+            let r_gap = col_w - left_indent_pt - width;
+            if (2.0..=48.0).contains(&r_gap) {
+                right_indent_pt = r_gap;
+            }
+        }
+
+        (
+            first_line_indent_pt,
+            hanging_indent_pt,
+            left_indent_pt,
+            right_indent_pt,
+        )
+    }
+
     pub(crate) fn infer_paragraph_line_indents(nodes: &[TreeNode]) -> (f64, f64) {
         let mut line_starts: Vec<(f64, f64)> = Vec::new();
         Self::collect_line_left_edges(nodes, Point::zero(), &mut line_starts);
@@ -271,68 +318,50 @@ impl<'a> ExtractorContext<'a> {
         offset: Point,
         lines: &mut Vec<(f64, f64)>,
     ) {
-        for node in nodes {
-            match node {
-                TreeNode::Text { text, pos, .. } => {
-                    if text.text.trim().is_empty() {
-                        continue;
-                    }
-                    let x = (offset.x + pos.x).to_pt();
-                    let y = (offset.y + pos.y).to_pt();
-                    if let Some(existing) = lines.iter_mut().find(|(ly, _)| (*ly - y).abs() < 3.0) {
-                        existing.1 = existing.1.min(x);
-                    } else {
-                        lines.push((y, x));
-                    }
-                }
-                TreeNode::Group {
-                    group,
-                    pos,
-                    children,
-                } => {
-                    // For a bordered/shaded inline `#box(...)` group (which carries its own
-                    // background `Shape`), record the box's outer frame left edge rather than
-                    // descending into its `inset`-padded inner text; otherwise an inline `#box`
-                    // with `inset: 12pt` on line 2 would falsely look like `hanging_indent = 12pt`.
-                    if Self::group_has_direct_bg_shape(children)
-                        && group.frame.size().x.to_pt() > 0.0
-                    {
-                        let x = (offset.x + pos.x).to_pt();
-                        let top_y = (offset.y + pos.y).to_pt();
-                        let h_pt = group.frame.size().y.to_pt();
-                        let bot_y = top_y + h_pt;
-                        let approx_base_y = top_y + h_pt * 0.8;
-                        if let Some(existing) = lines
-                            .iter_mut()
-                            .find(|(ly, _)| *ly >= top_y - 1.5 && *ly <= bot_y + 1.5)
-                        {
-                            existing.1 = existing.1.min(x);
-                        } else {
-                            lines.push((approx_base_y, x));
-                        }
-                    } else {
-                        Self::collect_line_left_edges(children, offset + *pos, lines);
-                    }
-                }
-                TreeNode::Element { elem, children, .. } => {
-                    if elem.is::<typst::math::EquationElem>()
-                        || elem.is::<typst::text::SubElem>()
-                        || elem.is::<typst::text::SuperElem>()
-                        || Self::is_native_shape_elem(elem)
-                    {
-                        continue;
-                    }
-                    Self::collect_line_left_edges(children, offset, lines);
-                }
-                _ => {}
-            }
-        }
+        let mut spans = Vec::new();
+        Self::collect_line_x_spans(nodes, offset, &mut spans);
+        lines.extend(spans.into_iter().map(|(y, x, _)| (y, x)));
     }
 
+    /// Collect horizontal `(line_mid_y, min_x, max_x)` spans for every visual line in `nodes`.
+    ///
+    /// Uses true vertical bounding bands `[top_y, bot_y]` (merging overlapping items on the same
+    /// line) so tall inline equations (`dfrac(sqrt(7), 4)`) and inline math at line starts
+    /// (`$y$轴`) join their actual line instead of creating spurious extra lines.
     pub(crate) fn collect_line_x_spans(
         nodes: &[TreeNode],
         offset: Point,
         lines: &mut Vec<(f64, f64, f64)>,
+    ) {
+        let mut bands: Vec<(f64, f64, f64, f64)> = Vec::new();
+        Self::collect_line_bands(nodes, offset, &mut bands);
+        // Merge any bands whose vertical intervals overlap (e.g. when a tall equation arrives
+        // before or after normal text on the same visual line).
+        bands.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut merged: Vec<(f64, f64, f64, f64)> = Vec::with_capacity(bands.len());
+        for (top, bot, x0, x1) in bands {
+            if let Some(last) = merged.last_mut()
+                && top <= last.1 - 1.0
+            {
+                last.0 = last.0.min(top);
+                last.1 = last.1.max(bot);
+                last.2 = last.2.min(x0);
+                last.3 = last.3.max(x1);
+            } else {
+                merged.push((top, bot, x0, x1));
+            }
+        }
+        lines.extend(
+            merged
+                .into_iter()
+                .map(|(top, bot, x0, x1)| ((top + bot) * 0.5, x0, x1)),
+        );
+    }
+
+    fn collect_line_bands(
+        nodes: &[TreeNode],
+        offset: Point,
+        bands: &mut Vec<(f64, f64, f64, f64)>,
     ) {
         for node in nodes {
             match node {
@@ -340,17 +369,11 @@ impl<'a> ExtractorContext<'a> {
                     if text.text.trim().is_empty() {
                         continue;
                     }
+                    let sz = text.size.to_pt().max(4.0);
                     let x = (offset.x + pos.x).to_pt();
                     let x_end = x + text.width().to_pt();
-                    let y = (offset.y + pos.y).to_pt();
-                    if let Some(existing) =
-                        lines.iter_mut().find(|(ly, _, _)| (*ly - y).abs() < 3.0)
-                    {
-                        existing.1 = existing.1.min(x);
-                        existing.2 = existing.2.max(x_end);
-                    } else {
-                        lines.push((y, x, x_end));
-                    }
+                    let base_y = (offset.y + pos.y).to_pt();
+                    bands.push((base_y - sz * 0.78, base_y + sz * 0.22, x, x_end));
                 }
                 TreeNode::Group {
                     group,
@@ -363,20 +386,10 @@ impl<'a> ExtractorContext<'a> {
                         let x = (offset.x + pos.x).to_pt();
                         let x_end = x + group.frame.size().x.to_pt();
                         let top_y = (offset.y + pos.y).to_pt();
-                        let h_pt = group.frame.size().y.to_pt();
-                        let bot_y = top_y + h_pt;
-                        let approx_base_y = top_y + h_pt * 0.8;
-                        if let Some(existing) = lines
-                            .iter_mut()
-                            .find(|(ly, _, _)| *ly >= top_y - 1.5 && *ly <= bot_y + 1.5)
-                        {
-                            existing.1 = existing.1.min(x);
-                            existing.2 = existing.2.max(x_end);
-                        } else {
-                            lines.push((approx_base_y, x, x_end));
-                        }
+                        let h_pt = group.frame.size().y.to_pt().max(4.0);
+                        bands.push((top_y, top_y + h_pt, x, x_end));
                     } else {
-                        Self::collect_line_x_spans(children, offset + *pos, lines);
+                        Self::collect_line_bands(children, offset + *pos, bands);
                     }
                 }
                 TreeNode::Element { elem, children, .. } => {
@@ -385,9 +398,15 @@ impl<'a> ExtractorContext<'a> {
                         || elem.is::<typst::text::SuperElem>()
                         || Self::is_native_shape_elem(elem)
                     {
+                        let (bx, by, bw, bh) = Self::estimate_nodes_bbox(children);
+                        if bw > 0.5 && bx.is_finite() && by.is_finite() {
+                            let x = offset.x.to_pt() + bx;
+                            let top_y = offset.y.to_pt() + by;
+                            bands.push((top_y, top_y + bh.max(4.0), x, x + bw));
+                        }
                         continue;
                     }
-                    Self::collect_line_x_spans(children, offset, lines);
+                    Self::collect_line_bands(children, offset, bands);
                 }
                 _ => {}
             }

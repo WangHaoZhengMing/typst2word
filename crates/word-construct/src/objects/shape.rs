@@ -137,11 +137,35 @@ pub fn solve_shape_geometry_with_baselines(
     let (body_inset_pt, first_para_exact) =
         solve_shape_body_inset_pt(shape, local_baselines, font_metrics);
 
-    let run_position_half_pt = shape.baseline_shift_pt.and_then(|shift_pt| {
-        // Typst positive `baseline` lowers the box; OOXML positive `w:position` raises the run.
-        let half_pts = (-shift_pt * 2.0).round() as i64;
-        (half_pts != 0).then_some(half_pts)
-    });
+    let run_position_half_pt = shape
+        .baseline_shift_pt
+        .and_then(|shift_pt| {
+            // Typst positive `baseline` lowers the box; OOXML positive `w:position` raises the run.
+            let half_pts = (-shift_pt * 2.0).round() as i64;
+            (half_pts != 0).then_some(half_pts)
+        })
+        .or_else(|| {
+            // A standalone inline horizontal `#line(...)` (e.g. `#box(width: 5em)[#line(...)]`)
+            // draws at `y = 0` inside a `>= 1pt` `<wp:inline>` box whose bottom (plus bottom
+            // `effectExtent`) rests on the baseline; lower it by that box height so the rule sits
+            // flush with Typst's baseline rather than floating mid-line.
+            if is_inline
+                && shape.body.is_empty()
+                && matches!(
+                    shape.kind,
+                    ShapeKindIr::Line { y1_pt, y2_pt, .. } if (y2_pt - y1_pt).abs() < 0.01
+                )
+            {
+                let stroke_pad_pt = shape
+                    .stroke
+                    .as_ref()
+                    .map_or(0.5, |s| s.thickness_pt.max(0.5));
+                let offset_pt = shape.height_pt.max(1.0) + stroke_pad_pt;
+                Some(-((offset_pt * 2.0).round() as i64))
+            } else {
+                None
+            }
+        });
 
     let (inline_extra_top_pt, inline_extra_bottom_pt) = if is_inline {
         solve_inline_line_clearances_pt(shape, parent_w_line_240, inline_ctx, font_metrics)

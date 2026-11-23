@@ -137,6 +137,9 @@ fn node_needs_stretchy_delimiter(node: &MathNodeIr) -> bool {
                 || sub.as_deref().is_some_and(node_needs_stretchy_delimiter)
                 || sup.as_deref().is_some_and(node_needs_stretchy_delimiter)
         }
+        MathNodeIr::Func { name, arg } => {
+            node_needs_stretchy_delimiter(name) || node_needs_stretchy_delimiter(arg)
+        }
         MathNodeIr::Accent { base, .. }
         | MathNodeIr::Bar { body: base, .. }
         | MathNodeIr::Cancel { body: base, .. } => node_needs_stretchy_delimiter(base),

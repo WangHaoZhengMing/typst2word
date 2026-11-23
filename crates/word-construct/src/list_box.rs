@@ -82,7 +82,10 @@ impl WordListItemLayout {
         };
 
         let first_after_dxa = match (input.following_block, input.num_blocks > 1, input.tight) {
-            (FollowingBlockKind::GridTable, _, _) => first_line_gap_dxa,
+            (FollowingBlockKind::GridTable, _, _) => input
+                .first_para_space_after_pt
+                .map(|sa| pt_to_dxa(sa.max(0.0)))
+                .unwrap_or(first_line_gap_dxa),
             (FollowingBlockKind::TightList, true, _) | (_, true, true) => 0,
             // In a loose list/enum, continuation paragraphs, nested loose lists, and block boxes
             // (`ShapeBlock`, `CodeBlock`, `Figure`, etc.) all step by `par.spacing` in Typst;

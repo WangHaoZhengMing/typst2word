@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{ColorHex, NodeId};
+use crate::{ColorHex, NodeId, TextRunIr};
 use crate::reference_layout::EquationLayoutMetricsIr;
 
 /// Mathematical equation IR.
@@ -20,6 +20,9 @@ pub struct EquationIr {
     pub source_text: String,
     /// Optional equation number text (e.g., `"(1)"` or `"(2.1)"`).
     pub numbering_text: Option<String>,
+    /// Laid-out equation label, retaining font changes within the number.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub numbering_runs: Vec<TextRunIr>,
     /// Optional bookmark name for `@ref` cross-referencing.
     pub bookmark: Option<String>,
     /// Realized math face (OpenType family name), including local equation font overrides.
@@ -109,6 +112,11 @@ pub enum MathNodeIr {
         body: Box<MathNodeIr>,
         annotation: Option<Box<MathNodeIr>>,
     },
+    /// Mathematical function application (`sin x`, `cos 2α`, `ln x`), rendered as OMML `<m:func>`.
+    Func {
+        name: Box<MathNodeIr>,
+        arg: Box<MathNodeIr>,
+    },
     /// Diagonal strike/cancellation box (`cancel`).
     Cancel {
         body: Box<MathNodeIr>,
@@ -160,6 +168,9 @@ pub enum MathStyleIr {
 /// A leaf text or symbol run inside a math equation.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MathRunIr {
+    /// Typst shaped this run with a text face inside the equation.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub normal_text: bool,
     pub text: String,
     pub script: Option<MathScriptIr>,
     pub style: Option<MathStyleIr>,
