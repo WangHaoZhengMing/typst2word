@@ -12,15 +12,15 @@ impl<'a> ExtractorContext<'a> {
     /// font family. When multiple faces of a family appear (e.g. Bold + Regular), prefers the
     /// Regular upright face so paragraph line-box metrics reflect body text.
     pub(crate) fn collect_document_font_metrics(&self) -> BTreeMap<String, FontFaceMetricsIr> {
-        let mut chosen_fonts: BTreeMap<String, (bool, typst::text::Font)> = BTreeMap::new();
+        let mut chosen_fonts: BTreeMap<String, (bool, String, typst::text::Font)> = BTreeMap::new();
         for page in self.compiled.document.pages() {
             scan_frame_fonts(&page.frame, &mut chosen_fonts);
         }
 
         let mut out = BTreeMap::new();
-        for (family, (_, font)) in chosen_fonts {
+        for (family, (_, base_family, font)) in chosen_fonts {
             if let Some(metrics) =
-                parse_font_face_metrics(&font, self.world.is_system_font_family(&family))
+                parse_font_face_metrics(&font, self.world.is_system_font_family(&base_family))
             {
                 out.insert(family, metrics);
             }
@@ -31,23 +31,34 @@ impl<'a> ExtractorContext<'a> {
 
 fn scan_frame_fonts(
     frame: &typst::layout::Frame,
-    chosen: &mut BTreeMap<String, (bool, typst::text::Font)>,
+    chosen: &mut BTreeMap<String, (bool, String, typst::text::Font)>,
 ) {
     for (_, item) in frame.items() {
         match item {
             typst::layout::FrameItem::Text(text) => {
                 let info = text.font.info();
-                let family = info.family.clone();
+                let base_family = info.family.clone();
+                let face_spec = crate::font_embed::resolve_word_font_face(text.font.font());
                 let is_regular_upright = info.variant.weight == typst::text::FontWeight::REGULAR
                     && info.variant.style == typst::text::FontStyle::Normal;
-                match chosen.get(&family) {
+                let mut record = |key: String| match chosen.get(&key) {
                     None => {
-                        chosen.insert(family, (is_regular_upright, text.font.font().clone()));
+                        chosen.insert(
+                            key,
+                            (is_regular_upright, base_family.clone(), text.font.font().clone()),
+                        );
                     }
-                    Some((already_regular, _)) if !*already_regular && is_regular_upright => {
-                        chosen.insert(family, (true, text.font.font().clone()));
+                    Some((already_regular, _, _)) if !*already_regular && is_regular_upright => {
+                        chosen.insert(
+                            key,
+                            (true, base_family.clone(), text.font.font().clone()),
+                        );
                     }
                     _ => {}
+                };
+                record(face_spec.family_name);
+                if face_spec.explicit_weight_face {
+                    record(base_family.clone());
                 }
             }
             typst::layout::FrameItem::Group(grp) => {

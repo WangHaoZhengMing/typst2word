@@ -12,10 +12,80 @@ use crate::ExtractorContext;
 
 struct CollectedFace {
     typst_family: String,
+    explicit_weight_face: bool,
     slot: EmbeddedFontSlot,
     font: typst::text::Font,
     used_chars: BTreeSet<char>,
     used_glyph_ids: BTreeSet<u16>,
+}
+
+/// Word-facing font family and bold-flag specification derived from a realized OpenType `Font`.
+///
+/// Word's boolean `<w:b/>` can only address standard `400` (`Regular`) and `700` (`Bold`) faces.
+/// Non-standard weights (`Light 300`, `Medium 500`, `Semibold 600`, `Black 900`) and faces with
+/// mismatched `OS/2` weight vs `fsSelection` flags (notably Apple's `STHeitiSC-Medium`, which sets
+/// `usWeightClass = 400` with `fsSelection.BOLD = 1` while `STHeitiSC-Light` claims `REGULAR`)
+/// must be referenced by their OpenType Full Name (`nameID 4`, e.g. `"Heiti SC Medium"`,
+/// `"PingFang SC Semibold"`) with `bold = false` so Word selects the exact face without falling
+/// back to Light or applying synthetic faux bold (`2 Tr`).
+#[derive(Debug, Clone)]
+pub(crate) struct WordFontFaceSpec {
+    pub(crate) family_name: String,
+    pub(crate) use_bold_flag: bool,
+    pub(crate) explicit_weight_face: bool,
+}
+
+/// Resolve the exact Word font family name and bold flag for a realized Typst `Font`.
+pub(crate) fn resolve_word_font_face(font: &typst::text::Font) -> WordFontFaceSpec {
+    let info = font.info();
+    let base_family = info.family.to_string();
+    let weight = info.variant.weight.to_number();
+    let Ok(ttf) = ttf_parser::Face::parse(font.data().as_slice(), font.index()) else {
+        return WordFontFaceSpec {
+            family_name: base_family,
+            use_bold_flag: weight >= 600,
+            explicit_weight_face: false,
+        };
+    };
+    let is_math = ttf
+        .raw_face()
+        .table(ttf_parser::Tag::from_bytes(b"MATH"))
+        .is_some();
+    if is_math {
+        return WordFontFaceSpec {
+            family_name: base_family,
+            use_bold_flag: weight >= 600,
+            explicit_weight_face: false,
+        };
+    }
+
+    let is_upright = info.variant.style == typst::text::FontStyle::Normal;
+    let (os2_weight, os2_bold_bit) = ttf
+        .tables()
+        .os2
+        .map(|os2| (os2.weight().to_number(), os2.is_bold()))
+        .unwrap_or((weight, weight >= 600));
+
+    let is_non_standard_weight = os2_weight != 400 && os2_weight != 700;
+    let is_mismatched_regular_bold = os2_weight == 400 && os2_bold_bit;
+
+    if is_upright
+        && (is_non_standard_weight || is_mismatched_regular_bold)
+        && let Some(full_name) = extract_name_id(&ttf, ttf_parser::name_id::FULL_NAME)
+        && !full_name.eq_ignore_ascii_case(&base_family)
+    {
+        return WordFontFaceSpec {
+            family_name: full_name,
+            use_bold_flag: false,
+            explicit_weight_face: true,
+        };
+    }
+
+    WordFontFaceSpec {
+        family_name: base_family,
+        use_bold_flag: weight >= 600,
+        explicit_weight_face: false,
+    }
 }
 
 pub(crate) struct ExtractedEmbeddedFonts {
@@ -61,17 +131,23 @@ impl<'a> ExtractorContext<'a> {
                 .table(ttf_parser::Tag::from_bytes(b"MATH"))
                 .is_some();
 
-            let word_family =
-                extract_windows_family_name(&ttf_face).unwrap_or_else(|| item.typst_family.clone());
+            let word_family = if item.explicit_weight_face {
+                item.typst_family.clone()
+            } else {
+                extract_windows_family_name(&ttf_face).unwrap_or_else(|| item.typst_family.clone())
+            };
 
             // Minimal text subsets lose MATH constants and stretchable glyph assemblies.
             let (sfnt_data, is_subset) = if embed_mode == FontEmbedMode::Subset && !is_math {
                 let mut glyph_ids = item.used_glyph_ids;
                 glyph_ids.insert(0); // `.notdef` is required as glyph 0
-                // Ensure ASCII space, digits `0-9` (for dynamic Word `PAGE`/`NUMPAGES`/`PAGEREF`
-                // and list-numbering fields), and every used character's cmap glyph are included.
-                if let Some(gid) = ttf_face.glyph_index(' ') {
-                    glyph_ids.insert(gid.0);
+                // Ensure ASCII space, fixed-width Typst spacer glyphs (`U+2005`/`U+2006`), digits
+                // `0-9` (for dynamic Word `PAGE`/`NUMPAGES`/`PAGEREF` and list-numbering fields),
+                // and every used character's cmap glyph are included.
+                for extra_space in [' ', '\u{2005}', '\u{2006}'] {
+                    if let Some(gid) = ttf_face.glyph_index(extra_space) {
+                        glyph_ids.insert(gid.0);
+                    }
                 }
                 for digit in '0'..='9' {
                     if let Some(gid) = ttf_face.glyph_index(digit) {
@@ -146,8 +222,9 @@ fn scan_frame_font_usage(
         match item {
             typst::layout::FrameItem::Text(text) => {
                 let info = text.font.info();
-                let family = info.family.clone();
-                let is_bold = info.variant.weight.to_number() >= 600;
+                let face_spec = resolve_word_font_face(text.font.font());
+                let family = face_spec.family_name;
+                let is_bold = face_spec.use_bold_flag;
                 let is_italic = info.variant.style != typst::text::FontStyle::Normal;
                 let slot = match (is_bold, is_italic) {
                     (false, false) => EmbeddedFontSlot::Regular,
@@ -159,6 +236,7 @@ fn scan_frame_font_usage(
                     .entry((family.clone(), slot))
                     .or_insert_with(|| CollectedFace {
                         typst_family: family,
+                        explicit_weight_face: face_spec.explicit_weight_face,
                         slot,
                         font: text.font.font().clone(),
                         used_chars: BTreeSet::new(),
@@ -188,10 +266,14 @@ pub(crate) fn math_family(font: &typst::text::FontInstance) -> Option<String> {
 /// Extract OpenType `nameID 1` (Windows Font Family Name), preferring Platform 3 (Windows)
 /// English US (`0x0409`), which Microsoft Word uses to match `<w:font w:name="...">` and `<m:mathFont>`.
 pub(crate) fn extract_windows_family_name(face: &ttf_parser::Face<'_>) -> Option<String> {
+    extract_name_id(face, ttf_parser::name_id::FAMILY)
+}
+
+fn extract_name_id(face: &ttf_parser::Face<'_>, target_name_id: u16) -> Option<String> {
     let mut fallback_win: Option<String> = None;
     let mut fallback_any: Option<String> = None;
     for name in face.names() {
-        if name.name_id != ttf_parser::name_id::FAMILY {
+        if name.name_id != target_name_id {
             continue;
         }
         let Some(s) = name.to_string() else {

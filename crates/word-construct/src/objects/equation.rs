@@ -105,6 +105,9 @@ pub struct WordMathRun {
     pub font_family: Option<String>,
     pub font_size_pt: Option<f64>,
     pub width_scale_pct: Option<u32>,
+    /// Optional `<w:position w:val="..."/>` vertical baseline shift in half-points (used to tighten
+    /// tall-`hhea` CJK runs inside OMML vertical fractions toward the fraction bar).
+    pub position_half_pt: Option<i32>,
     pub has_cjk: bool,
 }
 
@@ -271,9 +274,9 @@ pub fn calibrate_equation_body(eq: &EquationIr) -> Vec<WordMathNode> {
         run_font_size_pt: eq_box.run_font_size_pt,
         fraction_font_size_pt: eq_box.fraction_font_size_pt,
         width_scale_pct: eq_box.width_scale_pct,
-        in_vertical_fraction: false,
+        fraction_slot: FractionSlot::None,
     };
-    eq.body.iter().map(|node| ctx.calibrate(node)).collect()
+    ctx.calibrate_slice(&eq.body)
 }
 
 pub fn analyze_math_slice(nodes: &[MathNodeIr], is_block: bool) -> MathAstStructure {
@@ -307,9 +310,16 @@ pub fn calibrate_math_nodes(
         run_font_size_pt,
         fraction_font_size_pt,
         width_scale_pct,
-        in_vertical_fraction: false,
+        fraction_slot: FractionSlot::None,
     };
-    nodes.iter().map(|node| ctx.calibrate(node)).collect()
+    ctx.calibrate_slice(nodes)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FractionSlot {
+    None,
+    Numerator,
+    Denominator,
 }
 
 #[derive(Clone, Copy)]
@@ -318,7 +328,39 @@ struct MathCalibCtx {
     run_font_size_pt: f64,
     fraction_font_size_pt: Option<f64>,
     width_scale_pct: Option<u32>,
-    in_vertical_fraction: bool,
+    fraction_slot: FractionSlot,
+}
+
+/// Whether `node` starts with a closing fence/delimiter or whitespace (so a preceding `,` should
+/// NOT append a math punctuation thin space).
+fn starts_with_closing_or_space(node: &MathNodeIr) -> bool {
+    match node {
+        MathNodeIr::Run(r) => r.text.chars().next().is_none_or(|ch| {
+            ch.is_whitespace() || matches!(ch, ')' | ']' | '}' | '⟩' | '⟫' | '⌋' | '⌉' | '|')
+        }),
+        MathNodeIr::Sequence(children) => children
+            .first()
+            .is_none_or(starts_with_closing_or_space),
+        _ => false,
+    }
+}
+
+/// Normalize Typst math symbols to the Unicode codepoints that Microsoft Word's OMML engine
+/// recognizes with matching mathematical spacing classes:
+/// - `U+27C2` (`⟂`, Typst `perp`) -> `U+22A5` (`⊥`, relation spacing `AE ⊥ CE`).
+/// - Bare `|` (`U+007C`, e.g. set-builder `{x | √x = x}`) -> `U+2223` (`∣`, relation spacing).
+///   Paired absolute-value bars (`|a + b|`) are extracted as `MathNodeIr::Delimited` and untouched.
+fn normalize_omml_math_text(text: &str, normal_text: bool) -> String {
+    if normal_text {
+        return text.to_string();
+    }
+    if text == "|" {
+        return "∣".to_string();
+    }
+    if text.contains('\u{27C2}') {
+        return text.replace('\u{27C2}', "\u{22A5}");
+    }
+    text.to_string()
 }
 
 impl MathCalibCtx {
@@ -332,10 +374,31 @@ impl MathCalibCtx {
         opt.map(|n| self.map_box(n))
     }
 
+    fn calibrate_slice(self, nodes: &[MathNodeIr]) -> Vec<WordMathNode> {
+        let mut out = Vec::with_capacity(nodes.len());
+        for (i, node) in nodes.iter().enumerate() {
+            let mut calibrated = self.calibrate(node);
+            // Word's OMML engine treats `digit,digit` (e.g. `{0,1,3,6,9}`, `(1,0)`) as a European
+            // decimal separator with zero space after `,`. Append a six-per-em math punctuation
+            // space (`U+2006`) whenever a comma run is followed by another math atom.
+            if let WordMathNode::Run(ref mut r) = calibrated
+                && !r.normal_text
+                && r.text.ends_with(',')
+                && nodes
+                    .get(i + 1)
+                    .is_some_and(|next| !starts_with_closing_or_space(next))
+            {
+                r.text.push('\u{2006}');
+            }
+            out.push(calibrated);
+        }
+        out
+    }
+
     fn calibrate(self, node: &MathNodeIr) -> WordMathNode {
         match node {
             MathNodeIr::Sequence(children) => {
-                WordMathNode::Sequence(children.iter().map(|ch| self.calibrate(ch)).collect())
+                WordMathNode::Sequence(self.calibrate_slice(children))
             }
             MathNodeIr::Fraction {
                 num,
@@ -353,14 +416,27 @@ impl MathCalibCtx {
                         .resolve_font_size_pt(self.run_font_size_pt),
                     _ => self.fraction_font_size_pt,
                 };
-                let child_ctx = Self {
+                let num_ctx = Self {
                     fraction_font_size_pt: local_frac_sz,
-                    in_vertical_fraction: self.in_vertical_fraction || is_vert,
+                    fraction_slot: if is_vert {
+                        FractionSlot::Numerator
+                    } else {
+                        self.fraction_slot
+                    },
+                    ..self
+                };
+                let denom_ctx = Self {
+                    fraction_font_size_pt: local_frac_sz,
+                    fraction_slot: if is_vert {
+                        FractionSlot::Denominator
+                    } else {
+                        self.fraction_slot
+                    },
                     ..self
                 };
                 WordMathNode::Fraction {
-                    num: child_ctx.map_box(num),
-                    denom: child_ctx.map_box(denom),
+                    num: num_ctx.map_box(num),
+                    denom: denom_ctx.map_box(denom),
                     style: *style,
                     ctrl_font_size_pt: local_frac_sz,
                 }
@@ -368,8 +444,7 @@ impl MathCalibCtx {
             MathNodeIr::Radical { degree, radicand } => WordMathNode::Radical {
                 degree: self.map_opt(degree.as_ref()),
                 radicand: self.map_box(radicand),
-                ctrl_font_size_pt: self
-                    .in_vertical_fraction
+                ctrl_font_size_pt: (self.fraction_slot != FractionSlot::None)
                     .then_some(self.fraction_font_size_pt)
                     .flatten(),
             },
@@ -456,31 +531,49 @@ impl MathCalibCtx {
             },
             MathNodeIr::AlignPoint => WordMathNode::AlignPoint,
             MathNodeIr::Run(run) => {
-                let has_cjk = TextScriptClassIr::classify(&run.text).has_cjk();
-                let target_sz = if self.in_vertical_fraction {
-                    match self.fraction_font_size_pt {
-                        Some(sz) => sz,
-                        // Word's OMML engine scales math-script runs to ~73% inside inline
-                        // `<m:f>`, but leaves `<m:nor/>` CJK runs unscaled; apply the matching
-                        // 0.73x scale explicitly so inline CJK fractions (e.g. `频率/组距`) match
-                        // Typst's size.
-                        None if !self.is_block && has_cjk => {
+                let text = normalize_omml_math_text(&run.text, run.normal_text);
+                let has_cjk = TextScriptClassIr::classify(&text).has_cjk();
+                let in_vert_frac = self.fraction_slot != FractionSlot::None;
+                let target_sz = if in_vert_frac {
+                    if has_cjk {
+                        // Word's OMML engine leaves `<m:nor/>` CJK runs unscaled inside inline
+                        // `<m:f>`: preserve `1.0 * run_font_size_pt` for display/block CJK
+                        // fractions (e.g. `频率/组距`), and explicitly scale inline CJK fractions
+                        // by `0.73` to match Typst.
+                        if self.is_block || self.fraction_font_size_pt.is_some() {
+                            self.run_font_size_pt
+                        } else {
                             ((self.run_font_size_pt * 0.73 * 2.0).round() / 2.0).clamp(5.0, 72.0)
                         }
-                        None => self.run_font_size_pt,
+                    } else {
+                        self.fraction_font_size_pt.unwrap_or(self.run_font_size_pt)
                     }
                 } else {
                     self.run_font_size_pt
                 };
+                // CJK fonts with large `hhea` internal leading (`Songti SC`, `PingFang SC`) leave
+                // excessive vertical air around the OMML `<m:f>` bar; pull `<m:nor/>` CJK runs
+                // toward the fraction bar via `<w:position>`.
+                let position_half_pt = if has_cjk && in_vert_frac {
+                    let shift = ((target_sz * 0.70).round() as i32).clamp(2, 9);
+                    match self.fraction_slot {
+                        FractionSlot::Numerator => Some(-shift),
+                        FractionSlot::Denominator => Some(shift),
+                        FractionSlot::None => None,
+                    }
+                } else {
+                    None
+                };
                 WordMathNode::Run(WordMathRun {
                     normal_text: run.normal_text,
-                    text: run.text.clone(),
+                    text,
                     script: run.script,
                     style: run.style,
                     color: run.color.clone(),
                     font_family: run.font_family.clone(),
                     font_size_pt: Some(target_sz),
                     width_scale_pct: self.width_scale_pct,
+                    position_half_pt,
                     has_cjk,
                 })
             }

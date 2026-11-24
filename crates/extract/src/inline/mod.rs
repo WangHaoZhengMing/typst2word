@@ -122,7 +122,7 @@ impl<'a> ExtractorContext<'a> {
                             {
                                 out.push(InlineNode::HorizontalSpace {
                                     width_pt: gap_pt,
-                                    weak: false,
+                                    weak: gap_pt <= 4.5,
                                 });
                             } else if gap_pt > text.size.to_pt() * 0.75 {
                                 out.push(InlineNode::HorizontalSpace {
@@ -406,7 +406,7 @@ impl<'a> ExtractorContext<'a> {
                 if same_line && !prev_has_space && (1.8..=24.0).contains(&gap_pt) {
                     out.push(InlineNode::HorizontalSpace {
                         width_pt: gap_pt,
-                        weak: false,
+                        weak: gap_pt <= 4.5,
                     });
                 }
             }

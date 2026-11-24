@@ -291,7 +291,7 @@ impl<'a> DocxWriter<'a> {
             (false, true) => "<w:keepLines/>",
             (false, false) => "",
         };
-        let before_dxa = ctx.before_dxa;
+        let before_dxa = self.doc.solved_before_dxa(id).unwrap_or(ctx.before_dxa);
         let num_id = ctx.num_id;
         let mark_rpr_sz = paragraph_mark_rpr_sz_half_pt(content);
 

@@ -159,6 +159,35 @@ pub(crate) fn refine_word_tables_in_blocks(
             }
         }
 
+        // 1b. Preserve Typst's measured minimum row height (`<w:trHeight w:hRule="atLeast"/>`)
+        // on single-row `LayoutGrid`s containing tall inline math (e.g. `#choice` option grids
+        // with `dfrac`), where Word's inline OMML `<m:f>` renders shorter than Typst's display
+        // fraction and would otherwise compress vertical rhythm across the page.
+        if tbl.kind == TableKindIr::LayoutGrid
+            && tbl.rows.len() == 1
+            && tbl.rows[0].height_pt.is_none()
+            && !tbl.id.is_unset()
+            && let Some(layout) = ir.layout(tbl.id)
+            && let (Some((pa, top_y)), Some((pb, bottom_y))) = (
+                layout.span.start_page_and_top_y(),
+                layout.span.end_page_and_bottom_y(),
+            )
+            && pa == pb
+        {
+            let typst_h_pt = bottom_y - top_y;
+            let has_tall_math = tbl.rows[0].cells.iter().any(|cell| {
+                cell.blocks.iter().any(|b| match b {
+                    BlockNode::Paragraph { content, .. } => {
+                        crate::objects::equation::inlines_require_full_line_box(content)
+                    }
+                    _ => false,
+                })
+            });
+            if has_tall_math && (16.0..=64.0).contains(&typst_h_pt) {
+                tbl.rows[0].height_pt = Some(typst_h_pt);
+            }
+        }
+
         // 2. Prune degenerate `<= 0.5pt` empty columns when no cell uses `colspan > 1`.
         let has_colspan = tbl
             .rows

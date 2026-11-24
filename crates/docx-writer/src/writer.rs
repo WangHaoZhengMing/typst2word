@@ -61,6 +61,7 @@ pub(crate) struct DocxWriter<'a> {
     pub(crate) active_columns: (usize, f64),
     pub(crate) has_scoped_columns: bool,
     pub(crate) in_right_tab_paragraph: bool,
+    pub(crate) in_bold_style: bool,
 }
 
 impl<'a> DocxWriter<'a> {
@@ -90,6 +91,7 @@ impl<'a> DocxWriter<'a> {
             active_columns: (1, 0.0),
             has_scoped_columns: false,
             in_right_tab_paragraph: false,
+            in_bold_style: false,
         }
     }
 

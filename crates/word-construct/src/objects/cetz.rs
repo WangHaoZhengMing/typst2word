@@ -50,34 +50,62 @@ pub struct CetzLabelConstruct {
     pub line_dxa_override: Option<i64>,
 }
 
+/// Compute the extra top canvas padding (`pt`) required when a CeTZ label near `y = 0` needs an
+/// upward DrawingML baseline overhang compensation (`y_shift_pt > label.y_pt`), e.g. a 2-story CJK
+/// OMML fraction (`频率/组距`) placed at the top of a histogram axis.
+pub fn canvas_top_pad_pt(canvas: &CetzCanvasIr) -> f64 {
+    canvas
+        .labels
+        .iter()
+        .map(|lbl| {
+            let kind = classify_label_inlines(&lbl.content);
+            let has_vert_frac = label_inlines_have_vertical_fraction(&lbl.content);
+            let y_shift = label_y_shift_pt(kind, has_vert_frac);
+            (y_shift - lbl.y_pt).max(0.0)
+        })
+        .fold(0.0_f64, f64::max)
+}
+
+fn label_y_shift_pt(kind: CetzLabelContentKind, has_vertical_fraction: bool) -> f64 {
+    if has_vertical_fraction {
+        // A 2-story OMML vertical fraction (`<m:f>`) inside a CJK/math DrawingML textbox carries
+        // ~9pt of top internal leading above the numerator ink.
+        return 9.5;
+    }
+    // Word's DrawingML textbox top-anchors the first line box (`anchor="t"`), which adds
+    // slightly more top overhang for OMML math runs (and subscripted OMML runs) than plain text.
+    match kind {
+        CetzLabelContentKind::MathWithSubscript => 3.5,
+        CetzLabelContentKind::MathSimple => 2.6,
+        CetzLabelContentKind::TextOnly => 1.2,
+    }
+}
+
 impl CetzLabelConstruct {
     /// Solve `<wps:wsp>` transform geometry directly from the label's semantic inline AST
     /// and canvas bounds, without inspecting serialized XML.
     pub fn solve(label: &CetzLabelDrawableIr, canvas_height_pt: f64) -> Self {
-        let content_kind = classify_label_inlines(&label.content);
-        let mut nobreak_content = replace_spaces_with_nbsp(&label.content);
+        Self::solve_with_top_pad(label, canvas_height_pt, 0.0)
+    }
 
-        // Word's DrawingML textbox top-anchors the first line box (`anchor="t"`), which adds
-        // slightly more top overhang for OMML math runs (and subscripted OMML runs) than plain text.
-        let y_shift_pt = match content_kind {
-            CetzLabelContentKind::MathWithSubscript => 3.5,
-            CetzLabelContentKind::MathSimple => 2.6,
-            CetzLabelContentKind::TextOnly => 1.2,
-        };
+    /// Solve `<wps:wsp>` transform geometry with an explicit `top_pad_pt` canvas top shift
+    /// computed by [`canvas_top_pad_pt`].
+    pub fn solve_with_top_pad(
+        label: &CetzLabelDrawableIr,
+        canvas_height_pt: f64,
+        top_pad_pt: f64,
+    ) -> Self {
+        let content_kind = classify_label_inlines(&label.content);
+        let nobreak_content = replace_spaces_with_nbsp(&label.content);
+        let has_vertical_fraction = label_inlines_have_vertical_fraction(&nobreak_content);
+        let y_shift_pt = label_y_shift_pt(content_kind, has_vertical_fraction);
 
         // Give the label textbox generous width so Word never wraps single-line labels,
-        // while clamping height so `off_y + cy` never overflows `canvas_height_pt` (`<wp:extent cy>`).
+        // while clamping height so `off_y + cy` never overflows `canvas_height_pt + top_pad_pt`.
         let w_pt = (label.width_pt * 2.0 + 48.0).max(72.0);
-        let top_pt = (label.y_pt - y_shift_pt).max(0.0);
-        let max_avail_h_pt = (canvas_height_pt - top_pt).max(11.0);
+        let top_pt = (label.y_pt + top_pad_pt - y_shift_pt).max(0.0);
+        let max_avail_h_pt = (canvas_height_pt + top_pad_pt - top_pt).max(11.0);
         let is_rotated = label.rotation_deg.abs() > 0.01;
-        let has_vertical_fraction = label_inlines_have_vertical_fraction(&nobreak_content);
-        if has_vertical_fraction {
-            // CJK vertical fractions inside DrawingML textboxes carry ~1.8x line-box height per
-            // story in Word (`Songti SC`); calibrate their equation font size to fit `label.height_pt`
-            // so the denominator does not spill downward into neighboring axis tick labels.
-            fit_cjk_fraction_label_equations(&mut nobreak_content, label.height_pt);
-        }
         let h_pt = if is_rotated {
             (label.height_pt + 14.0).max(28.0)
         } else if has_vertical_fraction {
@@ -134,53 +162,6 @@ fn classify_label_inlines(inlines: &[InlineNode]) -> CetzLabelContentKind {
         };
     }
     kind
-}
-
-fn fit_cjk_fraction_label_equations(inlines: &mut [InlineNode], target_height_pt: f64) {
-    for node in inlines {
-        match node {
-            InlineNode::EquationInline(eq) => {
-                let has_cjk = eq.source_text.chars().any(ir::is_cjk_char);
-                let has_vert_frac =
-                    crate::objects::equation::analyze_math_slice(&eq.body, eq.is_block)
-                        .max_fraction_depth
-                        > 0;
-                if has_cjk && has_vert_frac {
-                    let cur = eq.font_size_pt.unwrap_or(10.0).max(6.0);
-                    // Word renders a 2-story CJK OMML fraction at ~3.2 * S; scale S to fit
-                    // `target_height_pt` cleanly without encroaching on neighboring axis ticks.
-                    let fitted = (target_height_pt / 3.0).clamp(cur * 0.72, cur);
-                    let rounded = (fitted * 2.0).round() / 2.0;
-                    eq.font_size_pt = Some(rounded);
-                    match &mut eq.layout_metrics {
-                        ir::EquationLayoutMetricsIr::Measured {
-                            context_font_size_pt,
-                            max_glyph_pt,
-                            min_glyph_pt,
-                            ..
-                        }
-                        | ir::EquationLayoutMetricsIr::Unmeasured {
-                            context_font_size_pt,
-                            max_glyph_pt,
-                            min_glyph_pt,
-                            ..
-                        } => {
-                            *context_font_size_pt = rounded;
-                            *max_glyph_pt = Some(rounded);
-                            *min_glyph_pt = Some(rounded);
-                        }
-                    }
-                }
-            }
-            InlineNode::Link { content, .. }
-            | InlineNode::Ref { content, .. }
-            | InlineNode::Citation { content, .. }
-            | InlineNode::Field { content, .. } => {
-                fit_cjk_fraction_label_equations(content, target_height_pt);
-            }
-            _ => {}
-        }
-    }
 }
 
 fn label_inlines_have_vertical_fraction(inlines: &[InlineNode]) -> bool {

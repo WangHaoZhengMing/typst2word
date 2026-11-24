@@ -19,7 +19,7 @@ use crate::objects::shape::{
 use crate::objects::text_run::run_has_cjk;
 use crate::pipeline::flow_spacing::{
     PageVerticalBand, resolve_adjacent_paragraph_spacing, resolve_paragraph_style_spacing,
-    solve_container_and_figure_flow_spacing,
+    solve_container_and_figure_flow_spacing, solve_list_inter_item_spacing,
 };
 use crate::table_lowering::{
     lower_containers_in_blocks, merge_split_styled_containers,
@@ -310,6 +310,7 @@ pub fn build_word_document(ir: &DocumentIr) -> WordDocument {
         let mut resolve_blocks = |blk_list: &mut Vec<BlockNode>| {
             promote_standalone_partial_border_inline_boxes(blk_list, ir);
             solve_container_and_figure_flow_spacing(blk_list, ir, &mut solved_nodes);
+            solve_list_inter_item_spacing(blk_list, ir, &mut solved_nodes);
             lower_containers_in_blocks(blk_list, fallback_w);
             merge_split_styled_containers(blk_list);
             refine_word_tables_in_blocks(blk_list, ir, fallback_w);

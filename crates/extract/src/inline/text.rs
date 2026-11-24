@@ -1,6 +1,6 @@
 //! Laid-out `TextItem`s -> `TextRunIr` (pure Typst glyph & font extraction).
 
-use typst::text::{FontWeight, TextItem};
+use typst::text::TextItem;
 
 use crate::color::paint_to_hex;
 use crate::ExtractorContext;
@@ -39,10 +39,15 @@ impl<'a> ExtractorContext<'a> {
         } else {
             (false, None)
         };
-        let bold = state.bold
-            || info.variant.weight >= FontWeight::SEMIBOLD
-            || family_lower.contains("bold")
-            || pseudo_bold_stroke;
+        let face_spec = crate::font_embed::resolve_word_font_face(item.font.font());
+        let bold = if face_spec.explicit_weight_face {
+            pseudo_bold_stroke
+        } else {
+            state.bold
+                || face_spec.use_bold_flag
+                || family_lower.contains("bold")
+                || pseudo_bold_stroke
+        };
         let italic = state.italic
             || matches!(
                 info.variant.style,
@@ -69,7 +74,7 @@ impl<'a> ExtractorContext<'a> {
 
         TextRunIr {
             text: item.text.to_string(),
-            font_family: Some(info.family.to_string()),
+            font_family: Some(face_spec.family_name),
             font_size_pt: Some(run_size_pt),
             bold,
             italic,

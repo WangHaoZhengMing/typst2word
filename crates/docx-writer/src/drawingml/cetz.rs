@@ -18,8 +18,10 @@ pub(crate) fn cetz_canvas_to_drawingml_run(
     canvas: &CetzCanvasIr,
 ) -> String {
     let group_id = writer.alloc_drawing_id();
+    let top_pad_pt = word_construct::cetz::canvas_top_pad_pt(canvas);
+    let total_height_pt = canvas.height_pt + top_pad_pt;
     let cx = pt_to_emu(canvas.width_pt.max(10.0)).max(12700);
-    let cy = pt_to_emu(canvas.height_pt.max(10.0)).max(12700);
+    let cy = pt_to_emu(total_height_pt.max(10.0)).max(12700);
 
     let mut children_xml = String::new();
 
@@ -29,7 +31,7 @@ pub(crate) fn cetz_canvas_to_drawingml_run(
             id: Default::default(),
             kind: ShapeKindIr::Rect,
             width_pt: canvas.width_pt,
-            height_pt: canvas.height_pt,
+            height_pt: total_height_pt,
             fill: Some(bg_hex.clone()),
             fill_rule_even_odd: false,
             stroke: None,
@@ -49,7 +51,7 @@ pub(crate) fn cetz_canvas_to_drawingml_run(
 
     // 2. Vector path/curve drawables
     for path_drawable in &canvas.paths {
-        children_xml.push_str(&build_cetz_path_wsp(writer, path_drawable));
+        children_xml.push_str(&build_cetz_path_wsp(writer, path_drawable, top_pad_pt));
     }
 
     // 3. Positioned text/formula label drawables
@@ -58,6 +60,7 @@ pub(crate) fn cetz_canvas_to_drawingml_run(
             writer,
             label_drawable,
             canvas.height_pt,
+            top_pad_pt,
         ));
     }
 
@@ -137,6 +140,7 @@ pub(crate) fn cetz_canvas_to_drawingml_run(
 pub(crate) fn build_cetz_path_wsp(
     writer: &mut DocxWriter<'_>,
     drawable: &CetzPathDrawableIr,
+    top_pad_pt: f64,
 ) -> String {
     let sp_id = writer.alloc_drawing_id();
 
@@ -147,7 +151,7 @@ pub(crate) fn build_cetz_path_wsp(
     let local_origin_y_pt = min_y_pt.min(0.0);
 
     let eff_x_pt = drawable.x_pt + local_origin_x_pt;
-    let eff_y_pt = drawable.y_pt + local_origin_y_pt;
+    let eff_y_pt = drawable.y_pt + local_origin_y_pt + top_pad_pt;
     let eff_w_pt = (max_x_pt - local_origin_x_pt)
         .max(drawable.width_pt)
         .max(0.5);
@@ -208,9 +212,10 @@ pub(crate) fn build_cetz_label_wsp(
     writer: &mut DocxWriter<'_>,
     label: &CetzLabelDrawableIr,
     canvas_height_pt: f64,
+    top_pad_pt: f64,
 ) -> String {
     let sp_id = writer.alloc_drawing_id();
-    let solved = CetzLabelConstruct::solve(label, canvas_height_pt);
+    let solved = CetzLabelConstruct::solve_with_top_pad(label, canvas_height_pt, top_pad_pt);
     let para_xml = if let Some(line_dxa) = solved.line_dxa_override {
         super::textbox::render_inline_nodes_as_txbx_para_with_line_dxa(
             &solved.nobreak_content,

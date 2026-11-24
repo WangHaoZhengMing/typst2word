@@ -18,7 +18,10 @@ impl<'a> DocxWriter<'a> {
         out.push_str("<w:p><w:pPr><w:pStyle w:val=\"Title\"/><w:spacing w:before=\"0\" w:after=\"120\" w:line=\"216\" w:lineRule=\"auto\"/>");
         Self::render_jc(align, out);
         out.push_str("</w:pPr>");
+        let prev_bold_style = self.in_bold_style;
+        self.in_bold_style = true;
         self.render_inlines(content, out);
+        self.in_bold_style = prev_bold_style;
         out.push_str("</w:p>");
     }
 
@@ -140,10 +143,13 @@ impl<'a> DocxWriter<'a> {
         out.push_str("</w:pPr>");
 
         let bm_id = bookmark.map(|bm| self.emit_bookmark_start(bm, out));
+        let prev_bold_style = self.in_bold_style;
+        self.in_bold_style = true;
         if let Some(prefix_run) = &construct.prefix_run {
             self.render_text_run(prefix_run, out);
         }
         self.render_inlines(content, out);
+        self.in_bold_style = prev_bold_style;
         if let Some(id) = bm_id {
             Self::emit_bookmark_end(id, out);
         }

@@ -161,14 +161,13 @@ impl<'a> DocxWriter<'a> {
                     };
                     out.push_str(&shape_to_drawingml_run(self, &spacer));
                 } else {
-                    // In proportional Latin fonts (`Times New Roman` / `Libertinus Serif`),
-                    // ASCII space `' '` has advance `~0.25em`, so calibrating `<w:sz>` gives an
-                    // exact narrow spacer (e.g. `3.0pt = 0.25em` at `12pt` -> `w:sz="24"`) that is
-                    // guaranteed present in every subsetted font with normal line-break behavior.
+                    // Use non-stretchable `U+2005` (FOUR-PER-EM SPACE = `0.25em` in `Times New Roman`)
+                    // rather than ASCII `' '` (`U+0020`), so Word's `<w:jc w:val="both"/>` justifier
+                    // never stretches narrow math-padding spacers into wide gaps.
                     let sz_half_pt = ((*width_pt / 0.25) * 2.0).round().clamp(4.0, 48.0) as u32;
                     let _ = write!(
                         out,
-                        r#"<w:r><w:rPr><w:sz w:val="{sz_half_pt}"/><w:szCs w:val="{sz_half_pt}"/></w:rPr><w:t xml:space="preserve"> </w:t></w:r>"#
+                        r#"<w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="Times New Roman" w:cs="Times New Roman"/><w:sz w:val="{sz_half_pt}"/><w:szCs w:val="{sz_half_pt}"/></w:rPr><w:t xml:space="preserve">&#x2005;</w:t></w:r>"#
                     );
                 }
             }

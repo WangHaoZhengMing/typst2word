@@ -339,6 +339,7 @@ $ #text(font: "Libertinus Serif")[same] + #text(font: "DejaVu Sans Mono")[same]
 #set text(font: ("Times New Roman", "Songti SC"), size: 12pt, lang: "zh")
 #set par(leading: 1.2em, justify: true)
 #set heading(hanging-indent: 2em)
+#show heading.where(level: 1): body => text(font: "Heiti SC", size: 12pt)[#body]
 #show math.equation.where(block: false): it => h(0.25em, weak: true) + it + h(0.25em, weak: true)
 
 #let dfrac(num, den) = math.display(math.frac(num, den))
@@ -347,9 +348,11 @@ $ #text(font: "Libertinus Serif")[same] + #text(font: "DejaVu Sans Mono")[same]
   #h(2em)#body
 ]
 
+#text(font: "Heiti SC")[绝密★启用前]
+
 = 一、选择题：本题共8小题，每小题5分，共40分。
 
-1. 已知$alpha$为第二象限角，内角为$60 degree$，且$3 sin 2 alpha cos alpha = dfrac(sqrt(3), 15)$。
+1. 已知$alpha$，$beta$为角，集合$A=\{0,1,3\}$，$B=\{x | sqrt(x)=x\}$，且$A E perp C E$，内角为$60 degree$，且$3 sin 2 alpha cos alpha = dfrac(sqrt(3), 15)$。
 
   #grid(
     columns: (1fr, 1fr),
@@ -409,6 +412,26 @@ $ #text(font: "Libertinus Serif")[same] + #text(font: "DejaVu Sans Mono")[same]
         assert!(
             !doc_xml.contains("<m:t xml:space=\"preserve\">\u{2005}</m:t>"),
             "$60 degree$ must not inject U+2005 space after numeric literal"
+        );
+        assert!(
+            doc_xml.contains("<m:t>⊥</m:t>") && !doc_xml.contains("<m:t>⟂</m:t>"),
+            "Typst perp (U+27C2) must normalize to OMML relation U+22A5 (⊥)"
+        );
+        assert!(
+            doc_xml.contains("<m:t>∣</m:t>"),
+            "bare set-builder vertical bar must normalize to OMML relation U+2223 (∣)"
+        );
+        assert!(
+            doc_xml.contains("<m:t xml:space=\"preserve\">,\u{2006}</m:t>"),
+            "math commas followed by digits/atoms must append U+2006 thin punctuation space"
+        );
+        assert!(
+            doc_xml.contains("&#x2005;"),
+            "narrow horizontal math spaces must use non-stretchable U+2005"
+        );
+        assert!(
+            !doc_xml.contains("，</w:t></w:r><w:r><w:rPr><w:rFonts w:ascii=\"Times New Roman\" w:hAnsi=\"Times New Roman\" w:eastAsia=\"Times New Roman\" w:cs=\"Times New Roman\"/><w:sz w:val=\"24\"/><w:szCs w:val=\"24\"/></w:rPr><w:t xml:space=\"preserve\">&#x2005;</w:t></w:r>"),
+            "weak horizontal space immediately after fullwidth comma `，` must be absorbed"
         );
         assert!(
             !doc_xml.contains(r#"w:left="480" w:right="0" w:firstLine="480""#),

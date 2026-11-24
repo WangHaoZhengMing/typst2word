@@ -451,6 +451,112 @@ pub fn solve_container_and_figure_flow_spacing(
     }
 }
 
+/// Solve inter-item `w:before` spacing inside `BlockNode::Enum` / `BlockNode::List` whenever an
+/// item ends with a `<w:tbl>` (e.g. a `#choice` option grid) and the following item starts with
+/// a `Paragraph` on the same page.
+///
+/// Word `<w:tbl>` blocks carry zero trailing `w:after`, so both Typst's `enum.spacing` and any
+/// explicit `#v(...)` placed after the trailing grid must transfer onto the next item's `w:before`.
+/// Using the next paragraph's `first_baseline_y_pt` (rather than ink `top_y_pt`) keeps the gap
+/// exact even when line 1 of the next item contains a tall inline fraction (`x^2/a^2`) that
+/// protrudes upward into the inter-item whitespace in Typst.
+pub fn solve_list_inter_item_spacing(
+    blocks: &[BlockNode],
+    ir: &DocumentIr,
+    solved_nodes: &mut BTreeMap<NodeId, SolvedNodeLayout>,
+) {
+    let resolver = crate::font_metrics::FontMetricsResolver::new(&ir.font_metrics);
+    let mut solve_pair = |prev_blocks: &[BlockNode], next_blocks: &[BlockNode]| {
+        let Some(BlockNode::Table(tbl)) = prev_blocks.last() else {
+            return;
+        };
+        let Some(BlockNode::Paragraph {
+            id: id_b,
+            content,
+            style,
+            ..
+        }) = next_blocks.first()
+        else {
+            return;
+        };
+        if tbl.id.is_unset() || id_b.is_unset() {
+            return;
+        }
+        let (Some(lay_a), Some(lay_b)) = (ir.layout(tbl.id), ir.layout(*id_b)) else {
+            return;
+        };
+        let (Some((pa, bottom_a)), Some((pb, top_b))) = (
+            lay_a.span.end_page_and_bottom_y(),
+            lay_b.span.start_page_and_top_y(),
+        ) else {
+            return;
+        };
+        if pa != pb {
+            return;
+        }
+        let sz_pt = style
+            .resolved_font_size_pt
+            .unwrap_or_else(|| ir::dominant_inline_font_size_pt(content, 11.0))
+            .max(6.0);
+        let has_cjk = crate::objects::paragraph::content_has_cjk_chars(content);
+        let dom_font = content.iter().find_map(|inl| match inl {
+            ir::InlineNode::Text(r) if !r.text.trim().is_empty() => r.font_family.as_deref(),
+            _ => None,
+        });
+        let w_line_240 = crate::objects::paragraph::compute_line_spacing_dxa_with_metrics(
+            content,
+            style.line_spacing_pt,
+            &ir.font_metrics,
+            lay_b.paragraph_lines.as_ref(),
+        );
+        let (base_ascent_pt, _, _) =
+            resolver.word_line_ascent_descent_total_pt(dom_font, sz_pt, has_cjk, w_line_240);
+
+        let needed_before_pt = if let Some(pl) = lay_b.paragraph_lines.as_ref()
+            && pl.first_baseline_y_pt > bottom_a
+        {
+            let has_line1_frac = content.iter().any(|inl| match inl {
+                ir::InlineNode::EquationInline(eq) => {
+                    crate::objects::equation::analyze_math_slice(&eq.body, eq.is_block)
+                        .max_fraction_depth
+                        > 0
+                }
+                _ => false,
+            });
+            let eff_ascent_pt = if has_line1_frac {
+                base_ascent_pt + sz_pt * 0.22
+            } else {
+                base_ascent_pt
+            };
+            (pl.first_baseline_y_pt - bottom_a - eff_ascent_pt).clamp(0.0, 120.0)
+        } else if top_b >= bottom_a - 2.0 {
+            let box_a = WordBlockVerticalBox::for_block(&BlockNode::Table(tbl.clone()), sz_pt);
+            let box_b = WordBlockVerticalBox::for_block(next_blocks.first().unwrap(), sz_pt);
+            WordBlockVerticalBox::needed_gap_pt(box_a, box_b, top_b - bottom_a).clamp(0.0, 120.0)
+        } else {
+            return;
+        };
+
+        solved_nodes.entry(*id_b).or_default().before_dxa = Some(pt_to_dxa(needed_before_pt));
+    };
+
+    for block in blocks {
+        match block {
+            BlockNode::Enum { items, .. } => {
+                for pair in items.windows(2) {
+                    solve_pair(&pair[0].blocks, &pair[1].blocks);
+                }
+            }
+            BlockNode::List { items, .. } => {
+                for pair in items.windows(2) {
+                    solve_pair(&pair[0].blocks, &pair[1].blocks);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Whether a block lowers to a Word paragraph wrapping a single inline drawing (no text line box).
 fn is_graphic_block(block: &BlockNode) -> bool {
     matches!(

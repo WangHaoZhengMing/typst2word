@@ -402,6 +402,7 @@ fn render_math_run(run: &WordMathRun, math_font: Option<&str>, out: &mut String)
         || run.font_size_pt.is_some()
         || run.color.is_some()
         || width_scale.is_some()
+        || run.position_half_pt.is_some()
     {
         out.push_str("<w:rPr>");
         if let Some(fam) = effective_font {
@@ -409,6 +410,9 @@ fn render_math_run(run: &WordMathRun, math_font: Option<&str>, out: &mut String)
         }
         if let Some(ref hex) = run.color {
             let _ = write!(out, r#"<w:color w:val="{hex}"/>"#);
+        }
+        if let Some(pos) = run.position_half_pt {
+            let _ = write!(out, r#"<w:position w:val="{pos}"/>"#);
         }
         if let Some(sz_pt) = run.font_size_pt {
             let half_pts = ((sz_pt * 2.0).round() as u32).clamp(4, 288);
@@ -423,8 +427,9 @@ fn render_math_run(run: &WordMathRun, math_font: Option<&str>, out: &mut String)
         }
         out.push_str("</w:rPr>");
     }
-    let preserve_space =
-        is_whitespace_only || run.text.starts_with(' ') || run.text.ends_with(' ');
+    let preserve_space = is_whitespace_only
+        || run.text.starts_with(char::is_whitespace)
+        || run.text.ends_with(char::is_whitespace);
     if preserve_space {
         out.push_str(r#"<m:t xml:space="preserve">"#);
     } else {

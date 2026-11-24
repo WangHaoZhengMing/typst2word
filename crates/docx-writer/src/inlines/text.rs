@@ -16,6 +16,15 @@ pub(crate) fn render_text_run_rpr_xml(
     extra_char_spacing_dxa: Option<i32>,
     out: &mut String,
 ) {
+    render_text_run_rpr_xml_in_style(run, extra_char_spacing_dxa, false, out);
+}
+
+pub(crate) fn render_text_run_rpr_xml_in_style(
+    run: &TextRunIr,
+    extra_char_spacing_dxa: Option<i32>,
+    in_bold_style: bool,
+    out: &mut String,
+) {
     let construct = TextRunConstruct::solve_with_spacing(run, extra_char_spacing_dxa);
     out.push_str("<w:rPr>");
     if let Some(fam) = construct.font_family {
@@ -28,6 +37,10 @@ pub(crate) fn render_text_run_rpr_xml(
     }
     if run.bold {
         out.push_str("<w:b/><w:bCs/>");
+    } else if in_bold_style {
+        // Suppress bold inheritance from `HeadingN` / `Title` paragraph styles when the run uses
+        // a non-bold weight or an explicit weight-qualified face (e.g. `"Heiti SC Medium"`).
+        out.push_str(r#"<w:b w:val="0"/><w:bCs w:val="0"/>"#);
     }
     if run.italic {
         out.push_str("<w:i/><w:iCs/>");
@@ -121,6 +134,13 @@ pub(crate) fn render_text_run_xml_with_spacing(
 
 impl<'a> DocxWriter<'a> {
     pub(crate) fn render_text_run(&self, run: &TextRunIr, out: &mut String) {
-        render_text_run_xml(run, out);
+        if run.text.is_empty() {
+            return;
+        }
+        out.push_str("<w:r>");
+        render_text_run_rpr_xml_in_style(run, None, self.in_bold_style, out);
+        out.push_str("<w:t xml:space=\"preserve\">");
+        out.push_str(&escape_xml(&run.text));
+        out.push_str("</w:t></w:r>");
     }
 }

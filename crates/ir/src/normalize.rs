@@ -42,16 +42,30 @@ pub fn resolve_weak_horizontal_spaces(inlines: &mut Vec<InlineNode>) {
         return;
     }
 
-    let is_left_absorber = |node: &InlineNode| match node {
+    let is_fullwidth_trailing_air_punct = |ch: char| {
+        matches!(
+            ch,
+            '，' | '。' | '、' | '；' | '：' | '？' | '！' | '）' | '》' | '】' | '」' | '』'
+                | '”' | '’'
+        )
+    };
+    let is_fullwidth_leading_air_punct =
+        |ch: char| matches!(ch, '（' | '《' | '【' | '「' | '『' | '“' | '‘');
+
+    let is_left_absorber = |node: &InlineNode, width_pt: f64| match node {
         InlineNode::LineBreak | InlineNode::Tab => true,
         InlineNode::HorizontalSpace { weak: false, .. } => true,
-        InlineNode::Text(r) => r.text.chars().last().is_some_and(char::is_whitespace),
+        InlineNode::Text(r) => r.text.chars().last().is_some_and(|ch| {
+            ch.is_whitespace() || (width_pt <= 4.5 && is_fullwidth_trailing_air_punct(ch))
+        }),
         _ => false,
     };
-    let is_right_absorber = |node: &InlineNode| match node {
+    let is_right_absorber = |node: &InlineNode, width_pt: f64| match node {
         InlineNode::LineBreak | InlineNode::Tab => true,
         InlineNode::HorizontalSpace { weak: false, .. } => true,
-        InlineNode::Text(r) => r.text.chars().next().is_some_and(char::is_whitespace),
+        InlineNode::Text(r) => r.text.chars().next().is_some_and(|ch| {
+            ch.is_whitespace() || (width_pt <= 4.5 && is_fullwidth_leading_air_punct(ch))
+        }),
         _ => false,
     };
 
@@ -85,7 +99,8 @@ pub fn resolve_weak_horizontal_spaces(inlines: &mut Vec<InlineNode>) {
         {
             let prev = (i > 0).then(|| &merged[i - 1]);
             let next = merged.get(i + 1);
-            let absorbed = prev.is_none_or(is_left_absorber) || next.is_none_or(is_right_absorber);
+            let absorbed = prev.is_none_or(|p| is_left_absorber(p, width_pt))
+                || next.is_none_or(|n| is_right_absorber(n, width_pt));
             if !absorbed && width_pt > 0.5 {
                 out.push(InlineNode::HorizontalSpace {
                     width_pt,
